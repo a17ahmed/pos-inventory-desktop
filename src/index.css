@@ -1,0 +1,389 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Import premium fonts */
+@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@500;600;700&family=Outfit:wght@300;400;500;600;700&display=swap');
+
+/* Premium POS Theme Variables */
+:root {
+    /* Dark mode backgrounds */
+    --d-bg: #06080f;
+    --d-card: #0b0e1a;
+    --d-elevated: #0f1525;
+
+    /* Dark mode borders & glass */
+    --d-border: rgba(255,255,255,0.09);
+    --d-border-hover: rgba(255,210,100,0.35);
+    --d-glass: rgba(255,255,255,0.04);
+    --d-glass-hover: rgba(255,255,255,0.08);
+
+    /* Dark mode accent */
+    --d-accent: #ffd264;
+    --d-accent-secondary: #e8b73a;
+    --d-accent-glow: rgba(255,210,100,0.12);
+
+    /* Dark mode text */
+    --d-heading: #fef9ec;
+    --d-text: #eef0f7;
+    --d-muted: #8b93a8;
+    --d-faint: #3d4560;
+
+    /* Dark mode semantic */
+    --d-green: #34e8a1;
+    --d-blue: #5b9cf6;
+    --d-red: #ff6b6b;
+
+    /* Legacy aliases */
+    --ink: var(--d-bg);
+    --deep: var(--d-card);
+    --navy: var(--d-elevated);
+    --glass: var(--d-glass);
+    --glass-b: var(--d-glass-hover);
+    --rim: var(--d-border);
+    --rim-hot: var(--d-border-hover);
+    --amber: var(--d-accent);
+    --amber-s: var(--d-accent-secondary);
+    --amber-d: var(--d-accent-glow);
+    --cream: var(--d-heading);
+    --green: var(--d-green);
+    --blue: var(--d-blue);
+    --red: var(--d-red);
+    --text: var(--d-text);
+    --soft: var(--d-muted);
+    --dim: var(--d-faint);
+}
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: 'Outfit', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+/* Playfair Display for numbers/prices */
+.font-display {
+    font-family: 'Playfair Display', serif;
+}
+
+/* Light mode body styles (default) */
+html:not(.dark) body,
+html.light body {
+    background-color: #f8fafc !important;
+    color: #1e293b !important;
+}
+
+/* Dark mode body styles */
+html.dark body {
+    background-color: var(--d-bg) !important;
+    color: var(--d-text) !important;
+}
+
+/* Dark mode scrollbar */
+.dark ::-webkit-scrollbar-track {
+    background: var(--d-bg);
+}
+
+.dark ::-webkit-scrollbar-thumb {
+    background: var(--d-faint);
+}
+
+.dark ::-webkit-scrollbar-thumb:hover {
+    background: var(--d-muted);
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+
+::-webkit-scrollbar-track {
+    background: #f1f5f9;
+    border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb {
+    background: #cbd5e1;
+    border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: #94a3b8;
+}
+
+/* Animations */
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+        transform: translateY(10px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.animate-fadeIn {
+    animation: fadeIn 0.3s ease-out;
+}
+
+@keyframes slideIn {
+    from {
+        transform: translateX(-100%);
+    }
+    to {
+        transform: translateX(0);
+    }
+}
+
+.animate-slideIn {
+    animation: slideIn 0.3s ease-out;
+}
+
+@keyframes pulse {
+    0%, 100% {
+        opacity: 1;
+    }
+    50% {
+        opacity: 0.5;
+    }
+}
+
+.animate-pulse {
+    animation: pulse 2s ease-in-out infinite;
+}
+
+/* Premium POS Animations */
+@keyframes fadeSlideLeft {
+    from { opacity: 0; transform: translateX(-16px); }
+    to { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes fadeSlideRight {
+    from { opacity: 0; transform: translateX(16px); }
+    to { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes fadeSlideUp {
+    from { opacity: 0; transform: translateY(12px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes popIn {
+    from { opacity: 0; transform: scale(0.96) translateY(-4px); }
+    to { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+@keyframes livePulse {
+    0%, 100% { box-shadow: 0 0 0 3px rgba(52,232,161,0.2); }
+    50% { box-shadow: 0 0 0 6px rgba(52,232,161,0.05); }
+}
+
+@keyframes spinRing {
+    to { transform: rotate(360deg); }
+}
+
+@keyframes shimmer {
+    0% { left: -60%; }
+    100% { left: 160%; }
+}
+
+.animate-fade-slide-left {
+    animation: fadeSlideLeft 0.5s ease both;
+}
+
+.animate-fade-slide-right {
+    animation: fadeSlideRight 0.55s 0.15s ease both;
+}
+
+.animate-fade-slide-up {
+    animation: fadeSlideUp 0.55s 0.1s ease both;
+}
+
+.animate-pop-in {
+    animation: popIn 0.3s cubic-bezier(.34,1.56,.64,1) both;
+}
+
+.animate-live-pulse {
+    animation: livePulse 2s infinite;
+}
+
+.animate-spin-ring {
+    animation: spinRing 12s linear infinite;
+}
+
+.animate-spin-ring-reverse {
+    animation: spinRing 12s linear infinite reverse;
+}
+
+.animate-spin-fast {
+    animation: spinRing 3s linear infinite;
+}
+
+/* Ambient background for premium dark theme */
+.bg-ambient {
+    position: relative;
+}
+
+.bg-ambient::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    background:
+        radial-gradient(ellipse 60% 50% at 15% 20%, rgba(255,180,50,0.07) 0%, transparent 65%),
+        radial-gradient(ellipse 50% 60% at 85% 80%, rgba(91,156,246,0.06) 0%, transparent 60%),
+        radial-gradient(ellipse 40% 40% at 50% 50%, rgba(52,232,161,0.03) 0%, transparent 70%);
+    pointer-events: none;
+}
+
+/* Glass effect */
+.glass {
+    background: var(--glass);
+    backdrop-filter: blur(12px);
+    border: 1px solid var(--rim);
+}
+
+/* Premium scrollbar for dark theme */
+.dark-scrollbar::-webkit-scrollbar {
+    width: 4px;
+}
+
+.dark-scrollbar::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.dark-scrollbar::-webkit-scrollbar-thumb {
+    background: var(--dim);
+    border-radius: 4px;
+}
+
+.dark-scrollbar::-webkit-scrollbar-thumb:hover {
+    background: var(--soft);
+}
+
+/* Focus styles */
+input:focus,
+select:focus,
+textarea:focus,
+button:focus {
+    outline: none;
+    ring: 2px;
+}
+
+/* Print styles */
+@media print {
+    body {
+        background: white !important;
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+    }
+    .no-print {
+        display: none !important;
+    }
+
+    /* Hide sidebar and layout chrome */
+    nav, aside,
+    [style*="width: 66px"],
+    [style*="width: 200px"],
+    [style*="width: 240px"] {
+        display: none !important;
+    }
+
+    /* Full-width content */
+    main, [class*="ml-"] {
+        margin-left: 0 !important;
+        width: 100% !important;
+    }
+
+    /* Fixed overlays become static for multi-page flow */
+    .print-static {
+        position: static !important;
+        overflow: visible !important;
+        height: auto !important;
+    }
+
+    /* Ensure content flows across pages */
+    html, body, #root {
+        height: auto !important;
+        overflow: visible !important;
+    }
+}
+
+/* macOS window drag region for traffic light safe area */
+.app-drag-region {
+    -webkit-app-region: drag;
+}
+
+.app-no-drag {
+    -webkit-app-region: no-drag;
+}
+
+/* Grain texture overlay for premium dark theme */
+.grain-overlay::after {
+    content: '';
+    position: fixed;
+    inset: 0;
+    z-index: 999;
+    pointer-events: none;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.035'/%3E%3C/svg%3E");
+    opacity: 0.7;
+}
+
+/* Bento card animation */
+@keyframes bentoin {
+    from { opacity: 0; transform: scale(0.97) translateY(10px); }
+    to { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+.animate-bento-in {
+    animation: bentoin 0.55s ease both;
+}
+
+/* Count-up animation helper */
+@keyframes countPulse {
+    0%, 100% { transform: scale(1); }
+    50% { transform: scale(1.02); }
+}
+
+.animate-count {
+    animation: countPulse 0.3s ease;
+}
+
+/* Live dot blink */
+@keyframes blink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.25; }
+}
+
+.animate-blink {
+    animation: blink 2s infinite;
+}
+
+/* Fade in animation */
+@keyframes fadeInQuick {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+.animate-fade-in {
+    animation: fadeInQuick 0.2s ease;
+}
+
+/* Bebas Neue font for dashboard numbers */
+@import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Mono:wght@300;400;500&display=swap');
+
+.font-bebas {
+    font-family: 'Bebas Neue', sans-serif;
+}
+
+.font-mono-dm {
+    font-family: 'DM Mono', monospace;
+}

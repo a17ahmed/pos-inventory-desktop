@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 110 110" width="512" height="512">
+  <title>POS software logo — shopping bag with barcode</title>
+  <rect width="110" height="110" rx="22" fill="#0d9488"/>
+  <path d="M 40 42 Q 40 26 55 26 Q 70 26 70 42" stroke="#ffffff" stroke-width="4" fill="none" stroke-linecap="round"/>
+  <path d="M 30 42 L 80 42 L 85 90 L 25 90 Z" fill="#ffffff"/>
+  <rect x="35" y="54" width="2.5" height="26" fill="#0d9488"/>
+  <rect x="40" y="54" width="4" height="26" fill="#0d9488"/>
+  <rect x="46" y="54" width="2" height="26" fill="#0d9488"/>
+  <rect x="50" y="54" width="3.5" height="26" fill="#0d9488"/>
+  <rect x="56" y="54" width="2" height="26" fill="#0d9488"/>
+  <rect x="60" y="54" width="4.5" height="26" fill="#0d9488"/>
+  <rect x="67" y="54" width="2" height="26" fill="#0d9488"/>
+  <rect x="71" y="54" width="3" height="26" fill="#0d9488"/>
+</svg>
