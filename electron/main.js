@@ -265,6 +265,8 @@ ipcMain.handle('print-receipt', async (event, { receiptData }) => {
             receiptFooter, receiptNote
         } = receiptData;
 
+        console.log('[PRINT DEBUG] storeName:', storeName, '| storePhone:', storePhone, '| receiptData keys:', Object.keys(receiptData));
+
         const W = 48;
         const money = (amt) => currency + ' ' + Number(amt).toLocaleString();
         const num = (n) => Number(n).toLocaleString();
@@ -280,6 +282,7 @@ ipcMain.handle('print-receipt', async (event, { receiptData }) => {
         });
 
         // ──── STORE HEADER ────
+        printer.drawLine();
         printer.alignCenter();
         printer.setTextDoubleHeight();
         printer.bold(true);
@@ -371,6 +374,8 @@ ipcMain.handle('print-receipt', async (event, { receiptData }) => {
         printer.drawLine('=');
 
         // ──── PAYMENT ────
+        printer.setTextNormal();
+        printer.bold(false);
         printer.leftRight('Payment:', (paymentMethod || 'cash').toUpperCase());
         if (paymentMethod === 'cash' && cashGiven > 0) {
             printer.leftRight('Tendered:', money(cashGiven));
@@ -387,8 +392,7 @@ ipcMain.handle('print-receipt', async (event, { receiptData }) => {
         if (customerName && customerName !== 'Walk-in') {
             const billDue = Math.max(0, total - paidOnBill);
             if (billDue > 0) printer.leftRight('This Bill Due:', money(billDue));
-            const newBalance = (customerBalance || 0) + billDue;
-            printer.leftRight('Account Balance:', money(newBalance));
+            if (customerBalance > 0) printer.leftRight('Account Balance:', money(customerBalance));
         }
 
         printer.drawLine();

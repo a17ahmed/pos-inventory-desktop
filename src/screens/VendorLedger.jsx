@@ -3,6 +3,8 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { useBusiness } from '../context/BusinessContext';
 import { getVendor, getVendorLedger, payVendor } from '../services/api/vendors';
 import { paySupply } from '../services/api/supplies';
+import { getCashBalance } from '../services/api/cashbook';
+import html2pdf from 'html2pdf.js';
 import {
     FiArrowLeft,
     FiDownload,
@@ -54,6 +56,8 @@ const VendorLedger = () => {
         reference: '',
     });
     const [submittingPayment, setSubmittingPayment] = useState(false);
+    const [cashInHand, setCashInHand] = useState(null);
+    const [paymentError, setPaymentError] = useState('');
 
     const currency = business?.currency || 'Rs.';
     const formatCurrency = (amount) =>
@@ -148,7 +152,7 @@ const VendorLedger = () => {
         [outstandingSupplies]
     );
 
-    const openPaymentModal = () => {
+    const openPaymentModal = async () => {
         setPaymentMode('fifo');
         setPaymentForm({
             supplyId: outstandingSupplies[0]?.supplyId || '',
@@ -157,14 +161,22 @@ const VendorLedger = () => {
             note: '',
             reference: '',
         });
+        setPaymentError('');
         setShowPaymentModal(true);
+        try {
+            const res = await getCashBalance();
+            setCashInHand(res.data?.balance ?? null);
+        } catch {
+            setCashInHand(null);
+        }
     };
 
     const submitPayment = async (e) => {
         e.preventDefault();
+        setPaymentError('');
         const amount = parseFloat(paymentForm.amount);
         if (!amount || amount <= 0) {
-            alert('Enter a valid amount');
+            setPaymentError('Enter a valid amount');
             return;
         }
 
@@ -172,7 +184,7 @@ const VendorLedger = () => {
         try {
             if (paymentMode === 'fifo') {
                 if (amount > totalOutstanding + 0.01) {
-                    alert(`Amount exceeds total outstanding (${formatCurrency(totalOutstanding)})`);
+                    setPaymentError(`Amount exceeds total outstanding (${formatCurrency(totalOutstanding)})`);
                     setSubmittingPayment(false);
                     return;
                 }
@@ -184,7 +196,7 @@ const VendorLedger = () => {
                 });
             } else {
                 if (!paymentForm.supplyId) {
-                    alert('Select a supply');
+                    setPaymentError('Select a supply');
                     setSubmittingPayment(false);
                     return;
                 }
@@ -199,65 +211,131 @@ const VendorLedger = () => {
             fetchLedger();
         } catch (err) {
             console.error('Payment error:', err);
-            alert(err.response?.data?.message || 'Failed to record payment');
+            setPaymentError(err.response?.data?.message || 'Failed to record payment');
         } finally {
             setSubmittingPayment(false);
         }
     };
 
-    const downloadCsv = () => {
+    const downloadPdf = () => {
         if (!ledgerData) return;
         const { summary } = ledgerData;
+        const currency = business?.currency || 'PKR';
+        const fmt = (v) => Number(v || 0).toLocaleString();
 
-        const esc = (v) => (v == null ? '' : String(v).replace(/"/g, '""'));
-        const lines = [
-            ['Vendor Ledger Report'],
-            ['Generated', new Date().toLocaleString()],
-            [],
-            ['Vendor', vendor?.name || ''],
-            ['Phone', vendor?.phone || ''],
-            ['Company', vendor?.company || ''],
-            ['Address', vendor?.address || ''],
-            ['Credit Limit', vendor?.creditLimit || 0],
-            ['Credit Days', vendor?.creditDays || 0],
-            [],
-            ['Summary'],
-            ['Total Supplies', summary.totalSupplies],
-            ['Total Paid', summary.totalPaid],
-            ['Total Returns', summary.totalReturns],
-            ['Current Balance', summary.currentBalance],
-            ['Total Supplies Count', summary.supplyCount],
-            ['Total Entries', summary.totalEntries],
-            [],
-            ['Ledger Entries'],
-            ['Date', 'Time', 'Voucher', 'Type', 'Description', 'Method / By', 'Debit', 'Credit', 'Balance', 'Notes'],
-            ...filteredEntries.map((e) => {
-                const d = new Date(e.date);
-                return [
-                    d.toLocaleDateString(),
-                    d.toLocaleTimeString(),
-                    e.supplyNumber ? `#${e.supplyNumber}` : '',
-                    e.type,
-                    e.description,
-                    [e.method, e.paidBy].filter(Boolean).join(' / '),
-                    e.debit || 0,
-                    e.credit || 0,
-                    e.balance || 0,
-                    e.notes || '',
-                ];
-            }),
-        ];
+        const dateRange = startDate || endDate
+            ? `${startDate || 'Start'} — ${endDate || 'Today'}`
+            : 'All Time';
 
-        const csv = lines.map((r) => r.map((c) => `"${esc(c)}"`).join(',')).join('\n');
-        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `vendor-ledger-${(vendor?.name || 'vendor').replace(/\s+/g, '_')}-${new Date().toISOString().slice(0, 10)}.csv`;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
+        const entryRows = filteredEntries.map((e) => {
+            const d = new Date(e.date);
+            const typeLabel = e.type === 'supply' ? 'SUPPLY' : e.type === 'payment' ? 'PAID' : e.type === 'return' ? 'RETURN' : e.type === 'opening_balance' ? 'OPENING' : e.type?.toUpperCase() || '';
+            const typeColor = e.type === 'supply' ? '#f59e0b' : e.type === 'payment' ? '#10b981' : e.type === 'return' ? '#3b82f6' : '#64748b';
+            return `<tr>
+                <td style="padding:6px 8px;font-size:11px;border-bottom:1px solid #e2e8f0;">${d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}</td>
+                <td style="padding:6px 8px;font-size:11px;border-bottom:1px solid #e2e8f0;">${e.supplyNumber ? '#' + e.supplyNumber : '—'}</td>
+                <td style="padding:6px 8px;font-size:11px;border-bottom:1px solid #e2e8f0;"><span style="color:${typeColor};font-size:10px;font-weight:700;margin-right:6px;">${typeLabel}</span>${e.description}</td>
+                <td style="padding:6px 8px;font-size:11px;border-bottom:1px solid #e2e8f0;">${[e.method?.toUpperCase(), e.paidBy].filter(Boolean).join(' / ') || '—'}</td>
+                <td style="padding:6px 8px;font-size:11px;border-bottom:1px solid #e2e8f0;text-align:right;color:#ef4444;font-weight:600;">${e.debit ? currency + ' ' + fmt(e.debit) : '—'}</td>
+                <td style="padding:6px 8px;font-size:11px;border-bottom:1px solid #e2e8f0;text-align:right;color:#10b981;font-weight:600;">${e.credit ? currency + ' ' + fmt(e.credit) : '—'}</td>
+                <td style="padding:6px 8px;font-size:11px;border-bottom:1px solid #e2e8f0;text-align:right;font-weight:700;">${currency} ${fmt(e.balance)}</td>
+            </tr>`;
+        }).join('');
+
+        const html = `
+        <div style="font-family:Arial,Helvetica,sans-serif;padding:20px 24px;color:#1e293b;background:#fff;width:100%;">
+            <!-- Header -->
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:16px;">
+                <div>
+                    <h1 style="margin:0;font-size:22px;font-weight:700;">Vendor Ledger Report</h1>
+                    <p style="margin:4px 0 0;font-size:12px;color:#64748b;">Generated: ${new Date().toLocaleString()} | Period: ${dateRange}</p>
+                </div>
+                ${business?.name ? `<div style="text-align:right;"><div style="font-size:14px;font-weight:700;">${business.name}</div>${business.phone ? `<div style="font-size:11px;color:#64748b;">${business.phone}</div>` : ''}</div>` : ''}
+            </div>
+
+            <!-- Vendor Info -->
+            <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px 16px;margin-bottom:16px;">
+                <div style="font-size:16px;font-weight:700;margin-bottom:4px;">${vendor?.name || 'Vendor'}</div>
+                <div style="display:flex;gap:24px;font-size:11px;color:#64748b;">
+                    ${vendor?.phone ? `<span>Phone: ${vendor.phone}</span>` : ''}
+                    ${vendor?.company ? `<span>Company: ${vendor.company}</span>` : ''}
+                    ${vendor?.address ? `<span>Address: ${vendor.address}</span>` : ''}
+                </div>
+            </div>
+
+            <!-- Summary Cards -->
+            <div style="display:flex;gap:10px;margin-bottom:16px;">
+                <div style="flex:1;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px 14px;">
+                    <div style="font-size:10px;color:#64748b;text-transform:uppercase;font-weight:600;">Total Supplies</div>
+                    <div style="font-size:16px;font-weight:700;margin-top:2px;">${currency} ${fmt(summary.totalSupplies)}</div>
+                </div>
+                <div style="flex:1;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px 14px;">
+                    <div style="font-size:10px;color:#64748b;text-transform:uppercase;font-weight:600;">Total Paid</div>
+                    <div style="font-size:16px;font-weight:700;margin-top:2px;color:#10b981;">${currency} ${fmt(summary.totalPaid)}</div>
+                </div>
+                <div style="flex:1;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px 14px;">
+                    <div style="font-size:10px;color:#64748b;text-transform:uppercase;font-weight:600;">Returns</div>
+                    <div style="font-size:16px;font-weight:700;margin-top:2px;">${currency} ${fmt(summary.totalReturns)}</div>
+                </div>
+                <div style="flex:1;background:#fff5f5;border:1px solid #fecaca;border-radius:8px;padding:10px 14px;">
+                    <div style="font-size:10px;color:#ef4444;text-transform:uppercase;font-weight:600;">Balance Due</div>
+                    <div style="font-size:16px;font-weight:700;margin-top:2px;color:#ef4444;">${currency} ${fmt(summary.currentBalance)}</div>
+                </div>
+            </div>
+
+            <!-- Ledger Table -->
+            <table style="width:100%;border-collapse:collapse;border:1px solid #e2e8f0;border-radius:8px;overflow:hidden;">
+                <thead>
+                    <tr style="background:#f1f5f9;">
+                        <th style="padding:8px;font-size:10px;text-align:left;font-weight:700;text-transform:uppercase;color:#64748b;border-bottom:2px solid #e2e8f0;">Date</th>
+                        <th style="padding:8px;font-size:10px;text-align:left;font-weight:700;text-transform:uppercase;color:#64748b;border-bottom:2px solid #e2e8f0;">Voucher</th>
+                        <th style="padding:8px;font-size:10px;text-align:left;font-weight:700;text-transform:uppercase;color:#64748b;border-bottom:2px solid #e2e8f0;">Description</th>
+                        <th style="padding:8px;font-size:10px;text-align:left;font-weight:700;text-transform:uppercase;color:#64748b;border-bottom:2px solid #e2e8f0;">Method / By</th>
+                        <th style="padding:8px;font-size:10px;text-align:right;font-weight:700;text-transform:uppercase;color:#64748b;border-bottom:2px solid #e2e8f0;">Debit</th>
+                        <th style="padding:8px;font-size:10px;text-align:right;font-weight:700;text-transform:uppercase;color:#64748b;border-bottom:2px solid #e2e8f0;">Credit</th>
+                        <th style="padding:8px;font-size:10px;text-align:right;font-weight:700;text-transform:uppercase;color:#64748b;border-bottom:2px solid #e2e8f0;">Balance</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${entryRows}
+                </tbody>
+                <tfoot>
+                    <tr style="background:#f1f5f9;font-weight:700;">
+                        <td colspan="4" style="padding:8px;font-size:12px;border-top:2px solid #e2e8f0;">Totals</td>
+                        <td style="padding:8px;font-size:12px;text-align:right;color:#ef4444;border-top:2px solid #e2e8f0;">${currency} ${fmt(summary.totalSupplies)}</td>
+                        <td style="padding:8px;font-size:12px;text-align:right;color:#10b981;border-top:2px solid #e2e8f0;">${currency} ${fmt(summary.totalPaid)}</td>
+                        <td style="padding:8px;font-size:12px;text-align:right;border-top:2px solid #e2e8f0;">${currency} ${fmt(summary.currentBalance)}</td>
+                    </tr>
+                </tfoot>
+            </table>
+
+            <!-- Footer -->
+            <div style="margin-top:16px;text-align:center;font-size:10px;color:#94a3b8;">
+                ${filteredEntries.length} entries | Supply Count: ${summary.supplyCount}
+            </div>
+        </div>`;
+
+        const container = document.createElement('div');
+        container.style.cssText = 'position:fixed;top:-9999px;left:-9999px;';
+        container.innerHTML = html;
+        document.body.appendChild(container);
+
+        const element = container.firstElementChild;
+        html2pdf()
+            .set({
+                margin: [10, 10, 10, 10],
+                filename: `Vendor-Ledger-${(vendor?.name || 'vendor').replace(/\s+/g, '_')}-${new Date().toISOString().slice(0, 10)}.pdf`,
+                image: { type: 'jpeg', quality: 0.98 },
+                html2canvas: { scale: 2, useCORS: true },
+                jsPDF: { unit: 'mm', format: 'a4', orientation: 'landscape' },
+            })
+            .from(element)
+            .save()
+            .then(() => document.body.removeChild(container))
+            .catch((err) => {
+                console.error('PDF download error:', err);
+                document.body.removeChild(container);
+            });
     };
 
     const handlePrint = () => {
@@ -336,11 +414,11 @@ const VendorLedger = () => {
                             Print
                         </button>
                         <button
-                            onClick={downloadCsv}
+                            onClick={downloadPdf}
                             className="flex items-center gap-2 px-3 py-2.5 bg-white dark:bg-d-card border border-slate-200 dark:border-d-border text-slate-700 dark:text-d-text rounded-xl text-sm font-medium hover:bg-slate-50 dark:hover:bg-d-glass transition-colors"
                         >
                             <FiDownload size={15} />
-                            Download CSV
+                            Download PDF
                         </button>
                         <button
                             onClick={openPaymentModal}
@@ -625,7 +703,7 @@ const VendorLedger = () => {
                                                                             </thead>
                                                                             <tbody className="divide-y divide-slate-100 dark:divide-d-border">
                                                                                 {entry.items.map((it, i) => {
-                                                                                    const lineGross = (it.unitCost || it.price || 0) * (it.quantity || it.qty || 0);
+                                                                                    const lineGross = (it.unitCost || it.unitPrice || it.price || 0) * (it.quantity || it.qty || 0);
                                                                                     const gstAmount = it.gstAmount || 0;
                                                                                     const lineTotal = it.totalPrice != null ? it.totalPrice : lineGross + gstAmount;
                                                                                     return (
@@ -644,7 +722,7 @@ const VendorLedger = () => {
                                                                                                 </span>
                                                                                             </td>
                                                                                             <td className="py-4 text-right text-slate-600 dark:text-d-muted tabular-nums font-medium">
-                                                                                                {formatCurrency(it.unitCost || it.price)}
+                                                                                                {formatCurrency(it.unitCost || it.unitPrice || it.price)}
                                                                                             </td>
                                                                                             <td className="py-4 text-right tabular-nums">
                                                                                                 {gstAmount > 0 ? (
@@ -788,6 +866,30 @@ const VendorLedger = () => {
                             </div>
 
                             <form onSubmit={submitPayment} className="p-6 space-y-5">
+                                {/* Cash in hand info */}
+                                {cashInHand != null && (
+                                    <div className={`flex items-center justify-between p-3 rounded-xl border ${
+                                        paymentForm.method === 'cash' && (parseFloat(paymentForm.amount) || 0) > cashInHand
+                                            ? 'bg-red-50 dark:bg-[rgba(239,68,68,0.08)] border-red-200 dark:border-[rgba(239,68,68,0.2)]'
+                                            : 'bg-slate-50 dark:bg-d-bg border-slate-200 dark:border-d-border'
+                                    }`}>
+                                        <span className="text-xs font-medium text-slate-500 dark:text-d-muted">Cash in Hand</span>
+                                        <span className={`text-sm font-bold ${
+                                            paymentForm.method === 'cash' && (parseFloat(paymentForm.amount) || 0) > cashInHand
+                                                ? 'text-red-600 dark:text-d-red'
+                                                : 'text-slate-800 dark:text-d-heading'
+                                        }`}>{formatCurrency(cashInHand)}</span>
+                                    </div>
+                                )}
+
+                                {/* Payment error */}
+                                {paymentError && (
+                                    <div className="flex items-center gap-2 p-3 bg-red-50 dark:bg-[rgba(239,68,68,0.08)] border border-red-200 dark:border-[rgba(239,68,68,0.2)] rounded-xl">
+                                        <FiAlertCircle className="text-red-500 dark:text-d-red flex-shrink-0" size={14} />
+                                        <span className="text-xs text-red-700 dark:text-red-400 font-medium">{paymentError}</span>
+                                    </div>
+                                )}
+
                                 {/* Mode toggle */}
                                 <div className="grid grid-cols-2 gap-1 p-1 bg-slate-100 dark:bg-d-bg border border-slate-200 dark:border-d-border rounded-xl">
                                     <button
@@ -893,6 +995,7 @@ const VendorLedger = () => {
                                             onChange={(e) => {
                                                 const v = e.target.value.replace(/[^0-9.]/g, '');
                                                 setPaymentForm((p) => ({ ...p, amount: v }));
+                                                setPaymentError('');
                                             }}
                                             placeholder="0"
                                             className={`w-full pl-14 pr-4 py-4 bg-slate-50 dark:bg-d-bg border rounded-xl text-2xl font-bold text-slate-800 dark:text-d-text focus:outline-none transition-colors ${

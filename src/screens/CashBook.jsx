@@ -15,6 +15,7 @@ import {
     FiPrinter,
     FiInbox,
     FiSearch,
+    FiAlertCircle,
 } from 'react-icons/fi';
 
 const TYPE_LABELS = {
@@ -40,6 +41,7 @@ const TYPE_COLORS = {
 const CashBook = () => {
     const { business } = useBusiness();
     const [entries, setEntries] = useState([]);
+    const [dailySummary, setDailySummary] = useState([]);
     const [balance, setBalance] = useState(0);
     const [todayIn, setTodayIn] = useState(0);
     const [todayOut, setTodayOut] = useState(0);
@@ -56,6 +58,7 @@ const CashBook = () => {
     const [showModal, setShowModal] = useState(null); // 'opening' | 'deposit' | 'withdraw'
     const [modalForm, setModalForm] = useState({ amount: '', note: '', description: '' });
     const [submitting, setSubmitting] = useState(false);
+    const [modalError, setModalError] = useState('');
 
     const currency = business?.currency || 'Rs.';
     const formatCurrency = (amt) =>
@@ -86,6 +89,7 @@ const CashBook = () => {
 
             const res = await getCashBook(params);
             setEntries(res.data?.entries || []);
+            setDailySummary(res.data?.dailySummary || []);
             setPagination(res.data?.pagination || { page: 1, pages: 1, total: 0 });
         } catch (err) {
             console.error('Error fetching cashbook:', err);
@@ -127,11 +131,16 @@ const CashBook = () => {
     const groupedByDay = useMemo(() => {
         if (filteredEntries.length === 0) return [];
 
+        // Build a lookup from dailySummary by date string (YYYY-MM-DD)
+        const summaryMap = {};
+        dailySummary.forEach((ds) => {
+            summaryMap[ds.date] = ds;
+        });
+
         const groups = [];
         let currentDate = null;
         let currentGroup = null;
 
-        // Entries come sorted newest first from backend
         filteredEntries.forEach((entry) => {
             const d = new Date(entry.createdAt);
             const dateKey = d.toLocaleDateString();
@@ -145,20 +154,25 @@ const CashBook = () => {
         });
         if (currentGroup) groups.push(currentGroup);
 
-        // Calculate opening/closing for each day group
-        // Entries are oldest-first within each group
+        // Use dailySummary for opening/closing balances
         groups.forEach((g) => {
-            // Opening balance = balance before the first entry of the day
-            const first = g.entries[0];
-            g.openingBalance = first.direction === 'in'
-                ? first.runningBalance - first.amount
-                : first.runningBalance + first.amount;
-            // Closing balance = running balance of the last entry of the day
-            g.closingBalance = g.entries[g.entries.length - 1].runningBalance;
+            const isoDate = g.date.toISOString().slice(0, 10);
+            const ds = summaryMap[isoDate];
+            if (ds) {
+                g.openingBalance = ds.openingBalance;
+                g.closingBalance = ds.closingBalance;
+            } else {
+                // Fallback: calculate from entries
+                const first = g.entries[0];
+                g.openingBalance = first.direction === 'in'
+                    ? first.runningBalance - first.amount
+                    : first.runningBalance + first.amount;
+                g.closingBalance = g.entries[g.entries.length - 1].runningBalance;
+            }
         });
 
         return groups;
-    }, [filteredEntries]);
+    }, [filteredEntries, dailySummary]);
 
     // =========================================================================
     // Modal submit
@@ -166,9 +180,10 @@ const CashBook = () => {
 
     const submitModal = async (e) => {
         e.preventDefault();
+        setModalError('');
         const amount = parseFloat(modalForm.amount);
         if (!amount || amount <= 0) {
-            alert('Enter a valid amount');
+            setModalError('Enter a valid amount');
             return;
         }
 
@@ -183,9 +198,10 @@ const CashBook = () => {
             }
             setShowModal(null);
             setModalForm({ amount: '', note: '', description: '' });
+            setModalError('');
             handleRefresh();
         } catch (err) {
-            alert(err.response?.data?.message || 'Operation failed');
+            setModalError(err.response?.data?.message || 'Operation failed');
         } finally {
             setSubmitting(false);
         }
@@ -324,19 +340,19 @@ const CashBook = () => {
                 {/* Action Buttons */}
                 <div className="flex flex-wrap gap-3 mb-6 print:hidden">
                     <button
-                        onClick={() => { setShowModal('opening'); setModalForm({ amount: '', note: '', description: '' }); }}
+                        onClick={() => { setShowModal('opening'); setModalForm({ amount: '', note: '', description: '' }); setModalError(''); }}
                         className="flex items-center gap-2 px-4 py-2.5 bg-blue-500 hover:bg-blue-600 text-white rounded-xl transition-colors text-sm font-medium"
                     >
                         <FiDollarSign size={16} /> Set Opening Balance
                     </button>
                     <button
-                        onClick={() => { setShowModal('deposit'); setModalForm({ amount: '', note: '', description: '' }); }}
+                        onClick={() => { setShowModal('deposit'); setModalForm({ amount: '', note: '', description: '' }); setModalError(''); }}
                         className="flex items-center gap-2 px-4 py-2.5 bg-emerald-500 hover:bg-emerald-600 text-white rounded-xl transition-colors text-sm font-medium"
                     >
                         <FiPlus size={16} /> Deposit Cash
                     </button>
                     <button
-                        onClick={() => { setShowModal('withdraw'); setModalForm({ amount: '', note: '', description: '' }); }}
+                        onClick={() => { setShowModal('withdraw'); setModalForm({ amount: '', note: '', description: '' }); setModalError(''); }}
                         className="flex items-center gap-2 px-4 py-2.5 bg-orange-500 hover:bg-orange-600 text-white rounded-xl transition-colors text-sm font-medium"
                     >
                         <FiMinus size={16} /> Withdraw Cash
@@ -542,6 +558,12 @@ const CashBook = () => {
                         </div>
 
                         <form onSubmit={submitModal} className="p-5 space-y-4">
+                            {modalError && (
+                                <div className="flex items-center gap-2 p-3 bg-red-50 dark:bg-[rgba(239,68,68,0.08)] border border-red-200 dark:border-[rgba(239,68,68,0.2)] rounded-xl">
+                                    <FiAlertCircle className="text-red-500 dark:text-red-400 flex-shrink-0" size={14} />
+                                    <span className="text-xs text-red-700 dark:text-red-400 font-medium">{modalError}</span>
+                                </div>
+                            )}
                             <div>
                                 <label className="block text-sm font-medium text-slate-600 dark:text-d-muted mb-1.5">
                                     Amount (Rs)

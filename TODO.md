@@ -1,33 +1,16 @@
 # TODO — POS Inventory Desktop
 
-## Priority Fixes (Next Session)
+---
 
-### 1. Vendor Payment — Cash in Hand Validation
-- [ ] Fetch and display **current cash in hand** in the Pay Vendor modal
-- [ ] **Block payment** if amount > cash in hand (when payment method is Cash)
-- [ ] **Block payment** if amount > vendor's remaining balance due
-- [ ] Show cash in hand balance clearly in the modal UI
+## Pending — Future
 
-### 2. Cash Book — Opening Balance
-- [ ] Opening balance should display **at the top** of each day's entries
-- [ ] Opening balance is set **only once** (first time setup)
-- [ ] After first time, user deposits cash (not re-setting opening balance)
-- [ ] Previous day's closing balance = next day's opening balance (auto-carry)
-
-### 3. Vendor Ledger — Entry Order Fix
-- [ ] When supply is added with partial/full payment, entries should be:
-  - **Debit first** (supply received → amount owed increases)
-  - **Credit second** (payment made → amount owed decreases)
-- [ ] Currently showing credit before debit — fix ordering
-
-### 4. Vendor Ledger — Download PDF
-- [ ] Change "Download CSV" to **"Download PDF"**
-- [ ] PDF should cover the **selected time period** only
-- [ ] Include: vendor info header, all ledger entries, totals row
-
-### 5. Seed Business Types (New DB)
-- [ ] Seed `businessTypes` collection with:
-  - Retail Store, Restaurant, Grocery Store, Pharmacy, Electronics, Clothing, Hardware Store, General Store, Other
+### Admin — Invoice Editing (Frontend + Backend)
+- [ ] Backend: API endpoint to edit an existing invoice (admin only)
+- [ ] Backend: Save full edit history (who edited, when, what changed)
+- [ ] Backend: API endpoint to fetch edit history for an invoice
+- [ ] Frontend: Add edit button on invoice/receipt detail (admin only)
+- [ ] Frontend: Editable fields: items, quantities, prices, discounts, customer info
+- [ ] Frontend: Show edit history log on invoice detail view (audit trail)
 
 ---
 
@@ -42,7 +25,7 @@
 - [ ] Socket.IO will work on Oracle (persistent server)
 
 ### Desktop Distribution
-- [ ] First Mac build — DONE ✅
+- [x] First Mac build (release/POS Desktop-1.0.0-arm64.dmg)
 - [ ] Test the DMG locally
 - [ ] Create GitHub Release (v1.0.0) to enable auto-updater
 - [ ] Windows build (need Windows machine or CI)
@@ -51,10 +34,31 @@
 ---
 
 ## Completed ✅
+
+### Infrastructure
 - [x] Git repo initialized & pushed (a17ahmed/pos-inventory-desktop)
 - [x] .gitignore created
 - [x] App icons generated (icon.ico, icon.icns)
 - [x] Auto-updater configured in electron/main.js
-- [x] Mac build successful (release/POS Desktop-1.0.0-arm64.dmg)
-- [x] Backend bugs fixed (route ordering, employee soft delete, supply error logging, expense fields)
-- [x] Frontend bugs fixed (stale permissions, Reports colors, Pending currency, employee reactivation UI)
+- [x] Mac build successful
+
+### Backend Fixes
+- [x] Route ordering, employee soft delete, supply error logging, expense fields
+- [x] Vendor Payment — Cash in Hand validation API
+- [x] Cash Book — Opening Balance with dailySummary (auto-carry)
+- [x] Vendor Ledger — Entry order fix (debit before credit)
+- [x] Vendor Ledger — Unit Price in supply detail API
+- [x] Seed Business Types
+
+### Frontend Fixes
+- [x] Stale permissions, Reports colors, Pending currency, employee reactivation UI
+- [x] Vendor Payment — Cash in Hand validation UI (modal with balance display)
+- [x] Cash Book — Opening Balance UI (uses dailySummary from backend)
+- [x] Cash Book — Inline error handling (replaced alerts)
+- [x] Vendor Ledger — Download PDF (replaced CSV)
+- [x] Vendor Ledger — Unit Price fallback fix
+- [x] Customer Ledger — Download PDF (replaced CSV)
+- [x] Receipts — Print & Download unified (shared receiptTemplate.js)
+- [x] Receipts — Credit bill detection fix (uses paymentStatus)
+- [x] Receipts — Customer account balance fix (fetches from API)
+- [x] Receipts — Thermal printer ESC/POS text mode reset fix

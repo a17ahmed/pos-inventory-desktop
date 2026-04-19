@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useBusiness } from '../context/BusinessContext';
 import { getAllReceipts, getReceiptStats, getReceiptsPaginated } from '../services/api/receipts';
+import { getCustomer } from '../services/api/customers';
 import { printReceipt } from '../utils/printReceipt';
 import { downloadReceipt } from '../utils/downloadReceipt';
 import {
@@ -229,7 +230,7 @@ const Receipts = () => {
         return `${currency} ${(amount || 0).toLocaleString()}`;
     };
 
-    const handlePrint = (receipt) => {
+    const buildReceiptOpts = async (receipt) => {
         const items = (receipt.items || []).map(it => ({
             name: it.name,
             qty: it.qty || it.quantity || 0,
@@ -237,16 +238,30 @@ const Receipts = () => {
             discountAmount: it.discountAmount || 0,
         }));
         const subtotal = items.reduce((s, it) => s + (it.price * it.qty - (Number(it.discountAmount) || 0)), 0);
-        const paymentMethod = receipt.payments?.[0]?.method || 'cash';
-        const cashPayment = receipt.payments?.find(p => p.method === 'cash');
+        // Use paymentStatus from bill data — if unpaid, it's credit
+        const paymentMethod = receipt.paymentStatus === 'unpaid'
+            ? 'credit'
+            : (receipt.payments?.[0]?.method || 'cash');
 
-        printReceipt({
+        // Fetch customer's total account balance for credit bills
+        let customerBalance = 0;
+        if (receipt.customer && receipt.paymentStatus === 'unpaid') {
+            try {
+                const res = await getCustomer(receipt.customer);
+                customerBalance = res.data?.balance || res.data?.totalDue || 0;
+            } catch {
+                customerBalance = 0;
+            }
+        }
+
+        return {
             store: business,
             currency,
             billNumber: receipt.billNumber || '-',
             date: new Date(receipt.createdAt).toLocaleString('en-PK', { dateStyle: 'medium', timeStyle: 'short' }),
             customerName: receipt.customerName || 'Walk-in',
             cashierName: receipt.cashierName || '',
+            customerBalance,
             items,
             subtotal,
             tax: receipt.totalTax || 0,
@@ -254,41 +269,21 @@ const Receipts = () => {
             billDiscount: receipt.billDiscountAmount || 0,
             total: receipt.total || 0,
             paymentMethod,
-            amountPaid: receipt.amountPaid || receipt.total || 0,
-            cashGiven: cashPayment?.amount || 0,
-            change: 0,
-        });
+            amountPaid: receipt.amountPaid || 0,
+            amountDue: receipt.amountDue || 0,
+            cashGiven: receipt.cashGiven || 0,
+            change: receipt.change || 0,
+        };
     };
 
-    const handleDownload = (receipt) => {
-        const items = (receipt.items || []).map(it => ({
-            name: it.name,
-            qty: it.qty || it.quantity || 0,
-            price: it.price || it.sellingPrice || 0,
-            discountAmount: it.discountAmount || 0,
-        }));
-        const subtotal = items.reduce((s, it) => s + (it.price * it.qty - (Number(it.discountAmount) || 0)), 0);
-        const paymentMethod = receipt.payments?.[0]?.method || 'cash';
-        const cashPayment = receipt.payments?.find(p => p.method === 'cash');
+    const handlePrint = async (receipt) => {
+        const opts = await buildReceiptOpts(receipt);
+        printReceipt(opts);
+    };
 
-        downloadReceipt({
-            store: business,
-            currency,
-            billNumber: receipt.billNumber || '-',
-            date: new Date(receipt.createdAt).toLocaleString('en-PK', { dateStyle: 'medium', timeStyle: 'short' }),
-            customerName: receipt.customerName || 'Walk-in',
-            cashierName: receipt.cashierName || '',
-            items,
-            subtotal,
-            tax: receipt.totalTax || 0,
-            itemDiscounts: receipt.totalItemDiscount || 0,
-            billDiscount: receipt.billDiscountAmount || 0,
-            total: receipt.total || 0,
-            paymentMethod,
-            amountPaid: receipt.amountPaid || receipt.total || 0,
-            cashGiven: cashPayment?.amount || 0,
-            change: 0,
-        });
+    const handleDownload = async (receipt) => {
+        const opts = await buildReceiptOpts(receipt);
+        downloadReceipt(opts);
     };
 
     const formatDate = (date) => {

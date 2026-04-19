@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
+import html2pdf from 'html2pdf.js';
 import { useBusiness } from '../context/BusinessContext';
 import { getCustomer, getCustomerLedger, collectFromCustomer } from '../services/api/customers';
 import { addBillPayment } from '../services/api/bills';
@@ -204,60 +205,123 @@ const CustomerLedger = () => {
         }
     };
 
-    const downloadCsv = () => {
+    const downloadPdf = () => {
         if (!ledgerData) return;
         const { summary } = ledgerData;
+        const currency = business?.currency || 'PKR';
+        const fmt = (v) => Number(v || 0).toLocaleString();
 
-        const esc = (v) => (v == null ? '' : String(v).replace(/"/g, '""'));
-        const lines = [
-            ['Customer Ledger Report'],
-            ['Generated', new Date().toLocaleString()],
-            [],
-            ['Customer', customer?.name || ''],
-            ['Phone', customer?.phone || ''],
-            ['Email', customer?.email || ''],
-            ['Address', customer?.address || ''],
-            ['Credit Limit', customer?.creditLimit || 0],
-            ['Credit Days', customer?.creditDays || 0],
-            [],
-            ['Summary'],
-            ['Total Billed', summary.totalBilled],
-            ['Total Paid', summary.totalPaid],
-            ['Total Returns', summary.totalReturns],
-            [(summary.currentBalance || 0) < 0 ? 'Store Credit' : 'Current Balance', Math.abs(summary.currentBalance || 0)],
-            ['Total Bills', summary.billCount],
-            ['Total Entries', summary.totalEntries],
-            [],
-            ['Ledger Entries'],
-            ['Date', 'Time', 'Voucher', 'Type', 'Description', 'Method', 'Received By', 'Debit', 'Credit', 'Balance', 'Notes'],
-            ...filteredEntries.map((e) => {
-                const d = new Date(e.date);
-                return [
-                    d.toLocaleDateString(),
-                    d.toLocaleTimeString(),
-                    e.billNumber ? `#${e.billNumber}` : '',
-                    e.type,
-                    e.description,
-                    e.method || '',
-                    e.receivedBy || '',
-                    e.debit || 0,
-                    e.credit || 0,
-                    e.balance || 0,
-                    e.notes || '',
-                ];
-            }),
-        ];
+        const dateRange = startDate || endDate
+            ? `${startDate || 'Start'} — ${endDate || 'Today'}`
+            : 'All Time';
 
-        const csv = lines.map((r) => r.map((c) => `"${esc(c)}"`).join(',')).join('\n');
-        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `ledger-${(customer?.name || 'customer').replace(/\s+/g, '_')}-${new Date().toISOString().slice(0, 10)}.csv`;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
+        const balanceLabel = (summary.currentBalance || 0) < 0 ? 'Store Credit' : 'Balance Due';
+        const balanceColor = (summary.currentBalance || 0) < 0 ? '#3b82f6' : '#ef4444';
+
+        const entryRows = filteredEntries.map((e) => {
+            const d = new Date(e.date);
+            const typeLabel = e.type === 'bill' ? 'BILL' : e.type === 'payment' ? 'PAID' : e.type === 'return' ? 'RETURN' : e.type === 'opening_balance' ? 'OPENING' : e.type?.toUpperCase() || '';
+            const typeColor = e.type === 'bill' ? '#f59e0b' : e.type === 'payment' ? '#10b981' : e.type === 'return' ? '#3b82f6' : '#64748b';
+            return `<tr>
+                <td style="padding:6px 8px;font-size:11px;border-bottom:1px solid #e2e8f0;">${d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}</td>
+                <td style="padding:6px 8px;font-size:11px;border-bottom:1px solid #e2e8f0;">${e.billNumber ? '#' + e.billNumber : '—'}</td>
+                <td style="padding:6px 8px;font-size:11px;border-bottom:1px solid #e2e8f0;"><span style="color:${typeColor};font-size:10px;font-weight:700;margin-right:6px;">${typeLabel}</span>${e.description}</td>
+                <td style="padding:6px 8px;font-size:11px;border-bottom:1px solid #e2e8f0;">${[e.method?.toUpperCase(), e.receivedBy].filter(Boolean).join(' / ') || '—'}</td>
+                <td style="padding:6px 8px;font-size:11px;border-bottom:1px solid #e2e8f0;text-align:right;color:#ef4444;font-weight:600;">${e.debit ? currency + ' ' + fmt(e.debit) : '—'}</td>
+                <td style="padding:6px 8px;font-size:11px;border-bottom:1px solid #e2e8f0;text-align:right;color:#10b981;font-weight:600;">${e.credit ? currency + ' ' + fmt(e.credit) : '—'}</td>
+                <td style="padding:6px 8px;font-size:11px;border-bottom:1px solid #e2e8f0;text-align:right;font-weight:700;">${currency} ${fmt(e.balance)}</td>
+            </tr>`;
+        }).join('');
+
+        const html = `
+        <div style="font-family:Arial,Helvetica,sans-serif;padding:20px 24px;color:#1e293b;background:#fff;width:100%;">
+            <!-- Header -->
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:16px;">
+                <div>
+                    <h1 style="margin:0;font-size:22px;font-weight:700;">Customer Ledger Report</h1>
+                    <p style="margin:4px 0 0;font-size:12px;color:#64748b;">Generated: ${new Date().toLocaleString()} | Period: ${dateRange}</p>
+                </div>
+                ${business?.name ? `<div style="text-align:right;"><div style="font-size:14px;font-weight:700;">${business.name}</div>${business.phone ? `<div style="font-size:11px;color:#64748b;">${business.phone}</div>` : ''}</div>` : ''}
+            </div>
+
+            <!-- Customer Info -->
+            <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px 16px;margin-bottom:16px;">
+                <div style="font-size:16px;font-weight:700;margin-bottom:4px;">${customer?.name || 'Customer'}</div>
+                <div style="display:flex;gap:24px;font-size:11px;color:#64748b;">
+                    ${customer?.phone ? `<span>Phone: ${customer.phone}</span>` : ''}
+                    ${customer?.email ? `<span>Email: ${customer.email}</span>` : ''}
+                    ${customer?.address ? `<span>Address: ${customer.address}</span>` : ''}
+                </div>
+                <div style="display:flex;gap:24px;font-size:10px;color:#94a3b8;margin-top:2px;">
+                    ${customer?.creditLimit ? `<span>Credit Limit: ${currency} ${fmt(customer.creditLimit)}</span>` : ''}
+                    ${customer?.creditDays ? `<span>Credit Days: ${customer.creditDays}</span>` : ''}
+                </div>
+            </div>
+
+            <!-- Summary Cards -->
+            <div style="display:flex;gap:10px;margin-bottom:16px;">
+                <div style="flex:1;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px 14px;">
+                    <div style="font-size:10px;color:#64748b;text-transform:uppercase;font-weight:600;">Total Billed</div>
+                    <div style="font-size:16px;font-weight:700;margin-top:2px;">${currency} ${fmt(summary.totalBilled)}</div>
+                </div>
+                <div style="flex:1;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px 14px;">
+                    <div style="font-size:10px;color:#64748b;text-transform:uppercase;font-weight:600;">Total Paid</div>
+                    <div style="font-size:16px;font-weight:700;margin-top:2px;color:#10b981;">${currency} ${fmt(summary.totalPaid)}</div>
+                </div>
+                <div style="flex:1;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px 14px;">
+                    <div style="font-size:10px;color:#64748b;text-transform:uppercase;font-weight:600;">Returns</div>
+                    <div style="font-size:16px;font-weight:700;margin-top:2px;">${currency} ${fmt(summary.totalReturns)}</div>
+                </div>
+                <div style="flex:1;background:#fff5f5;border:1px solid #fecaca;border-radius:8px;padding:10px 14px;">
+                    <div style="font-size:10px;color:${balanceColor};text-transform:uppercase;font-weight:600;">${balanceLabel}</div>
+                    <div style="font-size:16px;font-weight:700;margin-top:2px;color:${balanceColor};">${currency} ${fmt(Math.abs(summary.currentBalance || 0))}</div>
+                </div>
+            </div>
+
+            <!-- Ledger Table -->
+            <table style="width:100%;border-collapse:collapse;border:1px solid #e2e8f0;border-radius:8px;overflow:hidden;">
+                <thead>
+                    <tr style="background:#f1f5f9;">
+                        <th style="padding:8px;font-size:10px;text-align:left;font-weight:700;text-transform:uppercase;color:#64748b;border-bottom:2px solid #e2e8f0;">Date</th>
+                        <th style="padding:8px;font-size:10px;text-align:left;font-weight:700;text-transform:uppercase;color:#64748b;border-bottom:2px solid #e2e8f0;">Voucher</th>
+                        <th style="padding:8px;font-size:10px;text-align:left;font-weight:700;text-transform:uppercase;color:#64748b;border-bottom:2px solid #e2e8f0;">Description</th>
+                        <th style="padding:8px;font-size:10px;text-align:left;font-weight:700;text-transform:uppercase;color:#64748b;border-bottom:2px solid #e2e8f0;">Method / By</th>
+                        <th style="padding:8px;font-size:10px;text-align:right;font-weight:700;text-transform:uppercase;color:#64748b;border-bottom:2px solid #e2e8f0;">Debit</th>
+                        <th style="padding:8px;font-size:10px;text-align:right;font-weight:700;text-transform:uppercase;color:#64748b;border-bottom:2px solid #e2e8f0;">Credit</th>
+                        <th style="padding:8px;font-size:10px;text-align:right;font-weight:700;text-transform:uppercase;color:#64748b;border-bottom:2px solid #e2e8f0;">Balance</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${entryRows}
+                </tbody>
+            </table>
+
+            <!-- Footer -->
+            <div style="margin-top:12px;font-size:10px;color:#94a3b8;text-align:center;">
+                Entries: ${filteredEntries.length} | Bills: ${summary.billCount || 0}
+            </div>
+        </div>`;
+
+        const container = document.createElement('div');
+        container.style.cssText = 'position:fixed;top:-9999px;left:-9999px;';
+        container.innerHTML = html;
+        document.body.appendChild(container);
+
+        html2pdf()
+            .set({
+                margin: [8, 6, 8, 6],
+                filename: `ledger-${(customer?.name || 'customer').replace(/\s+/g, '_')}-${new Date().toISOString().slice(0, 10)}.pdf`,
+                image: { type: 'jpeg', quality: 0.98 },
+                html2canvas: { scale: 2, useCORS: true },
+                jsPDF: { unit: 'mm', format: 'a4', orientation: 'landscape' },
+            })
+            .from(container.firstElementChild)
+            .save()
+            .then(() => document.body.removeChild(container))
+            .catch((err) => {
+                console.error('PDF download error:', err);
+                document.body.removeChild(container);
+            });
     };
 
     const handlePrint = () => {
@@ -336,11 +400,11 @@ const CustomerLedger = () => {
                             Print
                         </button>
                         <button
-                            onClick={downloadCsv}
+                            onClick={downloadPdf}
                             className="flex items-center gap-2 px-3 py-2.5 bg-white dark:bg-d-card border border-slate-200 dark:border-d-border text-slate-700 dark:text-d-text rounded-xl text-sm font-medium hover:bg-slate-50 dark:hover:bg-d-glass transition-colors"
                         >
                             <FiDownload size={15} />
-                            Download CSV
+                            Download PDF
                         </button>
                         <button
                             onClick={openPaymentModal}
