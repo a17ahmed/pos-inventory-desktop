@@ -1,6 +1,6 @@
 {
   "name": "pos-desktop",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "POS Desktop Application for Windows and Mac",
   "main": "electron/main.js",
   "scripts": {
