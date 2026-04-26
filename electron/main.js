@@ -169,6 +169,14 @@ function setupAutoUpdater() {
         });
     });
 
+    autoUpdater.on('update-not-available', (info) => {
+        console.log('Up to date:', info.version);
+        mainWindow?.webContents.send('update-status', {
+            status: 'up-to-date',
+            version: info.version,
+        });
+    });
+
     autoUpdater.on('download-progress', (progress) => {
         mainWindow?.webContents.send('update-status', {
             status: 'downloading',

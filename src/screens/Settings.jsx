@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useBusiness } from '../context/BusinessContext';
@@ -25,6 +25,7 @@ import {
     FiDatabase,
     FiMoon,
     FiSun,
+    FiDownload,
 } from 'react-icons/fi';
 
 const Settings = () => {
@@ -34,12 +35,29 @@ const Settings = () => {
     const { isDark, toggleTheme } = useTheme();
 
     const [activeModal, setActiveModal] = useState(null);
+    const [appVersion, setAppVersion] = useState('');
+    const [updateLabel, setUpdateLabel] = useState('Check for Updates');
     const [savingBusiness, setSavingBusiness] = useState(false);
     const [savingProfile, setSavingProfile] = useState(false);
     const [profileForm, setProfileForm] = useState({ name: '', email: '', phone: '' });
     const [passwordForm, setPasswordForm] = useState({ currentPassword: '', newPassword: '', confirmPassword: '' });
     const [savingPassword, setSavingPassword] = useState(false);
     const bizFormRef = useRef({});
+
+    useEffect(() => {
+        window.electronAPI?.getAppVersion?.().then(v => setAppVersion(v || ''));
+        window.electronAPI?.onUpdateStatus?.((data) => {
+            if (data.status === 'up-to-date') setUpdateLabel(`You are up to date (v${data.version})`);
+            else if (data.status === 'available') setUpdateLabel(`Downloading v${data.version}...`);
+            else if (data.status === 'downloading') setUpdateLabel(`Downloading... ${data.percent || 0}%`);
+            else if (data.status === 'ready') setUpdateLabel('Update ready — restart to apply');
+        });
+    }, []);
+
+    const handleCheckUpdate = () => {
+        setUpdateLabel('Checking...');
+        window.electronAPI?.checkForUpdates?.().catch(() => setUpdateLabel('Update check failed'));
+    };
 
     const handleSaveBusiness = async () => {
         setSavingBusiness(true);
@@ -223,6 +241,13 @@ const Settings = () => {
                     color="text-pink-500"
                 />
                 <SettingItem
+                    icon={FiDownload}
+                    label="Check for Updates"
+                    value={updateLabel}
+                    onClick={handleCheckUpdate}
+                    color="text-teal-500"
+                />
+                <SettingItem
                     icon={FiDatabase}
                     label="Data & Storage"
                     value="Coming soon"
@@ -261,7 +286,7 @@ const Settings = () => {
                 <SettingItem
                     icon={FiInfo}
                     label="About"
-                    value="Version 1.0.0"
+                    value={`Version ${appVersion || '...'}`}
                     onClick={() => setActiveModal('about')}
                     color="text-slate-500"
                 />
@@ -478,7 +503,7 @@ const Settings = () => {
                                 <FiBriefcase size={40} className="text-primary-500 dark:text-primary-400" />
                             </div>
                             <h3 className="text-2xl font-bold text-slate-800 dark:text-d-heading mb-2">POS Desktop</h3>
-                            <p className="text-slate-500 dark:text-d-muted mb-4">Version 1.0.0</p>
+                            <p className="text-slate-500 dark:text-d-muted mb-4">Version {appVersion || '...'}</p>
                             <p className="text-sm text-slate-500 dark:text-d-muted mb-6">
                                 A modern point of sale system for retail businesses.
                             </p>

@@ -82,6 +82,7 @@ const Employees = () => {
     const [permissions, setPermissions] = useState({});
     const [loadingAccess, setLoadingAccess] = useState(false);
     const [savingAccess, setSavingAccess] = useState(false);
+    const [submitting, setSubmitting] = useState(false);
 
     const [formData, setFormData] = useState({
         name: '',
@@ -201,6 +202,7 @@ const Employees = () => {
 
     const handleSubmit = async (e) => {
         e.preventDefault();
+        setSubmitting(true);
         try {
             const data = {
                 name: formData.name,
@@ -247,6 +249,8 @@ const Employees = () => {
         } catch (error) {
             console.error('Error saving employee:', error);
             alert(error.response?.data?.message || 'Failed to save employee');
+        } finally {
+            setSubmitting(false);
         }
     };
 
@@ -721,9 +725,10 @@ const Employees = () => {
                                 </button>
                                 <button
                                     type="submit"
-                                    className="flex-1 py-3 bg-gradient-to-r from-amber-400 to-amber-500 dark:from-d-accent dark:to-d-accent-s text-white dark:text-d-card rounded-xl font-medium hover:shadow-md dark:hover:shadow-[0_4px_20px_rgba(255,210,100,0.4)] transition-all flex items-center justify-center gap-2"
+                                    disabled={submitting}
+                                    className="flex-1 py-3 bg-gradient-to-r from-amber-400 to-amber-500 dark:from-d-accent dark:to-d-accent-s text-white dark:text-d-card rounded-xl font-medium hover:shadow-md dark:hover:shadow-[0_4px_20px_rgba(255,210,100,0.4)] transition-all flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
                                 >
-                                    <FiSave /> Save
+                                    <FiSave /> {submitting ? 'Saving...' : 'Save'}
                                 </button>
                             </div>
                         </form>

@@ -42,6 +42,9 @@ const Expenses = () => {
     const [showModal, setShowModal] = useState(false);
     const [editingExpense, setEditingExpense] = useState(null);
     const [rejectModal, setRejectModal] = useState({ show: false, expenseId: null, reason: '' });
+    const [submitting, setSubmitting] = useState(false);
+    const [rejecting, setRejecting] = useState(false);
+    const [approvingId, setApprovingId] = useState(null);
     const [formData, setFormData] = useState({
         category: 'supplies',
         amount: '',
@@ -120,6 +123,7 @@ const Expenses = () => {
         if (!formData.description?.trim()) {
             return alert('Please enter a description');
         }
+        setSubmitting(true);
         try {
             const data = {
                 ...formData,
@@ -137,16 +141,21 @@ const Expenses = () => {
         } catch (error) {
             console.error('Error saving expense:', error);
             alert(error.response?.data?.message || 'Failed to save expense');
+        } finally {
+            setSubmitting(false);
         }
     };
 
     const handleApprove = async (expenseId) => {
+        setApprovingId(expenseId);
         try {
             await approveExpense(expenseId);
             fetchExpenses();
         } catch (error) {
             console.error('Error approving expense:', error);
             alert('Failed to approve expense');
+        } finally {
+            setApprovingId(null);
         }
     };
 
@@ -154,6 +163,7 @@ const Expenses = () => {
         if (!rejectModal.reason?.trim()) {
             return alert('Please enter a rejection reason');
         }
+        setRejecting(true);
         try {
             await rejectExpense(rejectModal.expenseId, rejectModal.reason);
             setRejectModal({ show: false, expenseId: null, reason: '' });
@@ -161,6 +171,8 @@ const Expenses = () => {
         } catch (error) {
             console.error('Error rejecting expense:', error);
             alert('Failed to reject expense');
+        } finally {
+            setRejecting(false);
         }
     };
 
@@ -359,7 +371,8 @@ const Expenses = () => {
                                                 <>
                                                     <button
                                                         onClick={() => handleApprove(expense._id)}
-                                                        className="p-2 text-green-500 dark:text-d-green hover:bg-green-50 dark:hover:bg-[rgba(52,232,161,0.1)] rounded-lg transition-colors"
+                                                        disabled={approvingId === expense._id}
+                                                        className="p-2 text-green-500 dark:text-d-green hover:bg-green-50 dark:hover:bg-[rgba(52,232,161,0.1)] rounded-lg transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
                                                         title="Approve"
                                                     >
                                                         <FiCheck />
@@ -524,10 +537,11 @@ const Expenses = () => {
                                 </button>
                                 <button
                                     type="submit"
-                                    className="flex-1 py-3 bg-gradient-to-r from-amber-400 to-amber-500 dark:from-d-accent dark:to-d-accent-s text-white dark:text-d-card rounded-xl font-medium hover:shadow-md dark:hover:shadow-[0_4px_20px_rgba(255,210,100,0.4)] transition-all flex items-center justify-center gap-2"
+                                    disabled={submitting}
+                                    className="flex-1 py-3 bg-gradient-to-r from-amber-400 to-amber-500 dark:from-d-accent dark:to-d-accent-s text-white dark:text-d-card rounded-xl font-medium hover:shadow-md dark:hover:shadow-[0_4px_20px_rgba(255,210,100,0.4)] transition-all flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
                                 >
                                     <FiSave />
-                                    Save
+                                    {submitting ? 'Saving...' : 'Save'}
                                 </button>
                             </div>
                         </form>
@@ -567,9 +581,10 @@ const Expenses = () => {
                                 </button>
                                 <button
                                     onClick={handleReject}
-                                    className="flex-1 py-3 bg-red-500 text-white rounded-xl font-medium hover:bg-red-600"
+                                    disabled={rejecting}
+                                    className="flex-1 py-3 bg-red-500 text-white rounded-xl font-medium hover:bg-red-600 disabled:opacity-60 disabled:cursor-not-allowed"
                                 >
-                                    Reject
+                                    {rejecting ? 'Rejecting...' : 'Reject'}
                                 </button>
                             </div>
                         </div>

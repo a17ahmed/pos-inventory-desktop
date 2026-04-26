@@ -39,6 +39,7 @@ const Products = () => {
         barcode: '',
         description: '',
     });
+    const [submitting, setSubmitting] = useState(false);
     const [generatingSku, setGeneratingSku] = useState(false);
     const [generatingBarcode, setGeneratingBarcode] = useState(false);
     const [addingNewCategory, setAddingNewCategory] = useState(false);
@@ -107,6 +108,7 @@ const Products = () => {
             alert('Cost price cannot be greater than the selling price.');
             return;
         }
+        setSubmitting(true);
         try {
             const data = {
                 name: formData.name,
@@ -138,6 +140,8 @@ const Products = () => {
         } catch (error) {
             console.error('Error saving product:', error);
             alert('Failed to save product');
+        } finally {
+            setSubmitting(false);
         }
     };
 
@@ -723,10 +727,11 @@ const Products = () => {
                                 </button>
                                 <button
                                     type="submit"
-                                    className="flex-1 py-3 bg-gradient-to-r from-amber-400 to-amber-500 dark:from-d-accent dark:to-d-accent-s text-white dark:text-d-card rounded-xl font-semibold hover:shadow-md dark:hover:shadow-[0_4px_20px_rgba(255,210,100,0.4)] transition-all flex items-center justify-center gap-2"
+                                    disabled={submitting}
+                                    className="flex-1 py-3 bg-gradient-to-r from-amber-400 to-amber-500 dark:from-d-accent dark:to-d-accent-s text-white dark:text-d-card rounded-xl font-semibold hover:shadow-md dark:hover:shadow-[0_4px_20px_rgba(255,210,100,0.4)] transition-all flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
                                 >
                                     <FiSave size={18} />
-                                    Save
+                                    {submitting ? 'Saving...' : 'Save'}
                                 </button>
                             </div>
                         </form>
