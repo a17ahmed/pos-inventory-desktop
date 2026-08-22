@@ -267,7 +267,7 @@ ipcMain.handle('print-receipt', async (event, { receiptData }) => {
     try {
         const {
             storeName, storeAddress, storePhone, cashierName,
-            billNumber, date, customerName, customerBalance,
+            billNumber, date, customerName, customerBalanceBefore,
             items, subtotal, tax, itemDiscounts, billDiscount, total,
             paymentMethod, amountPaid, cashGiven, change, currency,
             receiptFooter, receiptNote
@@ -396,11 +396,15 @@ ipcMain.handle('print-receipt', async (event, { receiptData }) => {
             printer.leftRight('Paid:', money(paidOnBill));
         }
 
-        // ──── ACCOUNT BALANCE ────
-        if (customerName && customerName !== 'Walk-in') {
+        // ──── PENDING BALANCE ────
+        if (customerName && customerName !== 'Walk-in' && (Math.max(0, total - paidOnBill) > 0 || customerBalanceBefore > 0)) {
             const billDue = Math.max(0, total - paidOnBill);
-            if (billDue > 0) printer.leftRight('This Bill Due:', money(billDue));
-            if (customerBalance > 0) printer.leftRight('Account Balance:', money(customerBalance));
+            const previousBalance = customerBalanceBefore || 0;
+            printer.leftRight('Balance:', money(previousBalance));
+            printer.leftRight('Bill Balance:', money(billDue));
+            printer.bold(true);
+            printer.leftRight('Net Balance:', money(previousBalance + billDue));
+            printer.bold(false);
         }
 
         printer.drawLine();

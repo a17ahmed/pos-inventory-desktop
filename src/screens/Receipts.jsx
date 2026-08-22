@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useBusiness } from '../context/BusinessContext';
 import { getAllReceipts, getReceiptStats, getReceiptsPaginated } from '../services/api/receipts';
-import { getCustomer } from '../services/api/customers';
 import { printReceipt } from '../utils/printReceipt';
 import { downloadReceipt } from '../utils/downloadReceipt';
 import {
@@ -243,16 +242,9 @@ const Receipts = () => {
             ? 'credit'
             : (receipt.payments?.[0]?.method || 'cash');
 
-        // Fetch customer's total account balance for credit bills
-        let customerBalance = 0;
-        if (receipt.customer && receipt.paymentStatus === 'unpaid') {
-            try {
-                const res = await getCustomer(receipt.customer);
-                customerBalance = res.data?.balance || res.data?.totalDue || 0;
-            } catch {
-                customerBalance = 0;
-            }
-        }
+        // Frozen at bill creation time — always reflects the customer's balance
+        // as of this sale, unaffected by payments made afterward
+        const customerBalanceBefore = receipt.customerBalanceBefore || 0;
 
         return {
             store: business,
@@ -261,7 +253,7 @@ const Receipts = () => {
             date: new Date(receipt.createdAt).toLocaleString('en-PK', { dateStyle: 'medium', timeStyle: 'short' }),
             customerName: receipt.customerName || 'Walk-in',
             cashierName: receipt.cashierName || '',
-            customerBalance,
+            customerBalanceBefore,
             items,
             subtotal,
             tax: receipt.totalTax || 0,

@@ -682,6 +682,7 @@ const EmployeeDashboard = () => {
                 change: currentChangeAmount,
                 paymentMethod,
                 amountPaid,
+                customerBalanceBefore: response.data?.customerBalanceBefore ?? bill.customerBalance ?? 0,
                 bill: { ...bill, items: [...bill.items] },
             };
             setSuccessData(sData);
@@ -717,7 +718,7 @@ const EmployeeDashboard = () => {
             date: new Date().toLocaleString('en-PK', { dateStyle: 'medium', timeStyle: 'short' }),
             customerName: bill.customerName || 'Walk-in',
             cashierName: user?.name || '',
-            customerBalance: bill.customerBalance || 0,
+            customerBalanceBefore: billData.customerBalanceBefore ?? bill.customerBalance ?? 0,
             items: bill.items.map(item => ({
                 name: item.name,
                 qty: item.qty,
@@ -1438,6 +1439,8 @@ const EmployeeDashboard = () => {
                                 {(() => {
                                     const paid = Math.max(0, Math.min(parseFloat(creditPaidNow || 0), effectiveTotal));
                                     const due = effectiveTotal - paid;
+                                    const previousBalance = activeBill.customerBalance || 0;
+                                    const totalPending = previousBalance + due;
                                     return (
                                         <div className="mt-3 p-4 bg-amber-50 dark:bg-[rgba(255,185,50,0.08)] border border-amber-200 dark:border-[rgba(255,185,50,0.2)] rounded-xl space-y-2">
                                             <div className="flex justify-between text-sm">
@@ -1450,6 +1453,18 @@ const EmployeeDashboard = () => {
                                                 </span>
                                                 <span className="font-display text-xl font-bold text-amber-600 dark:text-d-accent">{formatCurrency(due)}</span>
                                             </div>
+                                            {previousBalance > 0 && (
+                                                <>
+                                                    <div className="flex justify-between text-sm pt-2 border-t border-amber-200 dark:border-[rgba(255,185,50,0.15)]">
+                                                        <span className="text-slate-500 dark:text-d-muted">Already pending balance</span>
+                                                        <span className="font-semibold text-slate-800 dark:text-d-text">{formatCurrency(previousBalance)}</span>
+                                                    </div>
+                                                    <div className="flex justify-between items-center">
+                                                        <span className="text-sm text-amber-700 dark:text-d-accent font-medium">Total pending balance</span>
+                                                        <span className="font-display text-lg font-bold text-amber-600 dark:text-d-accent">{formatCurrency(totalPending)}</span>
+                                                    </div>
+                                                </>
+                                            )}
                                         </div>
                                     );
                                 })()}

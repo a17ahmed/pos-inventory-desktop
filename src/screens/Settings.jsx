@@ -603,25 +603,25 @@ const Settings = () => {
                                 <label className="block text-sm font-medium text-slate-700 dark:text-d-text mb-1">Thank You Message</label>
                                 <input
                                     type="text"
-                                    maxLength={60}
+                                    maxLength={110}
                                     defaultValue={business?.receiptFooter || 'Thank you for your business!'}
                                     onChange={(e) => bizFormRef.current.receiptFooter = e.target.value}
                                     placeholder="e.g. Thank you for shopping with us!"
                                     className="w-full px-4 py-3 border border-slate-200 dark:border-d-border rounded-xl focus:ring-2 focus:ring-primary-500 bg-white dark:bg-d-elevated text-slate-800 dark:text-d-heading"
                                 />
-                                <p className="text-xs text-slate-400 dark:text-d-muted mt-1">Max 60 characters</p>
+                                <p className="text-xs text-slate-400 dark:text-d-muted mt-1">Max 110 characters</p>
                             </div>
                             <div>
                                 <label className="block text-sm font-medium text-slate-700 dark:text-d-text mb-1">Receipt Note</label>
                                 <textarea
-                                    maxLength={60}
+                                    maxLength={110}
                                     defaultValue={business?.receiptNote || ''}
                                     onChange={(e) => bizFormRef.current.receiptNote = e.target.value}
                                     placeholder="e.g. Frozen items are not refundable. Exchange within 7 days only."
                                     rows={3}
                                     className="w-full px-4 py-3 border border-slate-200 dark:border-d-border rounded-xl focus:ring-2 focus:ring-primary-500 bg-white dark:bg-d-elevated text-slate-800 dark:text-d-heading resize-none"
                                 />
-                                <p className="text-xs text-slate-400 dark:text-d-muted mt-1">Max 60 characters (leave empty to hide)</p>
+                                <p className="text-xs text-slate-400 dark:text-d-muted mt-1">Max 110 characters (leave empty to hide)</p>
                             </div>
                             <div className="flex gap-3 pt-4">
                                 <button

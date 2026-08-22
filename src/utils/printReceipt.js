@@ -11,7 +11,7 @@ export const printReceipt = (opts) => {
         date = '',
         customerName = 'Walk-in',
         cashierName = '',
-        customerBalance = 0,
+        customerBalanceBefore = 0,
         items = [],
         subtotal = 0,
         tax = 0,
@@ -38,7 +38,7 @@ export const printReceipt = (opts) => {
         window.electronAPI.printReceipt({
             receiptData: {
                 storeName, storeAddress, storePhone, cashierName,
-                billNumber, date, customerName, customerBalance,
+                billNumber, date, customerName, customerBalanceBefore,
                 items: items.map(item => ({
                     name: item.name,
                     qty: item.qty,

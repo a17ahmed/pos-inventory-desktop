@@ -9,7 +9,7 @@ export const buildReceiptHTML = ({
     date = '',
     customerName = 'Walk-in',
     cashierName = '',
-    customerBalance = 0,
+    customerBalanceBefore = 0,
     items = [],
     subtotal = 0,
     tax = 0,
@@ -30,6 +30,7 @@ export const buildReceiptHTML = ({
         : '';
     const receiptNote = store.receiptNote || '';
     const receiptFooter = store.receiptFooter || 'THANK YOU!';
+    const previousBalance = customerBalanceBefore || 0;
 
     const line = '<div style="border-top:1px dashed #555;margin:5px 0;"></div>';
     const solidLine = '<div style="border-top:1px solid #000;margin:5px 0;"></div>';
@@ -133,15 +134,18 @@ export const buildReceiptHTML = ({
                 <tr><td style="font-size:10px;padding:2px 0;">Change:</td><td style="text-align:right;font-size:10px;padding:2px 0;">${currency} ${change.toLocaleString()}</td></tr>
             ` : ''}
         </table>
-        ${billDue > 0 || customerBalance > 0 ? `
+        ${billDue > 0 || previousBalance > 0 ? `
             ${line}
             <table style="width:100%;border-collapse:collapse;">
-                ${billDue > 0 ? `<tr><td style="font-size:10px;padding:2px 0;">This Bill Due:</td><td style="text-align:right;font-size:10px;padding:2px 0;">${currency} ${billDue.toLocaleString()}</td></tr>` : ''}
-                ${customerBalance > 0 ? `<tr><td style="font-size:10px;padding:2px 0;">Account Balance:</td><td style="text-align:right;font-size:10px;padding:2px 0;">${currency} ${customerBalance.toLocaleString()}</td></tr>` : ''}
+                <tr><td style="font-size:10px;padding:2px 0;">Balance:</td><td style="text-align:right;font-size:10px;padding:2px 0;">${currency} ${previousBalance.toLocaleString()}</td></tr>
+                <tr><td style="font-size:10px;padding:2px 0;">Bill Balance:</td><td style="text-align:right;font-size:10px;padding:2px 0;">${currency} ${billDue.toLocaleString()}</td></tr>
+                <tr><td style="font-size:10px;padding:3px 0;font-weight:bold;">Net Balance:</td><td style="text-align:right;font-size:10px;padding:3px 0;font-weight:bold;">${currency} ${(previousBalance + billDue).toLocaleString()}</td></tr>
             </table>
         ` : ''}
         ${line}
         <div style="text-align:center;font-size:10px;margin-top:3px;">${receiptFooter}</div>
         ${receiptNote ? `<div style="text-align:center;font-size:8px;margin-top:2px;font-style:italic;">${receiptNote}</div>` : ''}
+        ${line}
+        <div style="text-align:center;font-size:8px;margin-top:2px;">Software By Ahmed irfan : +92 3070019031</div>
     `;
 };
