@@ -34,6 +34,7 @@ const Products = () => {
         name: '',
         price: '',
         costPrice: '',
+        maxDiscountPercent: '',
         category: '',
         sku: '',
         barcode: '',
@@ -80,6 +81,7 @@ const Products = () => {
                 name: product.name || '',
                 price: product.sellingPrice || '',
                 costPrice: product.costPrice || '',
+                maxDiscountPercent: product.maxDiscountPercent ?? '',
                 category: product.category || '',
                 sku: product.sku || '',
                 barcode: product.barcode || '',
@@ -91,6 +93,7 @@ const Products = () => {
                 name: '',
                 price: '',
                 costPrice: '',
+                maxDiscountPercent: '',
                 category: '',
                 sku: '',
                 barcode: '',
@@ -108,12 +111,18 @@ const Products = () => {
             alert('Cost price cannot be greater than the selling price.');
             return;
         }
+        const maxDiscountPercent = formData.maxDiscountPercent !== '' ? Number(formData.maxDiscountPercent) : null;
+        if (maxDiscountPercent !== null && (maxDiscountPercent < 0 || maxDiscountPercent > 100)) {
+            alert('Max discount % must be between 0 and 100.');
+            return;
+        }
         setSubmitting(true);
         try {
             const data = {
                 name: formData.name,
                 sellingPrice,
                 costPrice,
+                maxDiscountPercent,
                 category: formData.category,
                 sku: formData.sku,
                 barcode: formData.barcode,
@@ -557,6 +566,63 @@ const Products = () => {
                                         min="0"
                                     />
                                 </div>
+                            </div>
+
+                            <div>
+                                <label className="block text-sm font-medium text-slate-600 dark:text-d-muted mb-2">
+                                    Max Discount %
+                                </label>
+                                <input
+                                    type="number"
+                                    value={formData.maxDiscountPercent}
+                                    onChange={(e) => setFormData({ ...formData, maxDiscountPercent: e.target.value })}
+                                    placeholder="No limit — only cost price applies"
+                                    className="w-full px-4 py-3 bg-slate-50 dark:bg-d-bg border border-slate-200 dark:border-d-border rounded-xl text-slate-800 dark:text-d-text placeholder-slate-400 dark:placeholder-d-faint focus:outline-none focus:border-amber-300 dark:focus:border-d-border-hover"
+                                    min="0"
+                                    max="100"
+                                    step="0.1"
+                                />
+                                <p className="text-xs text-slate-400 dark:text-d-muted mt-1">Optional. Share of this item's profit a cashier is allowed to discount away at checkout — e.g. 40% on a Rs 10 profit caps the discount at Rs 4.</p>
+                                {(() => {
+                                    const sp = Number(formData.price) || 0;
+                                    const cp = Number(formData.costPrice) || 0;
+                                    const baseProfit = sp - cp;
+                                    const baseMargin = sp > 0 ? (baseProfit / sp) * 100 : 0;
+                                    if (sp <= 0) return null;
+                                    const pct = formData.maxDiscountPercent !== '' ? Number(formData.maxDiscountPercent) : null;
+                                    // maxDiscountPercent is a share of PROFIT, not of the selling price
+                                    // (e.g. Rs 10 profit + 40% cap = Rs 4 max discount, not Rs 40).
+                                    const discountAtCap = pct !== null ? baseProfit * (pct / 100) : null;
+                                    const profitAtCap = discountAtCap !== null ? baseProfit - discountAtCap : null;
+                                    const profitAtCapPositive = profitAtCap === null || profitAtCap >= 0;
+                                    return (
+                                        <div className="mt-2 p-4 bg-slate-50 dark:bg-d-bg border border-slate-200 dark:border-d-border rounded-xl">
+                                            <div className={`grid ${pct !== null ? 'grid-cols-3' : 'grid-cols-2'} gap-3 divide-x divide-slate-200 dark:divide-d-border`}>
+                                                <div className="pl-3 first:pl-0">
+                                                    <div className="text-[10px] uppercase tracking-wide text-slate-400 dark:text-d-faint">Profit</div>
+                                                    <div className="text-[15px] font-display font-semibold text-slate-800 dark:text-d-text mt-0.5">{formatCurrency(baseProfit)}</div>
+                                                    <div className="text-[11px] text-slate-400 dark:text-d-faint">{baseMargin.toFixed(1)}% margin</div>
+                                                </div>
+                                                {pct !== null && (
+                                                    <>
+                                                        <div className="pl-3">
+                                                            <div className="text-[10px] uppercase tracking-wide text-slate-400 dark:text-d-faint">Max Discount</div>
+                                                            <div className="text-[15px] font-display font-semibold text-amber-600 dark:text-d-accent mt-0.5">{formatCurrency(discountAtCap)}</div>
+                                                            <div className="text-[11px] text-slate-400 dark:text-d-faint">{pct}% of profit</div>
+                                                        </div>
+                                                        <div className="pl-3">
+                                                            <div className="text-[10px] uppercase tracking-wide text-slate-400 dark:text-d-faint">Profit Left</div>
+                                                            <div className={`text-[15px] font-display font-semibold mt-0.5 ${profitAtCapPositive ? 'text-emerald-600 dark:text-d-green' : 'text-red-500 dark:text-d-red'}`}>
+                                                                {formatCurrency(profitAtCap)}
+                                                            </div>
+                                                            <div className="text-[11px] text-slate-400 dark:text-d-faint">at max discount</div>
+                                                        </div>
+                                                    </>
+                                                )}
+                                            </div>
+                                        </div>
+                                    );
+                                })()}
                             </div>
 
                             <div>

@@ -411,6 +411,7 @@ const EmployeeDashboard = () => {
                                 name: product.name,
                                 price: product.sellingPrice || product.price,
                                 costPrice: product.costPrice || 0,
+                                maxDiscountPercent: product.maxDiscountPercent ?? null,
                                 gst: product.gst || 0,
                                 qty: 1,
                                 discountAmount: 0,
@@ -518,6 +519,17 @@ const EmployeeDashboard = () => {
         return { effectivePrice, profit, margin, lineAfterItemDiscount };
     };
 
+    // Max discount allowed on a line: maxDiscountPercent is a share of the
+    // item's PROFIT, not of the selling price (e.g. Rs 10 profit + 40% cap
+    // = Rs 4 max discount). With no cap set, the full profit is available
+    // (still never below cost price, since profit itself is the ceiling).
+    const getItemDiscountCap = (item) => {
+        const profit = Math.max(0, (item.price - (Number(item.costPrice) || 0)) * item.qty);
+        const pct = item.maxDiscountPercent;
+        if (pct === null || pct === undefined) return profit;
+        return Math.max(0, profit * (pct / 100));
+    };
+
     // ── Mutators for new POS features ────────────────────────────
     const updateActiveBill = (updater) => {
         setBills((prev) => {
@@ -528,8 +540,12 @@ const EmployeeDashboard = () => {
     };
 
     const setItemDiscount = (itemId, amount) => {
-        const amt = Math.max(0, Number(amount) || 0);
+        const requested = Math.max(0, Number(amount) || 0);
         updateActiveBill((bill) => {
+            const target = bill.items.find((i) => i._id === itemId);
+            const cap = target ? getItemDiscountCap(target) : Infinity;
+            const amt = Math.min(requested, cap);
+            if (amt < requested) showToast(`Discount capped at ${formatCurrency(cap)} for this item`);
             // Enforce: clearing bill-level discount when any item has a discount.
             const newItems = bill.items.map((i) => (i._id === itemId ? { ...i, discountAmount: amt } : i));
             const anyItemHasDiscount = newItems.some((i) => (Number(i.discountAmount) || 0) > 0);
@@ -543,8 +559,11 @@ const EmployeeDashboard = () => {
     };
 
     const setBillDiscount = (amount, reason) => {
-        const amt = Math.max(0, Number(amount) || 0);
+        const requested = Math.max(0, Number(amount) || 0);
         updateActiveBill((bill) => {
+            const cap = bill.items.reduce((sum, i) => sum + getItemDiscountCap(i), 0);
+            const amt = Math.min(requested, cap);
+            if (amt < requested) showToast(`Bill discount capped at ${formatCurrency(cap)}`);
             // Enforce: clear all per-item discounts if setting a bill discount.
             const clearedItems =
                 amt > 0
@@ -1103,6 +1122,7 @@ const EmployeeDashboard = () => {
                                     const profitInfo = getItemProfit(activeBill, item);
                                     const hasItemDiscount = (Number(item.discountAmount) || 0) > 0;
                                     const hasBillDiscount = (Number(activeBill.billDiscountAmount) || 0) > 0;
+                                    const discountCap = getItemDiscountCap(item);
                                     return (
                                         <div
                                             key={item._id}
@@ -1183,6 +1203,7 @@ const EmployeeDashboard = () => {
                                                         <input
                                                             type="number"
                                                             min="0"
+                                                            max={discountCap}
                                                             step="0.01"
                                                             value={item.discountAmount || ''}
                                                             onChange={(e) => setItemDiscount(item._id, e.target.value)}
@@ -1196,6 +1217,12 @@ const EmployeeDashboard = () => {
                                                             </span>
                                                         )}
                                                     </div>
+                                                    {!hasBillDiscount && (
+                                                        <p className="text-[10px] text-slate-400 dark:text-d-faint mt-1">
+                                                            Max discount: {formatCurrency(discountCap)}
+                                                            {item.maxDiscountPercent != null ? ` (${item.maxDiscountPercent}% of profit)` : ' (full profit — bounded by cost price)'}
+                                                        </p>
+                                                    )}
                                                 </div>
                                             )}
                                         </div>
@@ -1305,6 +1332,7 @@ const EmployeeDashboard = () => {
                             <input
                                 type="number"
                                 min="0"
+                                max={activeBill ? activeBill.items.reduce((sum, i) => sum + getItemDiscountCap(i), 0) : 0}
                                 step="0.01"
                                 value={activeBill?.billDiscountAmount || ''}
                                 onChange={(e) => setBillDiscount(e.target.value, activeBill?.billDiscountReason || '')}
