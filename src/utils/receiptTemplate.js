@@ -8,6 +8,8 @@ export const buildReceiptHTML = ({
     billNumber = '-',
     date = '',
     customerName = 'Walk-in',
+    customerPhone = '',
+    customerAddress = '',
     cashierName = '',
     customerBalanceBefore = 0,
     items = [],
@@ -31,6 +33,8 @@ export const buildReceiptHTML = ({
     const receiptNote = store.receiptNote || '';
     const receiptFooter = store.receiptFooter || 'THANK YOU!';
     const previousBalance = customerBalanceBefore || 0;
+    const showCustomerPhone = !!store.showCustomerPhone;
+    const showCustomerAddress = !!store.showCustomerAddress;
 
     const line = '<div style="border-top:1px dashed #555;margin:5px 0;"></div>';
     const solidLine = '<div style="border-top:1px solid #000;margin:5px 0;"></div>';
@@ -79,6 +83,8 @@ export const buildReceiptHTML = ({
         </table>
         <div style="font-size:9px;padding:1px 0;">Cashier: ${cashierName || '-'}</div>
         <div style="font-size:9px;padding:1px 0;">Customer: ${customerName}</div>
+        ${showCustomerPhone && customerPhone ? `<div style="font-size:9px;padding:1px 0;">Phone: ${customerPhone}</div>` : ''}
+        ${showCustomerAddress && customerAddress ? `<div style="font-size:9px;padding:1px 0;">Address: ${customerAddress}</div>` : ''}
         ${line}
         <table style="width:100%;border-collapse:collapse;">
             <colgroup>
@@ -151,7 +157,7 @@ export const buildReceiptHTML = ({
         ` : ''}
         ${line}
         <div style="text-align:center;font-size:10px;margin-top:3px;">${receiptFooter}</div>
-        ${receiptNote ? `<div style="text-align:center;font-size:8px;margin-top:2px;font-style:italic;">${receiptNote}</div>` : ''}
+        ${receiptNote ? `<div style="text-align:center;font-size:8px;margin-top:2px;font-style:italic;white-space:pre-line;">${receiptNote}</div>` : ''}
         ${line}
         <div style="text-align:center;font-size:8px;margin-top:2px;">Software By Ahmed irfan : +92 3070019031</div>
     `;

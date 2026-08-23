@@ -268,6 +268,7 @@ ipcMain.handle('print-receipt', async (event, { receiptData }) => {
         const {
             storeName, storeAddress, storePhone, cashierName,
             billNumber, date, customerName, customerBalanceBefore,
+            customerPhone, customerAddress, showCustomerPhone, showCustomerAddress,
             items, subtotal, tax, itemDiscounts, billDiscount, total,
             paymentMethod, amountPaid, cashGiven, change, currency,
             receiptFooter, receiptNote
@@ -311,6 +312,12 @@ ipcMain.handle('print-receipt', async (event, { receiptData }) => {
         if (cashierName) printer.leftRight('Cashier: ' + cashierName, '');
         if (customerName && customerName !== 'Walk-in') {
             printer.leftRight('Customer: ' + customerName, '');
+        }
+        if (showCustomerPhone && customerPhone) {
+            printer.leftRight('Phone: ' + customerPhone, '');
+        }
+        if (showCustomerAddress && customerAddress) {
+            printer.leftRight('Address: ' + customerAddress, '');
         }
         printer.drawLine();
 
@@ -416,7 +423,7 @@ ipcMain.handle('print-receipt', async (event, { receiptData }) => {
         // ──── FOOTER ────
         if (receiptNote) {
             printer.alignCenter();
-            printer.println(receiptNote);
+            receiptNote.split('\n').forEach(line => printer.println(line));
             printer.drawLine();
         }
         printer.alignCenter();

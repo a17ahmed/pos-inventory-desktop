@@ -4,6 +4,8 @@ import { useAuth } from '../context/AuthContext';
 import { useBusiness } from '../context/BusinessContext';
 import { updateBusiness, updateAdmin, changeAdminPassword } from '../services/api/business';
 import { useTheme } from '../context/ThemeContext';
+import { buildReceiptHTML } from '../utils/receiptTemplate';
+import { printReceipt as printReceiptUtil } from '../utils/printReceipt';
 import {
     FiUser,
     FiLogOut,
@@ -43,6 +45,9 @@ const Settings = () => {
     const [passwordForm, setPasswordForm] = useState({ currentPassword: '', newPassword: '', confirmPassword: '' });
     const [savingPassword, setSavingPassword] = useState(false);
     const bizFormRef = useRef({});
+    const [showReceiptPreview, setShowReceiptPreview] = useState(false);
+    const [previewMode, setPreviewMode] = useState('cash');
+    const [previewStore, setPreviewStore] = useState(null);
 
     useEffect(() => {
         window.electronAPI?.getAppVersion?.().then(v => setAppVersion(v || ''));
@@ -71,6 +76,56 @@ const Settings = () => {
         } finally {
             setSavingBusiness(false);
         }
+    };
+
+    // Fixed sample data so the three payment modes are directly comparable.
+    const buildSampleOpts = (mode, store) => {
+        const items = [
+            { name: 'Basmati Rice 5kg', qty: 2, price: 1450, discountAmount: 100 },
+            { name: 'Cooking Oil 1L', qty: 1, price: 650, discountAmount: 0 },
+            { name: 'Sugar 1kg', qty: 3, price: 180, discountAmount: 20 },
+        ];
+        const subtotal = items.reduce((s, it) => s + it.price * it.qty, 0);
+        const itemDiscounts = items.reduce((s, it) => s + it.discountAmount, 0);
+        const billDiscount = 50;
+        const total = subtotal - itemDiscounts - billDiscount;
+
+        const base = {
+            store,
+            currency: business?.currency || 'Rs.',
+            billNumber: 'PRV-1042',
+            date: new Date().toLocaleString('en-PK', { dateStyle: 'medium', timeStyle: 'short' }),
+            customerName: 'John Smith',
+            customerPhone: '0300-1234567',
+            customerAddress: '45-B, Model Town, Lahore',
+            cashierName: 'Ali Raza',
+            items,
+            subtotal,
+            tax: 0,
+            itemDiscounts,
+            billDiscount,
+            total,
+        };
+
+        if (mode === 'partial') {
+            const paid = Math.round(total * 0.6);
+            return { ...base, paymentMethod: 'cash', amountPaid: paid, amountDue: total - paid, cashGiven: paid, change: 0, customerBalanceBefore: 500 };
+        }
+        if (mode === 'credit') {
+            return { ...base, paymentMethod: 'credit', amountPaid: 0, amountDue: total, cashGiven: 0, change: 0, customerBalanceBefore: 1200 };
+        }
+        const cashGiven = Math.ceil(total / 100) * 100 + 500;
+        return { ...base, paymentMethod: 'cash', amountPaid: total, amountDue: 0, cashGiven, change: cashGiven - total, customerBalanceBefore: 0 };
+    };
+
+    const handleOpenReceiptPreview = () => {
+        setPreviewStore({ ...business, ...bizFormRef.current });
+        setPreviewMode('cash');
+        setShowReceiptPreview(true);
+    };
+
+    const handlePrintSampleReceipt = () => {
+        printReceiptUtil(buildSampleOpts(previewMode, previewStore || business));
     };
 
     const handleSaveProfile = async () => {
@@ -623,6 +678,48 @@ const Settings = () => {
                                 />
                                 <p className="text-xs text-slate-400 dark:text-d-muted mt-1">Max 110 characters (leave empty to hide)</p>
                             </div>
+
+                            <div className="flex items-center justify-between py-1">
+                                <div>
+                                    <p className="text-sm font-medium text-slate-700 dark:text-d-text">Show Customer Phone</p>
+                                    <p className="text-xs text-slate-400 dark:text-d-muted">Print the attached customer's phone number on the receipt</p>
+                                </div>
+                                <div className="relative inline-flex items-center cursor-pointer shrink-0 ml-4">
+                                    <input
+                                        type="checkbox"
+                                        className="sr-only peer"
+                                        defaultChecked={!!business?.showCustomerPhone}
+                                        onChange={(e) => bizFormRef.current.showCustomerPhone = e.target.checked}
+                                    />
+                                    <div className="w-11 h-6 bg-slate-200 dark:bg-slate-600 peer-focus:ring-2 peer-focus:ring-primary-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary-500"></div>
+                                </div>
+                            </div>
+
+                            <div className="flex items-center justify-between py-1">
+                                <div>
+                                    <p className="text-sm font-medium text-slate-700 dark:text-d-text">Show Customer Address</p>
+                                    <p className="text-xs text-slate-400 dark:text-d-muted">Print the attached customer's address on the receipt</p>
+                                </div>
+                                <div className="relative inline-flex items-center cursor-pointer shrink-0 ml-4">
+                                    <input
+                                        type="checkbox"
+                                        className="sr-only peer"
+                                        defaultChecked={!!business?.showCustomerAddress}
+                                        onChange={(e) => bizFormRef.current.showCustomerAddress = e.target.checked}
+                                    />
+                                    <div className="w-11 h-6 bg-slate-200 dark:bg-slate-600 peer-focus:ring-2 peer-focus:ring-primary-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary-500"></div>
+                                </div>
+                            </div>
+
+                            <button
+                                type="button"
+                                onClick={handleOpenReceiptPreview}
+                                className="w-full py-3 border border-primary-500 text-primary-500 rounded-xl font-medium hover:bg-primary-50 dark:hover:bg-primary-500/10 flex items-center justify-center gap-2"
+                            >
+                                <FiPrinter size={18} />
+                                Preview Receipt
+                            </button>
+
                             <div className="flex gap-3 pt-4">
                                 <button
                                     onClick={() => setActiveModal(null)}
@@ -639,6 +736,82 @@ const Settings = () => {
                                     {savingBusiness ? 'Saving...' : 'Save'}
                                 </button>
                             </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Receipt Preview Modal */}
+            {showReceiptPreview && (
+                <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60] p-4">
+                    <div className="bg-white dark:bg-d-card rounded-2xl w-full max-w-md animate-fadeIn max-h-[90vh] flex flex-col">
+                        <div className="flex items-center justify-between p-6 border-b border-slate-200 dark:border-d-border shrink-0">
+                            <h3 className="text-xl font-semibold text-slate-800 dark:text-d-heading">Receipt Preview</h3>
+                            <button
+                                onClick={() => setShowReceiptPreview(false)}
+                                className="p-2 hover:bg-slate-100 dark:hover:bg-d-glass-hover rounded-lg transition-colors text-slate-600 dark:text-d-text"
+                            >
+                                <FiX />
+                            </button>
+                        </div>
+
+                        <div className="px-6 pt-4 shrink-0">
+                            <div className="flex gap-2 bg-slate-100 dark:bg-d-elevated rounded-xl p-1">
+                                {[
+                                    { key: 'cash', label: 'Cash' },
+                                    { key: 'partial', label: 'Partial' },
+                                    { key: 'credit', label: 'Credit' },
+                                ].map((m) => (
+                                    <button
+                                        key={m.key}
+                                        onClick={() => setPreviewMode(m.key)}
+                                        className={`flex-1 py-2 rounded-lg text-sm font-medium transition-colors ${
+                                            previewMode === m.key
+                                                ? 'bg-primary-500 text-white'
+                                                : 'text-slate-600 dark:text-d-text hover:bg-slate-200 dark:hover:bg-d-glass-hover'
+                                        }`}
+                                    >
+                                        {m.label}
+                                    </button>
+                                ))}
+                            </div>
+                            <p className="text-xs text-slate-400 dark:text-d-muted mt-2">
+                                Sample data — not a real transaction. Reflects your unsaved Receipt Settings changes.
+                            </p>
+                        </div>
+
+                        <div className="flex-1 overflow-auto px-6 py-4">
+                            <div
+                                style={{
+                                    width: '72mm',
+                                    margin: '0 auto',
+                                    fontFamily: "'Courier New', monospace",
+                                    fontSize: '11px',
+                                    color: '#000',
+                                    background: '#fff',
+                                    padding: '4mm 2mm',
+                                    boxShadow: '0 1px 4px rgba(0,0,0,0.15)',
+                                }}
+                                dangerouslySetInnerHTML={{
+                                    __html: buildReceiptHTML(buildSampleOpts(previewMode, previewStore || business || {})),
+                                }}
+                            />
+                        </div>
+
+                        <div className="flex gap-3 p-6 pt-2 border-t border-slate-200 dark:border-d-border shrink-0">
+                            <button
+                                onClick={() => setShowReceiptPreview(false)}
+                                className="flex-1 py-3 border border-slate-200 dark:border-d-border rounded-xl font-medium text-slate-600 dark:text-d-text hover:bg-slate-50 dark:hover:bg-d-glass-hover"
+                            >
+                                Close
+                            </button>
+                            <button
+                                onClick={handlePrintSampleReceipt}
+                                className="flex-1 py-3 bg-primary-500 text-white rounded-xl font-medium hover:bg-primary-600 flex items-center justify-center gap-2"
+                            >
+                                <FiPrinter size={18} />
+                                Print Test Receipt
+                            </button>
                         </div>
                     </div>
                 </div>

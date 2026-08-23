@@ -586,6 +586,7 @@ const EmployeeDashboard = () => {
             customer: customer?._id || null,
             customerName: customer?.name || '',
             customerPhone: customer?.phone || '',
+            customerAddress: customer?.address || '',
             customerBalance: customer?.balance || 0,
         }));
         setShowCustomerPicker(false);
@@ -599,6 +600,7 @@ const EmployeeDashboard = () => {
             customer: null,
             customerName: '',
             customerPhone: '',
+            customerAddress: '',
         }));
     };
 
@@ -663,6 +665,7 @@ const EmployeeDashboard = () => {
                 customer: bill.customer || null,
                 customerName: bill.customerName || 'Walk-in',
                 customerPhone: bill.customerPhone || '',
+                customerAddress: bill.customerAddress || '',
                 billDiscountAmount: Number(bill.billDiscountAmount) || 0,
                 billDiscountReason: bill.billDiscountReason || '',
                 paymentMethod: backendPaymentMethod,
@@ -738,6 +741,8 @@ const EmployeeDashboard = () => {
             billNumber: billData.billNumber || '-',
             date: new Date().toLocaleString('en-PK', { dateStyle: 'medium', timeStyle: 'short' }),
             customerName: bill.customerName || 'Walk-in',
+            customerPhone: bill.customerPhone || '',
+            customerAddress: bill.customerAddress || '',
             cashierName: user?.name || '',
             customerBalanceBefore: billData.customerBalanceBefore ?? bill.customerBalance ?? 0,
             items: bill.items.map(item => ({

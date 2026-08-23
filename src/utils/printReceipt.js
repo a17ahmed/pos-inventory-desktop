@@ -10,6 +10,8 @@ export const printReceipt = (opts) => {
         billNumber = '-',
         date = '',
         customerName = 'Walk-in',
+        customerPhone = '',
+        customerAddress = '',
         cashierName = '',
         customerBalanceBefore = 0,
         items = [],
@@ -34,11 +36,14 @@ export const printReceipt = (opts) => {
             : '';
         const receiptFooter = store.receiptFooter || 'THANK YOU!';
         const receiptNote = store.receiptNote || '';
+        const showCustomerPhone = !!store.showCustomerPhone;
+        const showCustomerAddress = !!store.showCustomerAddress;
 
         window.electronAPI.printReceipt({
             receiptData: {
                 storeName, storeAddress, storePhone, cashierName,
                 billNumber, date, customerName, customerBalanceBefore,
+                customerPhone, customerAddress, showCustomerPhone, showCustomerAddress,
                 items: items.map(item => ({
                     name: item.name,
                     qty: item.qty,

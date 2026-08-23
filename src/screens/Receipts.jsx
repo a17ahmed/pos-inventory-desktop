@@ -256,6 +256,8 @@ const Receipts = () => {
             billNumber: receipt.billNumber || '-',
             date: new Date(receipt.createdAt).toLocaleString('en-PK', { dateStyle: 'medium', timeStyle: 'short' }),
             customerName: receipt.customerName || 'Walk-in',
+            customerPhone: receipt.customerPhone || '',
+            customerAddress: receipt.customerAddress || '',
             cashierName: receipt.cashierName || '',
             customerBalanceBefore,
             items,
@@ -658,6 +660,7 @@ const Receipts = () => {
                                     <p className="text-xs text-slate-400 dark:text-d-faint uppercase tracking-wider">Customer</p>
                                     <p className="font-medium text-slate-800 dark:text-d-text mt-0.5">{r.customerName || 'Walk-in'}</p>
                                     {r.customerPhone && <p className="text-xs text-slate-500 dark:text-d-muted">{r.customerPhone}</p>}
+                                    {r.customerAddress && <p className="text-xs text-slate-500 dark:text-d-muted">{r.customerAddress}</p>}
                                 </div>
                                 <div>
                                     <p className="text-xs text-slate-400 dark:text-d-faint uppercase tracking-wider">Date & Time</p>
