@@ -67,8 +67,10 @@ import {
 // ==================== EMPLOYEE DASHBOARD - PREMIUM REDESIGN ====================
 const EmployeeDashboard = () => {
     const navigate = useNavigate();
-    const { user } = useAuth();
+    const { user, permissions } = useAuth();
     const { business } = useBusiness();
+    // Admins bypass all permission checks (permissions is null for them).
+    const canViewProfit = !permissions || permissions.pos?.viewProfit === true;
 
     // Billing state
     const [billingActive, setBillingActive] = useState(true); // Always show billing view
@@ -1176,27 +1178,33 @@ const EmployeeDashboard = () => {
 
                                             {expanded && (
                                                 <div className="px-4 pb-4 pt-0 border-t border-slate-100 dark:border-[rgba(255,255,255,0.05)] animate-fade-slide-up">
-                                                    <div className="grid grid-cols-4 gap-3 mt-3 mb-3">
-                                                        <div>
-                                                            <div className="text-[10px] uppercase tracking-wide text-slate-400 dark:text-d-faint">Cost</div>
-                                                            <div className="text-[13px] font-semibold text-slate-700 dark:text-d-text">{formatCurrency(item.costPrice || 0)}</div>
-                                                        </div>
+                                                    <div className={`grid ${canViewProfit ? 'grid-cols-4' : 'grid-cols-1'} gap-3 mt-3 mb-3`}>
+                                                        {canViewProfit && (
+                                                            <div>
+                                                                <div className="text-[10px] uppercase tracking-wide text-slate-400 dark:text-d-faint">Cost</div>
+                                                                <div className="text-[13px] font-semibold text-slate-700 dark:text-d-text">{formatCurrency(item.costPrice || 0)}</div>
+                                                            </div>
+                                                        )}
                                                         <div>
                                                             <div className="text-[10px] uppercase tracking-wide text-slate-400 dark:text-d-faint">Sell</div>
                                                             <div className="text-[13px] font-semibold text-slate-700 dark:text-d-text">{formatCurrency(item.price)}</div>
                                                         </div>
-                                                        <div>
-                                                            <div className="text-[10px] uppercase tracking-wide text-slate-400 dark:text-d-faint">Profit</div>
-                                                            <div className={`text-[13px] font-semibold ${profitInfo.profit >= 0 ? 'text-emerald-500 dark:text-d-green' : 'text-red-500 dark:text-d-red'}`}>
-                                                                {formatCurrency(profitInfo.profit)}
-                                                            </div>
-                                                        </div>
-                                                        <div>
-                                                            <div className="text-[10px] uppercase tracking-wide text-slate-400 dark:text-d-faint">Margin</div>
-                                                            <div className={`text-[13px] font-semibold ${profitInfo.margin >= 0 ? 'text-emerald-500 dark:text-d-green' : 'text-red-500 dark:text-d-red'}`}>
-                                                                {profitInfo.margin.toFixed(1)}%
-                                                            </div>
-                                                        </div>
+                                                        {canViewProfit && (
+                                                            <>
+                                                                <div>
+                                                                    <div className="text-[10px] uppercase tracking-wide text-slate-400 dark:text-d-faint">Profit</div>
+                                                                    <div className={`text-[13px] font-semibold ${profitInfo.profit >= 0 ? 'text-emerald-500 dark:text-d-green' : 'text-red-500 dark:text-d-red'}`}>
+                                                                        {formatCurrency(profitInfo.profit)}
+                                                                    </div>
+                                                                </div>
+                                                                <div>
+                                                                    <div className="text-[10px] uppercase tracking-wide text-slate-400 dark:text-d-faint">Margin</div>
+                                                                    <div className={`text-[13px] font-semibold ${profitInfo.margin >= 0 ? 'text-emerald-500 dark:text-d-green' : 'text-red-500 dark:text-d-red'}`}>
+                                                                        {profitInfo.margin.toFixed(1)}%
+                                                                    </div>
+                                                                </div>
+                                                            </>
+                                                        )}
                                                     </div>
                                                     <div className="flex items-center gap-2">
                                                         <label className="text-[11px] text-slate-500 dark:text-d-muted flex-shrink-0">Discount (Rs)</label>
@@ -1371,7 +1379,7 @@ const EmployeeDashboard = () => {
                         </div>
                     )}
 
-                    {activeBill && activeBill.items.length > 0 && (
+                    {canViewProfit && activeBill && activeBill.items.length > 0 && (
                         <div className="flex justify-between text-[13px]">
                             <span className="text-slate-500 dark:text-d-muted">Bill profit</span>
                             <span className={`font-medium ${activeTotal.billProfit >= 0 ? 'text-emerald-500 dark:text-d-green' : 'text-red-500 dark:text-d-red'}`}>

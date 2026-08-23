@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useBusiness } from '../context/BusinessContext';
+import { useAuth } from '../context/AuthContext';
 import { getAllReceipts, getReceiptStats, getReceiptsPaginated } from '../services/api/receipts';
 import { printReceipt } from '../utils/printReceipt';
 import { downloadReceipt } from '../utils/downloadReceipt';
@@ -22,6 +23,9 @@ import {
 
 const Receipts = () => {
     const { business } = useBusiness();
+    const { permissions } = useAuth();
+    // Admins bypass all permission checks (permissions is null for them).
+    const canViewProfit = !permissions || permissions.pos?.viewProfit === true;
     const [receipts, setReceipts] = useState([]);
     const [loading, setLoading] = useState(true);
     const [loadingMore, setLoadingMore] = useState(false);
@@ -865,8 +869,8 @@ const Receipts = () => {
                                 </div>
                             )}
 
-                            {/* Profit Breakdown (for admin context) */}
-                            {(r.billProfit !== undefined || r.netProfit !== undefined) && (() => {
+                            {/* Profit Breakdown — gated behind the pos.viewProfit permission */}
+                            {canViewProfit && (r.billProfit !== undefined || r.netProfit !== undefined) && (() => {
                                 const totalCost = r.totalCost || 0;
                                 const billProfit = r.billProfit || 0;
                                 const hasReturns = (r.totalRefunded || 0) > 0;

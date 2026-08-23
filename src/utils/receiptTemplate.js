@@ -57,8 +57,11 @@ export const buildReceiptHTML = ({
         </tr>`;
     }).join('');
 
-    // Calculate bill due
-    const billDue = amountDue > 0 ? amountDue : (paymentMethod === 'credit' ? Math.max(0, total - amountPaid) : 0);
+    // Calculate bill due — derived from amounts, not the payment-method string,
+    // since a partial credit sale may still be tendered/stored as 'cash'.
+    const billDue = amountDue > 0 ? amountDue : Math.max(0, total - amountPaid);
+    const isPartial = billDue > 0 && amountPaid > 0;
+    const paymentLabel = isPartial ? `PARTIAL (${(paymentMethod || 'cash').toUpperCase()})` : (paymentMethod || 'cash').toUpperCase();
 
     return `
         <div style="text-align:center;">
@@ -127,8 +130,12 @@ export const buildReceiptHTML = ({
         <table style="width:100%;border-collapse:collapse;">
             <tr>
                 <td style="font-size:10px;padding:2px 0;">Payment:</td>
-                <td style="text-align:right;font-size:10px;padding:2px 0;">${paymentMethod.toUpperCase()}</td>
+                <td style="text-align:right;font-size:10px;padding:2px 0;">${paymentLabel}</td>
             </tr>
+            ${isPartial ? `
+                <tr><td style="font-size:10px;padding:2px 0;">Paid Now:</td><td style="text-align:right;font-size:10px;padding:2px 0;">${currency} ${amountPaid.toLocaleString()}</td></tr>
+                <tr><td style="font-size:10px;padding:2px 0;">Credited:</td><td style="text-align:right;font-size:10px;padding:2px 0;">${currency} ${billDue.toLocaleString()}</td></tr>
+            ` : ''}
             ${paymentMethod === 'cash' && cashGiven > 0 ? `
                 <tr><td style="font-size:10px;padding:2px 0;">Cash:</td><td style="text-align:right;font-size:10px;padding:2px 0;">${currency} ${cashGiven.toLocaleString()}</td></tr>
                 <tr><td style="font-size:10px;padding:2px 0;">Change:</td><td style="text-align:right;font-size:10px;padding:2px 0;">${currency} ${change.toLocaleString()}</td></tr>

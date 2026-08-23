@@ -382,23 +382,27 @@ ipcMain.handle('print-receipt', async (event, { receiptData }) => {
         printer.drawLine('=');
 
         // ──── PAYMENT ────
+        // Derived from amounts, not the payment-method string — a partial
+        // credit sale may still be tendered/stored as 'cash'.
+        const paidOnBill = amountPaid ?? 0;
+        const billDue = Math.max(0, total - paidOnBill);
+        const isPartial = billDue > 0 && paidOnBill > 0;
+        const paymentLabel = isPartial ? `PARTIAL (${(paymentMethod || 'cash').toUpperCase()})` : (paymentMethod || 'cash').toUpperCase();
+
         printer.setTextNormal();
         printer.bold(false);
-        printer.leftRight('Payment:', (paymentMethod || 'cash').toUpperCase());
-        if (paymentMethod === 'cash' && cashGiven > 0) {
+        printer.leftRight('Payment:', paymentLabel);
+        if (paymentMethod === 'cash' && !isPartial && cashGiven > 0) {
             printer.leftRight('Tendered:', money(cashGiven));
             printer.leftRight('Change:', money(change));
         }
-
-        // Show partial payment for credit/other methods
-        const paidOnBill = amountPaid ?? 0;
-        if (paymentMethod !== 'cash' && paymentMethod !== 'card' && paidOnBill > 0 && paidOnBill < total) {
-            printer.leftRight('Paid:', money(paidOnBill));
+        if (isPartial) {
+            printer.leftRight('Paid Now:', money(paidOnBill));
+            printer.leftRight('Credited:', money(billDue));
         }
 
         // ──── PENDING BALANCE ────
-        if (customerName && customerName !== 'Walk-in' && (Math.max(0, total - paidOnBill) > 0 || customerBalanceBefore > 0)) {
-            const billDue = Math.max(0, total - paidOnBill);
+        if (customerName && customerName !== 'Walk-in' && (billDue > 0 || customerBalanceBefore > 0)) {
             const previousBalance = customerBalanceBefore || 0;
             printer.leftRight('Balance:', money(previousBalance));
             printer.leftRight('Bill Balance:', money(billDue));
