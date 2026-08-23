@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import html2pdf from 'html2pdf.js';
 import { useBusiness } from '../context/BusinessContext';
+import { todayLocalDate, toLocalDateStr } from '../utils/date';
 import { getCustomer, getCustomerLedger, collectFromCustomer } from '../services/api/customers';
 import { addBillPayment } from '../services/api/bills';
 import {
@@ -37,11 +38,20 @@ const CustomerLedger = () => {
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
 
-    // Filters
+    // Filters — applied values that actually drive the API call
     const [startDate, setStartDate] = useState('');
     const [endDate, setEndDate] = useState('');
+    const [startTime, setStartTime] = useState('');
+    const [endTime, setEndTime] = useState('');
     const [searchQuery, setSearchQuery] = useState('');
     const [typeFilter, setTypeFilter] = useState('all'); // all | bill | payment | return
+
+    // Filter modal — draft values, only committed to the state above via a preset or Apply.
+    const [showFilterModal, setShowFilterModal] = useState(false);
+    const [draftStartDate, setDraftStartDate] = useState('');
+    const [draftEndDate, setDraftEndDate] = useState('');
+    const [draftStartTime, setDraftStartTime] = useState('');
+    const [draftEndTime, setDraftEndTime] = useState('');
 
     // Row expansion
     const [expandedRow, setExpandedRow] = useState(null);
@@ -70,8 +80,8 @@ const CustomerLedger = () => {
         setError(null);
         try {
             const params = {};
-            if (startDate) params.startDate = startDate;
-            if (endDate) params.endDate = endDate;
+            if (startDate) params.startDate = startTime ? `${startDate}T${startTime}:00` : startDate;
+            if (endDate) params.endDate = endTime ? `${endDate}T${endTime}:00` : endDate;
 
             const [ledgerRes, customerRes] = await Promise.all([
                 getCustomerLedger(id, params),
@@ -86,11 +96,74 @@ const CustomerLedger = () => {
         } finally {
             setLoading(false);
         }
-    }, [id, startDate, endDate]);
+    }, [id, startDate, endDate, startTime, endTime]);
 
+    // Filters only change via an explicit preset click or the modal's Apply
+    // button now (never live-as-you-type), so a plain effect is enough.
     useEffect(() => {
         fetchLedger();
     }, [fetchLedger]);
+
+    // =========================================================================
+    // Filter modal handlers
+    // =========================================================================
+
+    const openFilterModal = () => {
+        setDraftStartDate(startDate);
+        setDraftEndDate(endDate);
+        setDraftStartTime(startTime);
+        setDraftEndTime(endTime);
+        setShowFilterModal(true);
+    };
+
+    const applyPreset = (preset) => {
+        const today = todayLocalDate();
+        if (preset === 'today') {
+            setStartDate(today);
+            setEndDate(today);
+        } else if (preset === 'week') {
+            const now = new Date();
+            const dayOfWeek = now.getDay();
+            const diffToMonday = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
+            const monday = new Date(now);
+            monday.setDate(now.getDate() - diffToMonday);
+            setStartDate(toLocalDateStr(monday));
+            setEndDate(today);
+        } else if (preset === 'month') {
+            const now = new Date();
+            setStartDate(toLocalDateStr(new Date(now.getFullYear(), now.getMonth(), 1)));
+            setEndDate(today);
+        } else {
+            setStartDate('');
+            setEndDate('');
+        }
+        setStartTime('');
+        setEndTime('');
+        setShowFilterModal(false);
+    };
+
+    const applyCustomRange = () => {
+        setStartDate(draftStartDate);
+        setEndDate(draftEndDate);
+        setStartTime(draftStartDate ? draftStartTime : '');
+        setEndTime(draftEndDate ? draftEndTime : '');
+        setShowFilterModal(false);
+    };
+
+    const clearDateFilter = () => {
+        setStartDate('');
+        setEndDate('');
+        setStartTime('');
+        setEndTime('');
+    };
+
+    const activeFilterLabel = useMemo(() => {
+        if (!startDate && !endDate) return null;
+        const today = todayLocalDate();
+        if (startDate === today && endDate === today && !startTime && !endTime) return 'Today';
+        const part = (d, t) => (d ? `${d}${t ? ' ' + t : ''}` : '…');
+        return `${part(startDate, startTime)} → ${part(endDate, endTime)}`;
+    }, [startDate, endDate, startTime, endTime]);
 
     // =========================================================================
     // Derived — filtered entries
@@ -212,7 +285,7 @@ const CustomerLedger = () => {
         const fmt = (v) => Number(v || 0).toLocaleString();
 
         const dateRange = startDate || endDate
-            ? `${startDate || 'Start'} — ${endDate || 'Today'}`
+            ? `${startDate ? startDate + (startTime ? ' ' + startTime : '') : 'Start'} — ${endDate ? endDate + (endTime ? ' ' + endTime : '') : 'Today'}`
             : 'All Time';
 
         const balanceLabel = (summary.currentBalance || 0) < 0 ? 'Store Credit' : 'Balance Due';
@@ -233,8 +306,63 @@ const CustomerLedger = () => {
             </tr>`;
         }).join('');
 
+        // Per-bill line-item breakdown, shown after the main ledger table.
+        const billsWithItems = filteredEntries.filter((e) => e.type === 'bill' && e.items && e.items.length > 0);
+        const billDetailsHtml = billsWithItems.map((e) => {
+            const d = new Date(e.date);
+            const itemRows = e.items.map((it, i) => {
+                const lineGross = (it.price || 0) * (it.qty || 0);
+                const lineDiscount = it.discountAmount || 0;
+                const lineTotal = it.itemTotal != null ? it.itemTotal : lineGross - lineDiscount;
+                return `<tr>
+                    <td style="padding:5px 8px;font-size:10px;border-bottom:1px solid #f1f5f9;">${i + 1}. ${it.name}</td>
+                    <td style="padding:5px 8px;font-size:10px;border-bottom:1px solid #f1f5f9;text-align:center;">× ${it.qty}</td>
+                    <td style="padding:5px 8px;font-size:10px;border-bottom:1px solid #f1f5f9;text-align:right;">${currency} ${fmt(it.price)}</td>
+                    <td style="padding:5px 8px;font-size:10px;border-bottom:1px solid #f1f5f9;text-align:right;">${lineDiscount > 0 ? '− ' + currency + ' ' + fmt(lineDiscount) : '—'}</td>
+                    <td style="padding:5px 8px;font-size:10px;border-bottom:1px solid #f1f5f9;text-align:right;font-weight:700;">${currency} ${fmt(lineTotal)}</td>
+                </tr>`;
+            }).join('');
+
+            const discountTotal = e.totalDiscount || 0;
+            const taxTotal = e.totalTax || 0;
+
+            return `
+            <div style="margin-top:12px;border:1px solid #e2e8f0;border-radius:8px;overflow:hidden;page-break-inside:avoid;">
+                <div style="background:#f8fafc;padding:8px 12px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #e2e8f0;">
+                    <div style="font-size:11px;font-weight:700;">Bill #${e.billNumber} <span style="font-weight:400;color:#64748b;">— ${d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}</span></div>
+                    <div style="font-size:11px;font-weight:700;">${currency} ${fmt(e.debit)}</div>
+                </div>
+                <table style="width:100%;border-collapse:collapse;">
+                    <thead>
+                        <tr style="background:#fff;">
+                            <th style="padding:5px 8px;font-size:9px;text-align:left;font-weight:700;text-transform:uppercase;color:#94a3b8;border-bottom:1px solid #e2e8f0;">Item</th>
+                            <th style="padding:5px 8px;font-size:9px;text-align:center;font-weight:700;text-transform:uppercase;color:#94a3b8;border-bottom:1px solid #e2e8f0;">Qty</th>
+                            <th style="padding:5px 8px;font-size:9px;text-align:right;font-weight:700;text-transform:uppercase;color:#94a3b8;border-bottom:1px solid #e2e8f0;">Unit Price</th>
+                            <th style="padding:5px 8px;font-size:9px;text-align:right;font-weight:700;text-transform:uppercase;color:#94a3b8;border-bottom:1px solid #e2e8f0;">Discount</th>
+                            <th style="padding:5px 8px;font-size:9px;text-align:right;font-weight:700;text-transform:uppercase;color:#94a3b8;border-bottom:1px solid #e2e8f0;">Line Total</th>
+                        </tr>
+                    </thead>
+                    <tbody>${itemRows}</tbody>
+                </table>
+                ${(discountTotal > 0 || taxTotal > 0) ? `
+                <div style="padding:6px 12px;background:#fafafa;border-top:1px solid #f1f5f9;text-align:right;font-size:10px;color:#64748b;">
+                    ${taxTotal > 0 ? `Tax: ${currency} ${fmt(taxTotal)} &nbsp;&nbsp;` : ''}
+                    ${discountTotal > 0 ? `<span style="color:#d97706;">Saved: ${currency} ${fmt(discountTotal)}</span>` : ''}
+                </div>` : ''}
+            </div>`;
+        }).join('');
+
         const html = `
         <div style="font-family:Arial,Helvetica,sans-serif;padding:20px 24px;color:#1e293b;background:#fff;width:100%;">
+            <!-- App Branding -->
+            <div style="text-align:center;margin-bottom:12px;">
+                <div style="font-size:13px;font-weight:800;letter-spacing:0.08em;color:#0f172a;">DESKTOP POS</div>
+                <div style="font-size:9px;color:#94a3b8;margin-top:2px;">
+                    Software by Ahmed Irfan &nbsp;•&nbsp; Phone: +923070019031 &nbsp;•&nbsp; WhatsApp: https://wa.me/923070019031
+                </div>
+            </div>
+            <hr style="border:none;border-top:1px solid #e2e8f0;margin-bottom:14px;" />
+
             <!-- Header -->
             <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:16px;">
                 <div>
@@ -296,6 +424,13 @@ const CustomerLedger = () => {
                 </tbody>
             </table>
 
+            ${billDetailsHtml ? `
+            <!-- Bill Details -->
+            <div style="margin-top:20px;">
+                <h2 style="margin:0 0 8px;font-size:14px;font-weight:700;">Bill Details</h2>
+                ${billDetailsHtml}
+            </div>` : ''}
+
             <!-- Footer -->
             <div style="margin-top:12px;font-size:10px;color:#94a3b8;text-align:center;">
                 Entries: ${filteredEntries.length} | Bills: ${summary.billCount || 0}
@@ -314,6 +449,7 @@ const CustomerLedger = () => {
                 image: { type: 'jpeg', quality: 0.98 },
                 html2canvas: { scale: 2, useCORS: true },
                 jsPDF: { unit: 'mm', format: 'a4', orientation: 'landscape' },
+                pagebreak: { mode: ['css', 'avoid-all'] },
             })
             .from(container.firstElementChild)
             .save()
@@ -332,7 +468,7 @@ const CustomerLedger = () => {
     // Render
     // =========================================================================
 
-    if (loading) {
+    if (loading && !ledgerData) {
         return (
             <div className="h-full flex items-center justify-center bg-slate-50 dark:bg-d-bg">
                 <div className="flex flex-col items-center gap-4">
@@ -343,7 +479,7 @@ const CustomerLedger = () => {
         );
     }
 
-    if (error) {
+    if (error && !ledgerData) {
         return (
             <div className="h-full flex items-center justify-center bg-slate-50 dark:bg-d-bg">
                 <div className="flex flex-col items-center gap-4 text-center">
@@ -505,28 +641,35 @@ const CustomerLedger = () => {
                 {/* Filters */}
                 <div className="bg-white dark:bg-d-card border border-slate-100 dark:border-d-border rounded-2xl p-4 mb-4 shadow-sm print:hidden">
                     <div className="flex flex-wrap items-center gap-3">
-                        <div className="flex items-center gap-2 bg-slate-50 dark:bg-d-bg rounded-xl px-3 py-2 border border-slate-200 dark:border-d-border">
-                            <FiCalendar size={14} className="text-slate-400 dark:text-d-faint" />
-                            <input
-                                type="date"
-                                value={startDate}
-                                onChange={(e) => setStartDate(e.target.value)}
-                                className="bg-transparent text-sm text-slate-700 dark:text-d-text focus:outline-none"
-                            />
-                            <span className="text-slate-400 dark:text-d-faint text-xs">to</span>
-                            <input
-                                type="date"
-                                value={endDate}
-                                onChange={(e) => setEndDate(e.target.value)}
-                                className="bg-transparent text-sm text-slate-700 dark:text-d-text focus:outline-none"
-                            />
-                            {(startDate || endDate) && (
-                                <button
-                                    onClick={() => { setStartDate(''); setEndDate(''); }}
-                                    className="text-slate-400 hover:text-slate-600"
-                                >
-                                    <FiX size={14} />
-                                </button>
+                        <div className="flex items-center gap-2">
+                            <button
+                                onClick={openFilterModal}
+                                className={`flex items-center gap-2 px-3 py-2 rounded-xl text-sm font-medium border transition-colors ${
+                                    activeFilterLabel
+                                        ? 'bg-primary-50 dark:bg-[rgba(124,131,253,0.12)] border-primary-200 dark:border-d-accent/50 text-primary-600 dark:text-d-accent'
+                                        : 'bg-slate-50 dark:bg-d-bg border-slate-200 dark:border-d-border text-slate-600 dark:text-d-text hover:bg-slate-100 dark:hover:bg-d-glass'
+                                }`}
+                            >
+                                <FiFilter size={14} />
+                                Filter
+                            </button>
+
+                            {activeFilterLabel && (
+                                <div className="flex items-center gap-1.5 pl-3 pr-2 py-2 bg-slate-50 dark:bg-d-bg border border-slate-200 dark:border-d-border rounded-xl text-xs text-slate-600 dark:text-d-text">
+                                    <FiCalendar size={12} className="text-slate-400 dark:text-d-faint shrink-0" />
+                                    {activeFilterLabel}
+                                    <button
+                                        onClick={clearDateFilter}
+                                        className="text-slate-400 hover:text-slate-600 dark:hover:text-d-text"
+                                        title="Clear date filter"
+                                    >
+                                        <FiX size={13} />
+                                    </button>
+                                </div>
+                            )}
+
+                            {loading && ledgerData && (
+                                <FiRefreshCw size={14} className="text-slate-400 dark:text-d-faint animate-spin" />
                             )}
                         </div>
 
@@ -1180,6 +1323,111 @@ const CustomerLedger = () => {
                     </div>
                 );
             })()}
+
+            {/* ================================================================
+                MODAL: Filter Ledger
+            ================================================================ */}
+            {showFilterModal && (
+                <div className="fixed inset-0 bg-black/50 dark:bg-black/60 flex items-center justify-center z-50 p-4">
+                    <div className="bg-white dark:bg-d-card dark:border dark:border-d-border rounded-2xl w-full max-w-md animate-fadeIn">
+                        <div className="flex items-center justify-between p-6 border-b border-slate-200 dark:border-d-border">
+                            <h3 className="text-xl font-semibold text-slate-800 dark:text-d-heading">Filter Ledger</h3>
+                            <button
+                                onClick={() => setShowFilterModal(false)}
+                                className="p-2 hover:bg-slate-100 dark:hover:bg-d-glass-hover rounded-lg transition-colors text-slate-500 dark:text-d-muted"
+                            >
+                                <FiX />
+                            </button>
+                        </div>
+
+                        <div className="p-6 space-y-5">
+                            <div>
+                                <label className="block text-sm font-medium text-slate-700 dark:text-d-text mb-2">
+                                    Quick Ranges
+                                </label>
+                                <div className="grid grid-cols-2 gap-2">
+                                    {[
+                                        { id: 'today', label: 'Today' },
+                                        { id: 'week', label: 'This Week' },
+                                        { id: 'month', label: 'This Month' },
+                                        { id: 'all', label: 'All Time' },
+                                    ].map((p) => (
+                                        <button
+                                            key={p.id}
+                                            type="button"
+                                            onClick={() => applyPreset(p.id)}
+                                            className="px-4 py-2.5 rounded-xl border border-slate-200 dark:border-d-border text-sm font-medium text-slate-700 dark:text-d-text hover:bg-slate-100 dark:hover:bg-d-glass hover:border-primary-300 dark:hover:border-d-accent/50 transition-colors"
+                                        >
+                                            {p.label}
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+
+                            <div className="border-t border-slate-100 dark:border-d-border pt-5">
+                                <label className="block text-sm font-medium text-slate-700 dark:text-d-text mb-2">
+                                    Custom Range
+                                </label>
+                                <div className="space-y-3">
+                                    <div className="flex items-center gap-2 bg-slate-50 dark:bg-d-bg rounded-xl pl-3 pr-2 py-2 border border-slate-200 dark:border-d-border">
+                                        <span className="text-xs text-slate-400 dark:text-d-faint w-9 shrink-0">From</span>
+                                        <input
+                                            type="date"
+                                            value={draftStartDate}
+                                            onChange={(e) => { setDraftStartDate(e.target.value); if (!e.target.value) setDraftStartTime(''); }}
+                                            className="bg-transparent text-sm text-slate-700 dark:text-d-text focus:outline-none flex-1"
+                                        />
+                                        <div className="w-px h-4 bg-slate-200 dark:bg-d-border shrink-0" />
+                                        <input
+                                            type="time"
+                                            value={draftStartTime}
+                                            onChange={(e) => setDraftStartTime(e.target.value)}
+                                            disabled={!draftStartDate}
+                                            title={draftStartDate ? 'Start time (optional)' : 'Pick a start date first'}
+                                            className="bg-transparent text-sm text-slate-700 dark:text-d-text focus:outline-none disabled:opacity-30 disabled:cursor-not-allowed w-[90px]"
+                                        />
+                                    </div>
+                                    <div className="flex items-center gap-2 bg-slate-50 dark:bg-d-bg rounded-xl pl-3 pr-2 py-2 border border-slate-200 dark:border-d-border">
+                                        <span className="text-xs text-slate-400 dark:text-d-faint w-9 shrink-0">To</span>
+                                        <input
+                                            type="date"
+                                            value={draftEndDate}
+                                            onChange={(e) => { setDraftEndDate(e.target.value); if (!e.target.value) setDraftEndTime(''); }}
+                                            className="bg-transparent text-sm text-slate-700 dark:text-d-text focus:outline-none flex-1"
+                                        />
+                                        <div className="w-px h-4 bg-slate-200 dark:bg-d-border shrink-0" />
+                                        <input
+                                            type="time"
+                                            value={draftEndTime}
+                                            onChange={(e) => setDraftEndTime(e.target.value)}
+                                            disabled={!draftEndDate}
+                                            title={draftEndDate ? 'End time (optional)' : 'Pick an end date first'}
+                                            className="bg-transparent text-sm text-slate-700 dark:text-d-text focus:outline-none disabled:opacity-30 disabled:cursor-not-allowed w-[90px]"
+                                        />
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="flex gap-3 p-6 pt-0">
+                            <button
+                                type="button"
+                                onClick={() => setShowFilterModal(false)}
+                                className="flex-1 py-3 border border-slate-200 dark:border-d-border rounded-xl font-medium text-slate-600 dark:text-d-text hover:bg-slate-50 dark:hover:bg-d-glass transition-colors"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                type="button"
+                                onClick={applyCustomRange}
+                                className="flex-1 py-3 bg-primary-500 text-white rounded-xl font-medium hover:bg-primary-600 transition-colors"
+                            >
+                                Apply
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 };
