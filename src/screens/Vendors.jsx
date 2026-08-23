@@ -5,6 +5,7 @@ import { useBusiness } from '../context/BusinessContext';
 import { getVendors, createVendor, updateVendor, deleteVendor } from '../services/api/vendors';
 import { getSupplies, getSupplyStats, createSupply, updateSupply, deleteSupply, paySupply } from '../services/api/supplies';
 import { getProducts } from '../services/api/products';
+import ProductFormModal from '../components/ProductFormModal';
 import {
     FiPlus,
     FiSearch,
@@ -50,6 +51,9 @@ const defaultVendorForm = () => ({
     notes: '',
     openingBalance: 0,
 });
+
+const ADD_VENDOR_OPTION = '__add_vendor__';
+const ADD_PRODUCT_OPTION = '__add_product__';
 
 const TABS = [
     { id: 'supplies', label: 'Supplies', icon: FiPackage },
@@ -107,6 +111,11 @@ const Vendors = () => {
     const [editingVendor, setEditingVendor] = useState(null);
     const [vendorForm, setVendorForm] = useState(defaultVendorForm());
     const [vendorSubmitting, setVendorSubmitting] = useState(false);
+    const [supplyVendorRequest, setSupplyVendorRequest] = useState(false);
+
+    // ── Quick Add Product modal (triggered from Add Supply item picker) ──────
+    const [showProductModal, setShowProductModal] = useState(false);
+    const [productModalTargetIndex, setProductModalTargetIndex] = useState(null);
 
     // ── Currency formatter ───────────────────────────────────────────────────
     const formatCurrency = (amount) =>
@@ -190,6 +199,8 @@ const Vendors = () => {
     // =========================================================================
     // Derived values
     // =========================================================================
+
+    const productCategories = [...new Set(products.map((p) => p.category).filter(Boolean))];
 
     const filteredSupplies = supplies.filter((s) => {
         if (!searchQuery) return true;
@@ -286,6 +297,24 @@ const Vendors = () => {
             };
             return next;
         });
+    };
+
+    const handleVendorSelectChange = (value) => {
+        if (value === ADD_VENDOR_OPTION) {
+            setSupplyVendorRequest(true);
+            openVendorModal();
+            return;
+        }
+        setSupplyForm((prev) => ({ ...prev, vendor: value }));
+    };
+
+    const handleProductSelectChange = (index, value) => {
+        if (value === ADD_PRODUCT_OPTION) {
+            setProductModalTargetIndex(index);
+            setShowProductModal(true);
+            return;
+        }
+        selectProductForItem(index, value);
     };
 
     const addItem = () => setSupplyItems((prev) => [...prev, defaultItem()]);
@@ -413,27 +442,66 @@ const Vendors = () => {
     const closeVendorModal = () => {
         setShowVendorModal(false);
         setEditingVendor(null);
+        setSupplyVendorRequest(false);
     };
 
     const handleVendorSubmit = async (e) => {
         e.preventDefault();
         setVendorSubmitting(true);
         try {
+            let newVendor = null;
             if (editingVendor) {
                 const { openingBalance, ...updateData } = vendorForm;
                 await updateVendor(editingVendor._id, updateData);
             } else {
                 const payload = { ...vendorForm };
                 payload.openingBalance = Number(payload.openingBalance) || 0;
-                await createVendor(payload);
+                const res = await createVendor(payload);
+                newVendor = res?.data?.vendor || res?.data;
             }
-            closeVendorModal();
-            fetchVendors();
+            const wasSupplyRequest = supplyVendorRequest;
+            setShowVendorModal(false);
+            setEditingVendor(null);
+            setSupplyVendorRequest(false);
+            await fetchVendors();
+            if (wasSupplyRequest && newVendor?._id) {
+                setSupplyForm((prev) => ({ ...prev, vendor: newVendor._id }));
+            }
         } catch (err) {
             console.error('Error saving vendor:', err);
             alert(err.response?.data?.message || 'Failed to save vendor');
         } finally {
             setVendorSubmitting(false);
+        }
+    };
+
+    // =========================================================================
+    // Quick Add Product modal handlers (from Add Supply item picker)
+    // =========================================================================
+
+    const closeProductModal = () => {
+        setShowProductModal(false);
+        setProductModalTargetIndex(null);
+    };
+
+    const handleProductSaved = async (newProduct) => {
+        const targetIndex = productModalTargetIndex;
+        setProductModalTargetIndex(null);
+        await fetchProducts();
+        if (newProduct?._id && targetIndex !== null) {
+            setSupplyItems((prev) => {
+                const next = [...prev];
+                const currentQty = parseFloat(next[targetIndex].qty) || 1;
+                const unitPrice = newProduct.costPrice || next[targetIndex].unitPrice || '';
+                next[targetIndex] = {
+                    ...next[targetIndex],
+                    product: newProduct._id,
+                    name: newProduct.name || '',
+                    unitPrice,
+                    total: (parseFloat(unitPrice) || 0) * currentQty,
+                };
+                return next;
+            });
         }
     };
 
@@ -1041,9 +1109,7 @@ const Vendors = () => {
                                     <div className="relative">
                                         <select
                                             value={supplyForm.vendor}
-                                            onChange={(e) =>
-                                                setSupplyForm({ ...supplyForm, vendor: e.target.value })
-                                            }
+                                            onChange={(e) => handleVendorSelectChange(e.target.value)}
                                             required
                                             className="appearance-none w-full px-4 py-2 pr-10 bg-white dark:bg-d-bg border border-slate-200 dark:border-d-border rounded-xl focus:ring-2 focus:ring-primary-500 dark:focus:border-d-border-hover focus:outline-none text-slate-800 dark:text-d-text"
                                         >
@@ -1054,6 +1120,7 @@ const Vendors = () => {
                                                     {v.company ? ` — ${v.company}` : ''}
                                                 </option>
                                             ))}
+                                            <option value={ADD_VENDOR_OPTION}>+ Add New Vendor</option>
                                         </select>
                                         <FiChevronDown className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 dark:text-d-muted" />
                                     </div>
@@ -1096,6 +1163,7 @@ const Vendors = () => {
                                     <input
                                         type="number"
                                         min="0"
+                                        step="0.01"
                                         value={supplyForm.paidAmount}
                                         onChange={(e) =>
                                             setSupplyForm({ ...supplyForm, paidAmount: e.target.value })
@@ -1143,7 +1211,7 @@ const Vendors = () => {
                                             <div className="col-span-5 relative">
                                                 <select
                                                     value={item.product}
-                                                    onChange={(e) => selectProductForItem(idx, e.target.value)}
+                                                    onChange={(e) => handleProductSelectChange(idx, e.target.value)}
                                                     required
                                                     className="appearance-none w-full px-3 py-2 pr-9 bg-white dark:bg-d-bg border border-slate-200 dark:border-d-border rounded-xl text-sm focus:ring-2 focus:ring-primary-500 dark:focus:border-d-border-hover focus:outline-none text-slate-800 dark:text-d-text"
                                                 >
@@ -1156,6 +1224,7 @@ const Vendors = () => {
                                                             {p.trackStock ? ` (stock: ${p.stockQuantity ?? 0})` : ''}
                                                         </option>
                                                     ))}
+                                                    <option value={ADD_PRODUCT_OPTION}>+ Add New Product</option>
                                                 </select>
                                                 <FiChevronDown className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 dark:text-d-muted" />
                                             </div>
@@ -1169,6 +1238,7 @@ const Vendors = () => {
                                             <input
                                                 type="number"
                                                 min="0"
+                                                step="0.01"
                                                 value={item.unitPrice}
                                                 onChange={(e) => updateItem(idx, 'unitPrice', e.target.value)}
                                                 placeholder="0"
@@ -1308,6 +1378,7 @@ const Vendors = () => {
                                 <input
                                     type="number"
                                     min="1"
+                                    step="0.01"
                                     value={payAmount}
                                     onChange={(e) => setPayAmount(e.target.value)}
                                     placeholder="Enter amount"
@@ -1417,6 +1488,7 @@ const Vendors = () => {
                                     <input
                                         type="number"
                                         min="0"
+                                        step="0.01"
                                         value={vendorForm.openingBalance}
                                         onChange={(e) =>
                                             setVendorForm({ ...vendorForm, openingBalance: e.target.value })
@@ -1468,6 +1540,13 @@ const Vendors = () => {
                     </div>
                 </div>
             )}
+
+            <ProductFormModal
+                show={showProductModal}
+                onClose={closeProductModal}
+                categories={productCategories}
+                onSaved={handleProductSaved}
+            />
         </div>
     );
 };
