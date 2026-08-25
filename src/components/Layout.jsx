@@ -21,6 +21,7 @@ import {
     FiUserPlus,
     FiLayers,
     FiBook,
+    FiLock,
 } from 'react-icons/fi';
 
 const Layout = ({ children }) => {
@@ -48,6 +49,7 @@ const Layout = ({ children }) => {
         { path: '/vendors', icon: FiTruck, label: 'Vendors', module: 'vendors' },
         { path: '/inventory', icon: FiLayers, label: 'Inventory', module: 'products' },
         { path: '/reports', icon: FiPieChart, label: 'Reports', module: 'reports' },
+        { path: '/closing', icon: FiLock, label: 'Closing', module: 'closing' },
         { path: '/settings', icon: FiSettings, label: 'Settings', module: 'settings' },
     ];
 
@@ -65,6 +67,7 @@ const Layout = ({ children }) => {
         { path: '/vendors', icon: FiTruck, label: 'Vendors', module: 'vendors' },
         { path: '/inventory', icon: FiLayers, label: 'Inventory', module: 'products' },
         { path: '/reports', icon: FiPieChart, label: 'Reports', module: 'reports' },
+        { path: '/closing', icon: FiLock, label: 'Closing', module: 'closing' },
         { path: '/settings', icon: FiSettings, label: 'Settings', module: 'settings' },
         { path: '/profile', icon: FiUser, label: 'Profile', module: null },
     ];

@@ -52,6 +52,7 @@ const ACCESS_MODULES = [
     { key: 'employees', label: 'Employees', actions: ['view', 'create', 'edit', 'delete', 'resetPassword'] },
     { key: 'dashboard', label: 'Dashboard', actions: ['view'] },
     { key: 'reports', label: 'Reports', actions: ['view'] },
+    { key: 'closing', label: 'Store Closing', actions: ['view', 'create'] },
     { key: 'settings', label: 'Settings', actions: ['view', 'edit'] },
 ];
 

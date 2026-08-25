@@ -62,6 +62,8 @@ import VendorLedger from './screens/VendorLedger';
 import CashBook from './screens/CashBook';
 import Inventory from './screens/Inventory';
 import EmployeeAnalytics from './screens/EmployeeAnalytics';
+import Closing from './screens/Closing';
+import ClosingDetail from './screens/ClosingDetail';
 
 // Layout
 import Layout from './components/Layout';
@@ -351,6 +353,30 @@ function AppContent() {
                         <PermissionRoute module="dashboard">
                             <Layout>
                                 <EmployeeAnalytics />
+                            </Layout>
+                        </PermissionRoute>
+                    </ProtectedRoute>
+                }
+            />
+            <Route
+                path="/closing"
+                element={
+                    <ProtectedRoute>
+                        <PermissionRoute module="closing">
+                            <Layout>
+                                <Closing />
+                            </Layout>
+                        </PermissionRoute>
+                    </ProtectedRoute>
+                }
+            />
+            <Route
+                path="/closing/:id"
+                element={
+                    <ProtectedRoute>
+                        <PermissionRoute module="closing">
+                            <Layout>
+                                <ClosingDetail />
                             </Layout>
                         </PermissionRoute>
                     </ProtectedRoute>
