@@ -81,8 +81,18 @@ const Layout = ({ children }) => {
         })
         : [];
 
-    // Check if running on macOS for safe area
     const isMac = navigator.userAgentData?.platform === 'macOS' || /Mac/i.test(navigator.userAgent);
+    const isWin = navigator.userAgentData?.platform === 'Windows' || /Win/i.test(navigator.userAgent);
+
+    // Keep Windows title bar overlay colours in sync with dark/light mode
+    useEffect(() => {
+        if (!isWin || !window.electronAPI?.setTitleBarColors) return;
+        if (isDark) {
+            window.electronAPI.setTitleBarColors('#0d0f17', '#c8cfe0');
+        } else {
+            window.electronAPI.setTitleBarColors('#ffffff', '#334155');
+        }
+    }, [isDark, isWin]);
 
     // Slim Sidebar Nav Item (Icon only, tooltip on hover)
     const SlimNavItem = ({ item }) => (
@@ -165,8 +175,8 @@ const Layout = ({ children }) => {
                     onMouseEnter={() => setSidebarExpanded(true)}
                     onMouseLeave={() => setSidebarExpanded(false)}
                 >
-                    {/* macOS Traffic Light Safe Area */}
-                    {isMac && <div className="h-5 flex-shrink-0 app-drag-region w-full" />}
+                    {/* Safe area for macOS traffic lights / Windows drag region */}
+                    {(isMac || isWin) && <div className="h-5 flex-shrink-0 app-drag-region w-full" />}
 
                     {/* Logo */}
                     <div
@@ -312,8 +322,8 @@ const Layout = ({ children }) => {
             ) : (
                 /* Standard Sidebar (Employee or Light Mode) */
                 <aside className="w-60 bg-white dark:bg-d-card border-r border-slate-200 dark:border-d-border flex flex-col animate-fade-slide-left relative z-10 flex-shrink-0 print:hidden">
-                    {/* macOS Traffic Light Safe Area */}
-                    {isMac && <div className="h-8 flex-shrink-0 app-drag-region" />}
+                    {/* Safe area for macOS traffic lights / Windows drag region */}
+                    {(isMac || isWin) && <div className="h-8 flex-shrink-0 app-drag-region" />}
 
                     {/* Brand */}
                     <div className="flex items-center gap-3 px-4 py-4 pb-6">
@@ -391,7 +401,7 @@ const Layout = ({ children }) => {
             )}
 
             {/* Main content */}
-            <main className={`flex-1 overflow-y-auto print:overflow-visible relative z-5 ${isMac ? 'pt-8' : ''}`}>
+            <main className={`flex-1 overflow-y-auto print:overflow-visible relative z-5 ${(isMac || isWin) ? 'pt-8' : ''}`}>
                 {children}
             </main>
         </div>

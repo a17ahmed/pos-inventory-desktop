@@ -2,6 +2,12 @@ const { app, BrowserWindow, ipcMain, Menu, shell, dialog } = require('electron')
 const path = require('path');
 const { autoUpdater } = require('electron-updater');
 
+// Overlay scrollbars on Windows (matches macOS behaviour — scrollbars float over content)
+if (process.platform === 'win32') {
+    app.commandLine.appendSwitch('enable-features', 'OverlayScrollbar');
+    app.commandLine.appendSwitch('overlay-scrollbars');
+}
+
 // Handle creating/removing shortcuts on Windows when installing/uninstalling
 try {
     if (require('electron-squirrel-startup')) {
@@ -17,6 +23,9 @@ const isDev = process.env.NODE_ENV === 'development' || !app.isPackaged;
 
 function createWindow() {
     // Create the browser window
+    const isWin = process.platform === 'win32';
+    const isMac = process.platform === 'darwin';
+
     mainWindow = new BrowserWindow({
         width: 1400,
         height: 900,
@@ -27,10 +36,18 @@ function createWindow() {
             contextIsolation: true,
             preload: path.join(__dirname, 'preload.js'),
         },
-        titleBarStyle: 'hiddenInset', // Mac style
-        frame: process.platform === 'darwin' ? true : true,
+        // Mac: inset traffic lights overlaid on content
+        // Windows: hidden title bar with native overlay controls (min/max/close in top-right)
+        titleBarStyle: isMac ? 'hiddenInset' : 'hidden',
+        ...(isWin && {
+            titleBarOverlay: {
+                color: '#ffffff',
+                symbolColor: '#334155',
+                height: 40,
+            },
+        }),
         backgroundColor: '#f8fafc',
-        show: false, // Don't show until ready
+        show: false,
     });
 
     // Load the app
@@ -240,6 +257,13 @@ app.on('window-all-closed', () => {
 // IPC Handlers
 ipcMain.handle('get-app-version', () => {
     return app.getVersion();
+});
+
+// Sync Windows title bar overlay colors with the app's dark/light theme
+ipcMain.on('set-titlebar-colors', (event, bgColor, symbolColor) => {
+    if (process.platform === 'win32' && mainWindow) {
+        mainWindow.setTitleBarOverlay({ color: bgColor, symbolColor, height: 40 });
+    }
 });
 
 ipcMain.handle('get-platform', () => {

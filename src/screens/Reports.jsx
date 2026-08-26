@@ -442,9 +442,9 @@ const Reports = () => {
                                 <PnlRow label="Total Discounts" amount={p.totalDiscount} negative formula={`Item disc. + Bill disc.`} />
                                 <PnlRow label="Net Revenue (after discounts)" amount={p.netRevenue} bold border bg formula="Gross Revenue - Total Discounts" />
                                 <PnlRow label="Returns & Refunds" amount={p.totalRefunded} negative />
-                                <PnlRow label="Revenue after Returns" amount={p.revenueAfterReturns} bold border formula="Net Revenue - Returns" />
-                                <PnlRow label="Cost of Goods Sold (COGS)" amount={p.totalCost} negative formula="Sum of costPrice x netQtySold" />
-                                <PnlRow label="Gross Profit" amount={p.grossProfit} bold border formula="Net Revenue - COGS" />
+                                <PnlRow label="Revenue After Returns" amount={p.revenueAfterReturns} bold border formula="Net Revenue − Returns" />
+                                <PnlRow label="COGS (net of returns)" amount={p.adjustedCogs} negative formula="costPrice × (qty − returnedQty)" />
+                                <PnlRow label="Gross Profit" amount={p.revenueAfterReturns - (p.adjustedCogs || 0)} bold border formula="Revenue After Returns − COGS" />
                                 <PnlRow label="Returned Profit" amount={p.returnedProfit} negative indent formula="Profit lost from returned items" />
                                 <PnlRow label="Sales Net Profit" amount={p.salesNetProfit} bold border bg formula="Gross Profit - Returned Profit" />
                                 <PnlRow label="Operating Expenses" amount={d.expenses.total} negative />
@@ -772,10 +772,11 @@ const Reports = () => {
                             <PnlRow label="Item Discounts" amount={pnl.totalItemDiscount} negative indent />
                             <PnlRow label="Bill Discounts" amount={pnl.totalBillDiscount} negative indent />
                             <PnlRow label="Total Discounts" amount={pnl.totalDiscount} negative />
+                            <PnlRow label="Net Revenue" amount={pnl.netRevenue} bold border bg formula="Gross − Discounts" />
                             <PnlRow label="Returns & Refunds" amount={pnl.totalRefunded} negative />
-                            <PnlRow label="Net Revenue" amount={pnl.netRevenue} bold border bg formula="Gross - Discounts" />
-                            <PnlRow label="Cost of Goods Sold" amount={pnl.totalCost} negative formula="costPrice x netQtySold" />
-                            <PnlRow label="Gross Profit" amount={pnl.grossProfit} bold border formula="Revenue - COGS" />
+                            <PnlRow label="Revenue After Returns" amount={pnl.revenueAfterReturns} bold border formula="Net Revenue − Returns" />
+                            <PnlRow label="COGS (net of returns)" amount={pnl.adjustedCogs} negative formula="costPrice × (qty − returnedQty)" />
+                            <PnlRow label="Gross Profit" amount={pnl.revenueAfterReturns - (pnl.adjustedCogs || 0)} bold border formula="Revenue After Returns − COGS" />
                             <PnlRow label="Operating Expenses" amount={expenses.total} negative />
                             {expenses.breakdown.map((e, i) => (
                                 <PnlRow key={i} label={e.label} amount={e.amount} indent />

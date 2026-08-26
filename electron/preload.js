@@ -24,6 +24,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     minimize: () => ipcRenderer.send('window-minimize'),
     maximize: () => ipcRenderer.send('window-maximize'),
     close: () => ipcRenderer.send('window-close'),
+
+    // Windows title bar overlay color (for dark/light mode sync)
+    setTitleBarColors: (bgColor, symbolColor) =>
+        ipcRenderer.send('set-titlebar-colors', bgColor, symbolColor),
 });
 
 // Notify that preload script has run

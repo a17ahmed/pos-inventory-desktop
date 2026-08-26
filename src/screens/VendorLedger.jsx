@@ -989,7 +989,7 @@ const VendorLedger = () => {
                 }
                 return (
                     <div className="fixed inset-0 bg-black/50 dark:bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-                        <div className="bg-white dark:bg-d-elevated border border-slate-200 dark:border-[rgba(255,255,255,0.08)] rounded-2xl shadow-2xl w-full max-w-md animate-pop-in overflow-hidden">
+                        <div className="bg-white dark:bg-d-elevated border border-slate-200 dark:border-[rgba(255,255,255,0.08)] rounded-2xl shadow-2xl w-full max-w-md animate-pop-in overflow-hidden flex flex-col max-h-[90vh]">
                             {/* Header */}
                             <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100 dark:border-d-border">
                                 <div className="flex items-center gap-3">
@@ -1009,7 +1009,8 @@ const VendorLedger = () => {
                                 </button>
                             </div>
 
-                            <form onSubmit={submitPayment} className="p-6 space-y-5">
+                            <form onSubmit={submitPayment} className="flex flex-col min-h-0 flex-1">
+                            <div className="p-6 space-y-5 overflow-y-auto flex-1">
                                 {/* Cash in hand info */}
                                 {cashInHand != null && (
                                     <div className={`flex items-center justify-between p-3 rounded-xl border ${
@@ -1283,8 +1284,11 @@ const VendorLedger = () => {
                                     </div>
                                 )}
 
-                                {/* Actions */}
-                                <div className="flex items-center gap-2 pt-2">
+                                {/* spacer closes scrollable body */}
+                                </div>
+
+                                {/* Actions — pinned to bottom */}
+                                <div className="flex items-center gap-2 px-6 py-4 border-t border-slate-100 dark:border-d-border shrink-0">
                                     <button
                                         type="button"
                                         onClick={() => setShowPaymentModal(false)}
