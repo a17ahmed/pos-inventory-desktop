@@ -15,6 +15,8 @@
     "electron:build:all": "vite build && electron-builder --win --mac"
   },
   "dependencies": {
+    "@sentry/electron": "^7.17.0",
+    "@sentry/react": "^10.71.0",
     "axios": "^1.6.0",
     "date-fns": "^2.30.0",
     "electron-updater": "^6.8.3",
@@ -30,6 +32,7 @@
     "socket.io-client": "^4.8.3"
   },
   "devDependencies": {
+    "@sentry/vite-plugin": "^5.4.0",
     "@vitejs/plugin-react": "^4.2.0",
     "autoprefixer": "^10.4.16",
     "concurrently": "^8.2.2",

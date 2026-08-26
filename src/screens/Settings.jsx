@@ -684,7 +684,7 @@ const Settings = () => {
                                     <p className="text-sm font-medium text-slate-700 dark:text-d-text">Show Customer Phone</p>
                                     <p className="text-xs text-slate-400 dark:text-d-muted">Print the attached customer's phone number on the receipt</p>
                                 </div>
-                                <div className="relative inline-flex items-center cursor-pointer shrink-0 ml-4">
+                                <label className="relative inline-flex items-center cursor-pointer shrink-0 ml-4">
                                     <input
                                         type="checkbox"
                                         className="sr-only peer"
@@ -692,7 +692,7 @@ const Settings = () => {
                                         onChange={(e) => bizFormRef.current.showCustomerPhone = e.target.checked}
                                     />
                                     <div className="w-11 h-6 bg-slate-200 dark:bg-slate-600 peer-focus:ring-2 peer-focus:ring-primary-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary-500"></div>
-                                </div>
+                                </label>
                             </div>
 
                             <div className="flex items-center justify-between py-1">
@@ -700,7 +700,7 @@ const Settings = () => {
                                     <p className="text-sm font-medium text-slate-700 dark:text-d-text">Show Customer Address</p>
                                     <p className="text-xs text-slate-400 dark:text-d-muted">Print the attached customer's address on the receipt</p>
                                 </div>
-                                <div className="relative inline-flex items-center cursor-pointer shrink-0 ml-4">
+                                <label className="relative inline-flex items-center cursor-pointer shrink-0 ml-4">
                                     <input
                                         type="checkbox"
                                         className="sr-only peer"
@@ -708,7 +708,7 @@ const Settings = () => {
                                         onChange={(e) => bizFormRef.current.showCustomerAddress = e.target.checked}
                                     />
                                     <div className="w-11 h-6 bg-slate-200 dark:bg-slate-600 peer-focus:ring-2 peer-focus:ring-primary-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary-500"></div>
-                                </div>
+                                </label>
                             </div>
 
                             <button

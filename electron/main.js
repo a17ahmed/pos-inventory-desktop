@@ -2,6 +2,16 @@ const { app, BrowserWindow, ipcMain, Menu, shell, dialog } = require('electron')
 const path = require('path');
 const { autoUpdater } = require('electron-updater');
 
+// Sentry — production builds only, initialized as early as possible to catch startup crashes.
+// DSN is safe to embed in source (it's a public write-only identifier, not a secret).
+if (app.isPackaged) {
+    const Sentry = require('@sentry/electron/main');
+    Sentry.init({
+        dsn: 'https://7477330dad5d7fcfdb8da627558a463c@o4511976432992256.ingest.de.sentry.io/4511976441184336',
+        release: `pos-desktop@${app.getVersion()}`,
+    });
+}
+
 // Overlay scrollbars on Windows (matches macOS behaviour — scrollbars float over content)
 if (process.platform === 'win32') {
     app.commandLine.appendSwitch('enable-features', 'OverlayScrollbar');
