@@ -353,7 +353,8 @@ const Vendors = () => {
         setSubmitting(true);
         try {
             const formData = new FormData();
-            formData.append('vendor', supplyForm.vendor);
+            // Vendor is fixed at creation — the backend rejects `vendor` on update
+            if (!editingSupply) formData.append('vendor', supplyForm.vendor);
             formData.append('billNumber', supplyForm.billNumber);
             formData.append('billDate', supplyForm.billDate);
             formData.append('paidAmount', supplyForm.paidAmount || 0);
@@ -1120,7 +1121,8 @@ const Vendors = () => {
                                             value={supplyForm.vendor}
                                             onChange={(e) => handleVendorSelectChange(e.target.value)}
                                             required
-                                            className="appearance-none w-full px-4 py-2 pr-10 bg-white dark:bg-d-bg border border-slate-200 dark:border-d-border rounded-xl focus:ring-2 focus:ring-primary-500 dark:focus:border-d-border-hover focus:outline-none text-slate-800 dark:text-d-text"
+                                            disabled={!!editingSupply}
+                                            className="appearance-none w-full px-4 py-2 pr-10 bg-white dark:bg-d-bg border border-slate-200 dark:border-d-border rounded-xl focus:ring-2 focus:ring-primary-500 dark:focus:border-d-border-hover focus:outline-none text-slate-800 dark:text-d-text disabled:opacity-60 disabled:cursor-not-allowed"
                                         >
                                             <option value="">Select vendor...</option>
                                             {vendors.map((v) => (
@@ -1129,9 +1131,12 @@ const Vendors = () => {
                                                     {v.company ? ` — ${v.company}` : ''}
                                                 </option>
                                             ))}
-                                            <option value={ADD_VENDOR_OPTION}>+ Add New Vendor</option>
+                                            {!editingSupply && <option value={ADD_VENDOR_OPTION}>+ Add New Vendor</option>}
                                         </select>
                                         <FiChevronDown className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 dark:text-d-muted" />
+                                        {editingSupply && (
+                                            <p className="mt-1 text-xs text-slate-500 dark:text-d-muted">Vendor cannot be changed after a supply is created.</p>
+                                        )}
                                     </div>
                                 </div>
                                 <div>

@@ -215,7 +215,8 @@ const EmployeeDashboard = () => {
         }
     }, [showPaymentModal, paymentMethod]);
 
-    const loadData = async () => {
+    const loadData = async (showLoader = true) => {
+        if (showLoader) setLoading(true);
         try {
             // Load products
             const productRes = await getProducts();
@@ -716,7 +717,7 @@ const EmployeeDashboard = () => {
             // Auto-print receipt (only in Electron — browser shows print dialog which is disruptive)
             if (window.electronAPI?.printReceipt) printReceipt(sData, sData.bill);
 
-            loadData();
+            loadData(false);
         } catch (error) {
             console.error('Checkout error:', error);
             if (error.response?.status === 409) {
@@ -873,6 +874,17 @@ const EmployeeDashboard = () => {
     // Target progress
     const target = 5000;
     const progressPercent = Math.min(100, (todayStats.totalSales / target) * 100);
+
+    if (loading) {
+        return (
+            <div className="flex items-center justify-center h-full bg-slate-50 dark:bg-d-bg">
+                <div className="flex flex-col items-center gap-4">
+                    <div className="w-12 h-12 border-4 border-d-accent border-t-transparent rounded-full animate-spin" />
+                    <p className="text-slate-500 dark:text-d-muted">Loading...</p>
+                </div>
+            </div>
+        );
+    }
 
     return (
         <div className="h-full flex flex-col bg-slate-50 dark:bg-d-bg animate-fade-slide-up">
