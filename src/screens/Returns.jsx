@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useBusiness } from '../context/BusinessContext';
 import { getTodaySummary, getReturnByReceipt, getReturnProductByBarcode, createReturn } from '../services/api/returns';
+import { getCashBalance } from '../services/api/cashbook';
 import { getProducts } from '../services/api/products';
 import { searchCustomers, getCustomer } from '../services/api/customers';
 import {
@@ -29,8 +30,8 @@ const RETURN_REASONS = [
 
 const REFUND_METHODS = [
     { value: 'cash', label: 'Cash', icon: '💵' },
-    { value: 'card', label: 'Card', icon: '💳' },
-    { value: 'store_credit', label: 'Store Credit', icon: '🎫' },
+    // { value: 'card', label: 'Card', icon: '💳' },
+    // { value: 'store_credit', label: 'Store Credit', icon: '🎫' },
 ];
 
 const Returns = () => {
@@ -60,6 +61,9 @@ const Returns = () => {
     const customerSearchRef = useRef(null);
     const searchTimerRef = useRef(null);
 
+    // Search mode
+    const [searchMode, setSearchMode] = useState('customer'); // 'customer' | 'bill' | 'product'
+
     // Refund details
     const [refundMethod, setRefundMethod] = useState('cash');
     const [customerName, setCustomerName] = useState('');
@@ -74,8 +78,12 @@ const Returns = () => {
     // Today's summary
     const [todaySummary, setTodaySummary] = useState({ totalReturns: 0, totalRefunded: 0 });
 
+    // Cash balance for validation
+    const [cashBalance, setCashBalance] = useState(null);
+
     useEffect(() => {
         loadTodaySummary();
+        getCashBalance().then(res => setCashBalance(res.data?.balance ?? null)).catch(() => {});
         getProducts().then(res => setAllProducts(res.data || [])).catch(() => {});
         if (barcodeInputRef.current) {
             barcodeInputRef.current.focus();
@@ -241,6 +249,17 @@ const Returns = () => {
         setCustomerResults([]);
     };
 
+    const switchMode = (mode) => {
+        if (mode === searchMode) return;
+        // Clear state of the mode being left
+        clearCustomer();
+        setLinkedBill(null);
+        setBillNumber('');
+        setReturnItems([]);
+        setError('');
+        setSearchMode(mode);
+    };
+
     // Add item from linked bill
     const addItemFromBill = (item) => {
         const remainingQty = item.remainingQty !== undefined ? item.remainingQty : item.qty;
@@ -370,6 +389,13 @@ const Returns = () => {
             }
         }
 
+        // Cash refund validation
+        const isCashRefund = linkedBill ? !linkedBill.customer : refundMethod === 'cash';
+        if (isCashRefund && cashBalance != null && totalRefund > cashBalance) {
+            setError(`Insufficient cash. Available: ${formatCurrency(cashBalance)}`);
+            return;
+        }
+
         setProcessing(true);
         setError('');
         try {
@@ -405,12 +431,14 @@ const Returns = () => {
 
             // Normalize — the two endpoints return different shapes
             if (linkedBill) {
-                // processReturn → { returnNumber, refundAmount, bill }
+                // processReturn → { returnNumber, refundAmount, cashRefundAmount, debtCancelled, bill }
                 const returnEntry = data.bill?.returns?.slice(-1)[0];
                 setReturnResult({
                     returnNumber: data.returnNumber,
                     totalItems: returnItems.reduce((s, i) => s + i.quantity, 0),
                     refundAmount: data.refundAmount,
+                    cashRefundAmount: data.cashRefundAmount ?? data.refundAmount,
+                    debtCancelled: data.debtCancelled ?? 0,
                     refundMethod: returnEntry?.refundMethod || 'ledger_adjust',
                 });
             } else {
@@ -445,6 +473,7 @@ const Returns = () => {
         setShowSuccess(false);
         setReturnResult(null);
         setError('');
+        setSearchMode('customer');
         clearCustomer();
         if (barcodeInputRef.current) {
             barcodeInputRef.current.focus();
@@ -469,10 +498,33 @@ const Returns = () => {
                 </div>
 
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                    {/* Left Column - Customer Search, Bill Lookup & Barcode */}
+                    {/* Left Column */}
                     <div className="lg:col-span-2 space-y-6">
+
+                        {/* Search Mode Tabs */}
+                        <div className="bg-white dark:bg-d-card rounded-2xl border border-slate-200 dark:border-d-border p-2 flex gap-1">
+                            {[
+                                { key: 'customer', label: 'By Customer', icon: <FiUser size={15} /> },
+                                { key: 'bill',     label: 'By Bill',     icon: <FiFileText size={15} /> },
+                                { key: 'product',  label: 'By Product',  icon: <FiPackage size={15} /> },
+                            ].map(tab => (
+                                <button
+                                    key={tab.key}
+                                    onClick={() => switchMode(tab.key)}
+                                    className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-semibold transition-all ${
+                                        searchMode === tab.key
+                                            ? 'bg-gradient-to-r from-d-accent to-d-accent-s text-d-card'
+                                            : 'text-slate-500 dark:text-d-muted hover:bg-slate-50 dark:hover:bg-d-glass'
+                                    }`}
+                                >
+                                    {tab.icon}
+                                    {tab.label}
+                                </button>
+                            ))}
+                        </div>
+
                         {/* Customer Search Section */}
-                        <div className="bg-white dark:bg-d-card rounded-2xl border border-slate-200 dark:border-d-border p-6">
+                        {searchMode === 'customer' && <div className="bg-white dark:bg-d-card rounded-2xl border border-slate-200 dark:border-d-border p-6">
                             <h3 className="text-lg font-semibold text-slate-800 dark:text-d-heading mb-4 flex items-center gap-2">
                                 <FiUser className="text-d-accent" />
                                 Find Customer
@@ -491,50 +543,93 @@ const Returns = () => {
                                         </button>
                                     </div>
 
-                                    {/* Customer's bills */}
+                                    {/* Bill selection / items */}
                                     {loadingCustomer ? (
                                         <div className="flex items-center justify-center py-6 text-slate-500 dark:text-d-muted">
                                             <FiRefreshCw className="animate-spin mr-2" /> Loading bills...
                                         </div>
-                                    ) : customerBills.length === 0 ? (
-                                        <p className="text-sm text-slate-500 dark:text-d-muted py-4 text-center">No completed bills found for this customer</p>
-                                    ) : (
-                                        <div>
-                                            <p className="text-xs text-slate-500 dark:text-d-muted mb-2">Select a bill to process return:</p>
-                                            <div className="space-y-2 max-h-60 overflow-y-auto">
-                                                {customerBills.map((bill) => {
-                                                    const itemNames = bill.items?.map(i => i.name).join(', ') || '';
-                                                    const isSelected = linkedBill?._id === bill._id;
+                                    ) : linkedBill ? (
+                                        /* Collapsed: selected bill chip + item picker */
+                                        <div className="space-y-3">
+                                            <div className="flex items-center justify-between px-4 py-2.5 bg-[rgba(255,210,100,0.08)] border border-d-accent/30 rounded-xl">
+                                                <div className="flex items-center gap-2">
+                                                    <FiCheck size={14} className="text-d-accent" />
+                                                    <span className="font-semibold text-slate-800 dark:text-d-heading text-sm">
+                                                        Bill #{linkedBill.billNumber}
+                                                    </span>
+                                                    <span className="text-xs text-slate-500 dark:text-d-muted">
+                                                        · {formatCurrency(linkedBill.totalBill)}
+                                                    </span>
+                                                </div>
+                                                <button
+                                                    onClick={() => { setLinkedBill(null); setReturnItems([]); }}
+                                                    className="text-xs text-slate-400 dark:text-d-faint hover:text-slate-600 dark:hover:text-d-text transition-colors"
+                                                >
+                                                    Change
+                                                </button>
+                                            </div>
+
+                                            {linkedBill.hasReturns && (
+                                                <p className="text-xs text-d-accent flex items-center gap-1">
+                                                    <FiAlertCircle size={12} /> Has previous returns
+                                                </p>
+                                            )}
+
+                                            <div className="flex flex-wrap gap-2">
+                                                {linkedBill.items?.map((item, index) => {
+                                                    const remaining = item.remainingQty !== undefined ? item.remainingQty : item.qty;
+                                                    const isFullyReturned = remaining <= 0;
                                                     return (
                                                         <button
-                                                            key={bill._id}
-                                                            onClick={() => selectBillFromCustomer(bill)}
-                                                            className={`w-full text-left px-4 py-3 rounded-xl border transition-all ${
-                                                                isSelected
-                                                                    ? 'border-d-accent bg-[rgba(255,210,100,0.08)]'
-                                                                    : 'border-slate-200 dark:border-d-border hover:border-d-border-hover bg-slate-50 dark:bg-d-bg'
+                                                            key={index}
+                                                            onClick={() => addItemFromBill(item)}
+                                                            disabled={isFullyReturned}
+                                                            className={`px-3 py-2 rounded-xl text-sm transition-all ${
+                                                                isFullyReturned
+                                                                    ? 'bg-[rgba(255,255,255,0.02)] text-d-faint cursor-not-allowed border border-transparent'
+                                                                    : 'bg-d-glass text-slate-700 dark:text-d-text hover:bg-[rgba(255,210,100,0.1)] hover:border-d-accent/40 border border-slate-200 dark:border-d-border'
                                                             }`}
                                                         >
-                                                            <div className="flex items-center justify-between mb-1">
-                                                                <span className="font-semibold text-slate-800 dark:text-d-heading text-sm">
-                                                                    Bill #{bill.billNumber}
-                                                                    {isSelected && <FiCheck className="inline ml-2 text-d-accent" size={14} />}
-                                                                </span>
-                                                                <span className="text-xs text-slate-500 dark:text-d-muted">
-                                                                    {new Date(bill.createdAt).toLocaleDateString()}
-                                                                </span>
-                                                            </div>
-                                                            <div className="flex items-center justify-between">
-                                                                <span className="text-xs text-slate-500 dark:text-d-muted truncate max-w-[200px]">{itemNames}</span>
-                                                                <span className="text-xs font-medium text-slate-700 dark:text-d-text">{formatCurrency(bill.total)}</span>
-                                                            </div>
-                                                            {bill.returnStatus !== 'none' && (
-                                                                <span className="text-xs text-d-accent mt-1 inline-block">Has previous returns</span>
-                                                            )}
+                                                            <span className="font-medium">{item.name}</span>
+                                                            <span className="text-xs ml-1.5 text-slate-400 dark:text-d-faint">
+                                                                {isFullyReturned ? '(returned)' : `×${remaining}`}
+                                                            </span>
                                                         </button>
                                                     );
                                                 })}
                                             </div>
+                                        </div>
+                                    ) : customerBills.length === 0 ? (
+                                        <p className="text-sm text-slate-500 dark:text-d-muted py-4 text-center">No completed bills found</p>
+                                    ) : (
+                                        /* Expanded: full bill list */
+                                        <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
+                                            <p className="text-xs text-slate-500 dark:text-d-muted mb-1">Select a bill:</p>
+                                            {customerBills.map((bill) => (
+                                                <button
+                                                    key={bill._id}
+                                                    onClick={() => selectBillFromCustomer(bill)}
+                                                    className="w-full text-left px-4 py-3 rounded-xl border border-slate-200 dark:border-d-border hover:border-d-accent/50 hover:bg-[rgba(255,210,100,0.05)] bg-slate-50 dark:bg-d-bg transition-all"
+                                                >
+                                                    <div className="flex items-center justify-between">
+                                                        <span className="font-semibold text-slate-800 dark:text-d-heading text-sm">
+                                                            Bill #{bill.billNumber}
+                                                        </span>
+                                                        <span className="text-sm font-medium text-slate-700 dark:text-d-text">{formatCurrency(bill.total)}</span>
+                                                    </div>
+                                                    <div className="flex items-center justify-between mt-0.5">
+                                                        <span className="text-xs text-slate-400 dark:text-d-faint truncate max-w-[220px]">
+                                                            {bill.items?.map(i => i.name).join(', ')}
+                                                        </span>
+                                                        <span className="text-xs text-slate-400 dark:text-d-faint ml-2 shrink-0">
+                                                            {new Date(bill.createdAt).toLocaleDateString()}
+                                                        </span>
+                                                    </div>
+                                                    {bill.returnStatus !== 'none' && (
+                                                        <span className="text-xs text-d-accent mt-1 inline-block">Has returns</span>
+                                                    )}
+                                                </button>
+                                            ))}
                                         </div>
                                     )}
                                 </div>
@@ -574,13 +669,13 @@ const Returns = () => {
                                     )}
                                 </div>
                             )}
-                        </div>
+                        </div>}
 
                         {/* Bill Lookup Section */}
-                        <div className="bg-white dark:bg-d-card rounded-2xl border border-slate-200 dark:border-d-border p-6">
+                        {searchMode === 'bill' && <div className="bg-white dark:bg-d-card rounded-2xl border border-slate-200 dark:border-d-border p-6">
                             <h3 className="text-lg font-semibold text-slate-800 dark:text-d-heading mb-4 flex items-center gap-2">
                                 <FiFileText className="text-d-accent" />
-                                {selectedCustomer ? 'Or Enter Bill Number' : 'Link to Original Bill (Optional)'}
+                                Link to Bill
                             </h3>
                             <div className="flex gap-3">
                                 <div className="relative flex-1">
@@ -649,13 +744,13 @@ const Returns = () => {
                                     </div>
                                 </div>
                             )}
-                        </div>
+                        </div>}
 
-                        {/* Barcode Input Section */}
-                        <div className="bg-white dark:bg-d-card rounded-2xl border border-slate-200 dark:border-d-border p-6">
+                        {/* Product Search Section */}
+                        {searchMode === 'product' && <div className="bg-white dark:bg-d-card rounded-2xl border border-slate-200 dark:border-d-border p-6">
                             <h3 className="text-lg font-semibold text-slate-800 dark:text-d-heading mb-4 flex items-center gap-2">
                                 <FiPackage className="text-d-accent" />
-                                Search Product
+                                Search & Add Products
                             </h3>
                             <form onSubmit={handleBarcodeSubmit} className="flex gap-3">
                                 <div className="relative flex-1" ref={productDropdownRef}>
@@ -695,7 +790,7 @@ const Returns = () => {
                                     Add
                                 </button>
                             </form>
-                        </div>
+                        </div>}
 
                         {/* Return Items List */}
                         {returnItems.length > 0 && (
@@ -703,76 +798,51 @@ const Returns = () => {
                                 <h3 className="text-lg font-semibold text-slate-800 dark:text-d-heading mb-4">
                                     Return Items ({totalItems})
                                 </h3>
-                                <div className="space-y-4">
+                                <div className="space-y-2">
                                     {returnItems.map((item) => (
                                         <div
                                             key={item.id}
-                                            className="bg-[rgba(255,255,255,0.02)] rounded-xl p-4 border border-[rgba(255,255,255,0.05)]"
+                                            className="flex items-center gap-3 px-4 py-3 bg-slate-50 dark:bg-d-bg rounded-xl border border-slate-200 dark:border-d-border"
                                         >
-                                            <div className="flex items-center justify-between mb-3">
-                                                <div className="flex items-center gap-3">
-                                                    <div className="w-10 h-10 bg-[rgba(255,107,107,0.1)] rounded-xl flex items-center justify-center">
-                                                        <FiRotateCcw className="text-d-red" size={18} />
-                                                    </div>
-                                                    <div>
-                                                        <p className="font-medium text-slate-800 dark:text-d-heading">{item.name}</p>
-                                                        <p className="text-sm text-slate-500 dark:text-d-muted">
-                                                            {formatCurrency(item.price)} each
-                                                            {item.fromBill && (
-                                                                <span className="ml-2 text-d-accent text-xs">(From Bill)</span>
-                                                            )}
-                                                        </p>
-                                                    </div>
-                                                </div>
-                                                <div className="flex items-center gap-3">
-                                                    {/* Quantity Controls */}
-                                                    <div className="flex items-center bg-slate-50 dark:bg-d-bg rounded-xl border border-slate-200 dark:border-d-border">
-                                                        <button
-                                                            onClick={() => updateQuantity(item.id, -1)}
-                                                            className="p-2 hover:bg-[rgba(255,107,107,0.1)] rounded-l-xl transition-colors text-d-red"
-                                                        >
-                                                            <FiMinus size={16} />
-                                                        </button>
-                                                        <span className="px-4 py-2 font-semibold text-slate-700 dark:text-d-text min-w-[40px] text-center">
-                                                            {item.quantity}
-                                                        </span>
-                                                        <button
-                                                            onClick={() => updateQuantity(item.id, 1)}
-                                                            className="p-2 hover:bg-[rgba(52,232,161,0.1)] rounded-r-xl transition-colors text-d-green"
-                                                        >
-                                                            <FiPlus size={16} />
-                                                        </button>
-                                                    </div>
-                                                    {/* Subtotal */}
-                                                    <span className="font-semibold text-d-red min-w-[100px] text-right font-display">
-                                                        {formatCurrency(item.price * item.quantity)}
-                                                    </span>
-                                                    {/* Remove */}
-                                                    <button
-                                                        onClick={() => removeItem(item.id)}
-                                                        className="p-2 text-slate-500 dark:text-d-muted hover:text-d-red hover:bg-[rgba(255,107,107,0.1)] rounded-xl transition-colors"
-                                                    >
-                                                        <FiTrash2 size={18} />
-                                                    </button>
-                                                </div>
+                                            {/* Name + meta */}
+                                            <div className="flex-1 min-w-0">
+                                                <p className="font-semibold text-slate-800 dark:text-d-heading text-sm truncate">{item.name}</p>
+                                                <p className="text-xs text-slate-400 dark:text-d-faint">{formatCurrency(item.price)} each</p>
                                             </div>
-                                            {/* Reason Selector */}
-                                            <div className="flex items-center gap-2 flex-wrap">
-                                                <span className="text-sm text-slate-500 dark:text-d-muted">Reason:</span>
-                                                {RETURN_REASONS.map((reason) => (
-                                                    <button
-                                                        key={reason.value}
-                                                        onClick={() => updateReason(item.id, reason.value)}
-                                                        className={`px-3 py-1.5 rounded-lg text-sm transition-all ${
-                                                            item.reason === reason.value
-                                                                ? 'bg-d-accent text-d-card font-medium'
-                                                                : 'bg-d-glass text-slate-500 dark:text-d-muted hover:bg-d-glass-hover border border-slate-200 dark:border-d-border'
-                                                        }`}
-                                                    >
-                                                        {reason.label}
-                                                    </button>
+
+                                            {/* Reason */}
+                                            <select
+                                                value={item.reason}
+                                                onChange={(e) => updateReason(item.id, e.target.value)}
+                                                className="px-2 py-1.5 bg-white dark:bg-d-card border border-slate-200 dark:border-d-border rounded-lg text-xs text-slate-600 dark:text-d-text focus:outline-none focus:ring-1 focus:ring-primary-500 shrink-0"
+                                            >
+                                                {RETURN_REASONS.map((r) => (
+                                                    <option key={r.value} value={r.value}>{r.label}</option>
                                                 ))}
+                                            </select>
+
+                                            {/* Qty controls */}
+                                            <div className="flex items-center bg-white dark:bg-d-card rounded-lg border border-slate-200 dark:border-d-border shrink-0">
+                                                <button onClick={() => updateQuantity(item.id, -1)} className="px-2 py-1.5 hover:bg-[rgba(255,107,107,0.1)] rounded-l-lg transition-colors text-d-red">
+                                                    <FiMinus size={13} />
+                                                </button>
+                                                <span className="px-3 py-1.5 text-sm font-bold text-slate-700 dark:text-d-text min-w-[28px] text-center">
+                                                    {item.quantity}
+                                                </span>
+                                                <button onClick={() => updateQuantity(item.id, 1)} className="px-2 py-1.5 hover:bg-[rgba(52,232,161,0.1)] rounded-r-lg transition-colors text-d-green">
+                                                    <FiPlus size={13} />
+                                                </button>
                                             </div>
+
+                                            {/* Subtotal */}
+                                            <span className="font-bold text-d-red text-sm w-24 text-right shrink-0">
+                                                {formatCurrency(item.price * item.quantity)}
+                                            </span>
+
+                                            {/* Remove */}
+                                            <button onClick={() => removeItem(item.id)} className="p-1.5 text-slate-400 dark:text-d-faint hover:text-d-red hover:bg-[rgba(255,107,107,0.1)] rounded-lg transition-colors shrink-0">
+                                                <FiTrash2 size={15} />
+                                            </button>
                                         </div>
                                     ))}
                                 </div>
@@ -817,6 +887,20 @@ const Returns = () => {
                                     <h3 className="text-lg font-semibold text-slate-800 dark:text-d-heading mb-4">
                                         Refund Method
                                     </h3>
+                                    {refundMethod === 'cash' && cashBalance != null && (
+                                        <div className={`flex items-center justify-between p-3 rounded-xl border mb-3 ${
+                                            totalRefund > cashBalance
+                                                ? 'bg-red-50 dark:bg-[rgba(239,68,68,0.08)] border-red-200 dark:border-[rgba(239,68,68,0.2)]'
+                                                : 'bg-slate-50 dark:bg-d-bg border-slate-200 dark:border-d-border'
+                                        }`}>
+                                            <span className="text-xs font-medium text-slate-500 dark:text-d-muted">Cash in Hand</span>
+                                            <span className={`text-sm font-bold ${
+                                                totalRefund > cashBalance
+                                                    ? 'text-red-600 dark:text-d-red'
+                                                    : 'text-slate-800 dark:text-d-heading'
+                                            }`}>{cashBalance < 0 ? '-' : ''}{formatCurrency(Math.abs(cashBalance))}</span>
+                                        </div>
+                                    )}
                                     <div className="space-y-3">
                                         {REFUND_METHODS.map((method) => (
                                             <button
@@ -928,10 +1012,27 @@ const Returns = () => {
                                     <span className="text-slate-500 dark:text-d-muted">Items Returned</span>
                                     <span className="font-semibold text-slate-700 dark:text-d-text">{returnResult.totalItems}</span>
                                 </div>
-                                <div className="flex justify-between py-2 border-b border-slate-200 dark:border-d-border">
-                                    <span className="text-slate-500 dark:text-d-muted">Refund Amount</span>
-                                    <span className="font-semibold text-d-red">{formatCurrency(returnResult.refundAmount)}</span>
-                                </div>
+                                {returnResult.debtCancelled > 0 ? (
+                                    <>
+                                        <div className="flex justify-between py-2 border-b border-slate-200 dark:border-d-border">
+                                            <span className="text-slate-500 dark:text-d-muted">Items Value</span>
+                                            <span className="font-semibold text-slate-700 dark:text-d-text">{formatCurrency(returnResult.refundAmount)}</span>
+                                        </div>
+                                        <div className="flex justify-between py-2 border-b border-slate-200 dark:border-d-border">
+                                            <span className="text-slate-500 dark:text-d-muted">Cash to Refund</span>
+                                            <span className="font-semibold text-d-red">{formatCurrency(returnResult.cashRefundAmount)}</span>
+                                        </div>
+                                        <div className="flex justify-between py-2 border-b border-slate-200 dark:border-d-border">
+                                            <span className="text-slate-400 dark:text-d-faint text-sm">Debt Written Off</span>
+                                            <span className="text-sm text-slate-500 dark:text-d-muted">{formatCurrency(returnResult.debtCancelled)}</span>
+                                        </div>
+                                    </>
+                                ) : (
+                                    <div className="flex justify-between py-2 border-b border-slate-200 dark:border-d-border">
+                                        <span className="text-slate-500 dark:text-d-muted">Cash to Refund</span>
+                                        <span className="font-semibold text-d-red">{formatCurrency(returnResult.cashRefundAmount ?? returnResult.refundAmount)}</span>
+                                    </div>
+                                )}
                                 <div className="flex justify-between py-2">
                                     <span className="text-slate-500 dark:text-d-muted">Refund Method</span>
                                     <span className="font-semibold text-slate-700 dark:text-d-text uppercase">{(returnResult.refundMethod || refundMethod).replace('_', ' ')}</span>

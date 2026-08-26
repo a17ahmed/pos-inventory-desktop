@@ -788,8 +788,21 @@ const CustomerLedger = () => {
                                                     <td className="py-3 px-4 text-right font-medium text-red-600 dark:text-d-red whitespace-nowrap">
                                                         {entry.debit > 0 ? formatCurrency(entry.debit) : '—'}
                                                     </td>
-                                                    <td className="py-3 px-4 text-right font-medium text-emerald-600 dark:text-d-green whitespace-nowrap">
-                                                        {entry.credit > 0 ? formatCurrency(entry.credit) : '—'}
+                                                    <td className="py-3 px-4 text-right whitespace-nowrap">
+                                                        {entry.type === 'return' && (entry.debtWriteOff > 0 || entry.storeCredit != null) ? (
+                                                            <div className="flex flex-col items-end gap-0.5">
+                                                                {entry.storeCredit > 0 && (
+                                                                    <span className="font-medium text-emerald-600 dark:text-d-green">{formatCurrency(entry.storeCredit)}</span>
+                                                                )}
+                                                                {entry.debtWriteOff > 0 && (
+                                                                    <span className="text-xs text-slate-400 dark:text-d-faint">{formatCurrency(entry.debtWriteOff)} cancelled</span>
+                                                                )}
+                                                            </div>
+                                                        ) : (
+                                                            <span className="font-medium text-emerald-600 dark:text-d-green">
+                                                                {entry.credit > 0 ? formatCurrency(entry.credit) : '—'}
+                                                            </span>
+                                                        )}
                                                     </td>
                                                     <td className={`py-3 px-4 text-right font-bold whitespace-nowrap ${(entry.balance || 0) < 0 ? 'text-emerald-600 dark:text-d-green' : 'text-slate-800 dark:text-d-heading'}`}>
                                                         {(entry.balance || 0) < 0 ? 'Cr ' : ''}{formatCurrency(entry.balance || 0)}
@@ -966,19 +979,38 @@ const CustomerLedger = () => {
                                                                     <ul className="px-5 py-3 text-sm text-slate-700 dark:text-d-text space-y-1.5">
                                                                         {entry.returnItems.map((it, i) => (
                                                                             <li key={i} className="flex justify-between">
-                                                                                <span>{it.name} <span className="text-slate-400 dark:text-d-faint">× {it.qty}</span></span>
+                                                                                <span>{it.name} <span className="text-slate-400 dark:text-d-faint">× {it.qty ?? it.quantity ?? 1}</span></span>
                                                                                 <span className="font-medium text-red-600 dark:text-d-red tabular-nums">
-                                                                                    {formatCurrency(it.refundAmount || (it.price * it.qty))}
+                                                                                    {formatCurrency(it.refundAmount || (it.price * (it.qty ?? it.quantity ?? 1)))}
                                                                                 </span>
                                                                             </li>
                                                                         ))}
                                                                     </ul>
+                                                                    {entry.debtWriteOff > 0 && (
+                                                                        <div className="px-5 py-3 border-t border-slate-100 dark:border-d-border space-y-1.5 text-sm">
+                                                                            <div className="flex justify-between text-slate-500 dark:text-d-muted">
+                                                                                <span>Items returned value</span>
+                                                                                <span className="tabular-nums">{formatCurrency(entry.credit)}</span>
+                                                                            </div>
+                                                                            <div className="border-t border-dashed border-slate-200 dark:border-d-border my-1" />
+                                                                            <div className="flex justify-between text-slate-400 dark:text-d-faint text-xs">
+                                                                                <span>Outstanding cancelled</span>
+                                                                                <span className="tabular-nums">{formatCurrency(entry.debtWriteOff)}</span>
+                                                                            </div>
+                                                                            <div className="flex justify-between font-semibold text-emerald-600 dark:text-d-green">
+                                                                                <span>Store credit issued</span>
+                                                                                <span className="tabular-nums">{formatCurrency(entry.storeCredit || 0)}</span>
+                                                                            </div>
+                                                                        </div>
+                                                                    )}
                                                                 </div>
                                                             )}
                                                             {entry.notes && (
-                                                                <div className="mt-3 px-4 py-2.5 bg-blue-50 dark:bg-[rgba(59,130,246,0.08)] border-l-2 border-blue-400 dark:border-blue-500 rounded-r-lg">
-                                                                    <div className="text-[10px] font-semibold uppercase tracking-wide text-blue-600 dark:text-blue-400 mb-0.5">Note</div>
-                                                                    <div className="text-xs text-slate-700 dark:text-d-text italic">{entry.notes}</div>
+                                                                <div className="mt-3 flex items-center gap-2 text-xs text-slate-500 dark:text-d-muted">
+                                                                    <span className="font-medium">{entry.type === 'return' ? 'Reason:' : 'Note:'}</span>
+                                                                    <span className="text-slate-700 dark:text-d-text">
+                                                                        {entry.notes.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}
+                                                                    </span>
                                                                 </div>
                                                             )}
                                                         </td>
@@ -995,8 +1027,18 @@ const CustomerLedger = () => {
                                         <td className="py-3 px-4 text-right font-bold text-red-600 dark:text-d-red">
                                             {formatCurrency(filteredEntries.reduce((s, e) => s + (e.debit || 0), 0))}
                                         </td>
-                                        <td className="py-3 px-4 text-right font-bold text-emerald-600 dark:text-d-green">
-                                            {formatCurrency(filteredEntries.reduce((s, e) => s + (e.credit || 0), 0))}
+                                        <td className="py-3 px-4 text-right">
+                                            <div className="font-bold text-emerald-600 dark:text-d-green">
+                                                {formatCurrency(filteredEntries.reduce((s, e) => s + (e.credit || 0), 0))}
+                                            </div>
+                                            {(() => {
+                                                const totalDebtCancelled = filteredEntries.reduce((s, e) => s + (e.debtWriteOff || 0), 0);
+                                                return totalDebtCancelled > 0 ? (
+                                                    <div className="text-[10px] text-slate-400 dark:text-d-faint mt-0.5">
+                                                        incl. {formatCurrency(totalDebtCancelled)} cancelled
+                                                    </div>
+                                                ) : null;
+                                            })()}
                                         </td>
                                         <td className={`py-3 px-4 text-right font-bold ${(summary.currentBalance || 0) < 0 ? 'text-emerald-600 dark:text-d-green' : 'text-slate-800 dark:text-d-heading'}`}>
                                             {(summary.currentBalance || 0) < 0 ? 'Credit: ' : ''}{formatCurrency(summary.currentBalance || 0)}

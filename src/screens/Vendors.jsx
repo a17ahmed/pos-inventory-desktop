@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import { useBusiness } from '../context/BusinessContext';
 import { getVendors, createVendor, updateVendor, deleteVendor } from '../services/api/vendors';
 import { getSupplies, getSupplyStats, createSupply, updateSupply, deleteSupply, paySupply } from '../services/api/supplies';
+import { getCashBalance } from '../services/api/cashbook';
 import { getProducts } from '../services/api/products';
 import ProductFormModal from '../components/ProductFormModal';
 import {
@@ -94,6 +95,7 @@ const Vendors = () => {
 
     // ── Supply modal ─────────────────────────────────────────────────────────
     const [showSupplyModal, setShowSupplyModal] = useState(false);
+    const [supplyCashBalance, setCashBalance] = useState(null);
     const [editingSupply, setEditingSupply] = useState(null);
     const [supplyForm, setSupplyForm] = useState(defaultSupplyForm());
     const [supplyItems, setSupplyItems] = useState([defaultItem()]);
@@ -260,6 +262,7 @@ const Vendors = () => {
             setSupplyItems([defaultItem()]);
         }
         setReceiptFile(null);
+        getCashBalance().then(res => setCashBalance(res.data?.balance ?? null)).catch(() => setCashBalance(null));
         setShowSupplyModal(true);
         // Refresh products in case new ones were added
         fetchProducts();
@@ -338,6 +341,12 @@ const Vendors = () => {
         const paid = Number(supplyForm.paidAmount) || 0;
         if (paid > itemsTotal) {
             alert(`Paid amount (${paid}) cannot exceed items total (${itemsTotal}).`);
+            return;
+        }
+
+        // Validate: cannot pay more cash than available
+        if (paid > 0 && supplyCashBalance != null && paid > supplyCashBalance) {
+            alert(`Insufficient cash. Available balance: ${formatCurrency(supplyCashBalance)}`);
             return;
         }
 
@@ -1157,9 +1166,20 @@ const Vendors = () => {
                                     />
                                 </div>
                                 <div>
-                                    <label className="block text-sm font-medium text-slate-700 dark:text-d-text mb-1">
-                                        Paid Amount
-                                    </label>
+                                    <div className="flex items-center justify-between mb-1">
+                                        <label className="block text-sm font-medium text-slate-700 dark:text-d-text">
+                                            Paid Amount
+                                        </label>
+                                        {supplyCashBalance != null && (
+                                            <span className={`text-xs font-medium ${
+                                                (Number(supplyForm.paidAmount) || 0) > supplyCashBalance
+                                                    ? 'text-red-500 dark:text-d-red'
+                                                    : 'text-slate-400 dark:text-d-faint'
+                                            }`}>
+                                                Cash: {supplyCashBalance < 0 ? '-' : ''}{formatCurrency(Math.abs(supplyCashBalance))}
+                                            </span>
+                                        )}
+                                    </div>
                                     <input
                                         type="number"
                                         min="0"
@@ -1169,7 +1189,11 @@ const Vendors = () => {
                                             setSupplyForm({ ...supplyForm, paidAmount: e.target.value })
                                         }
                                         placeholder="0"
-                                        className="w-full px-4 py-2 bg-white dark:bg-d-bg border border-slate-200 dark:border-d-border rounded-xl focus:ring-2 focus:ring-primary-500 dark:focus:border-d-border-hover focus:outline-none text-slate-800 dark:text-d-text placeholder-slate-400 dark:placeholder-d-faint"
+                                        className={`w-full px-4 py-2 bg-white dark:bg-d-bg border rounded-xl focus:ring-2 focus:ring-primary-500 dark:focus:border-d-border-hover focus:outline-none text-slate-800 dark:text-d-text placeholder-slate-400 dark:placeholder-d-faint ${
+                                            (Number(supplyForm.paidAmount) || 0) > supplyCashBalance && supplyCashBalance != null
+                                                ? 'border-red-400 dark:border-red-500'
+                                                : 'border-slate-200 dark:border-d-border'
+                                        }`}
                                     />
                                 </div>
                             </div>

@@ -61,8 +61,10 @@ const CashBook = () => {
     const [modalError, setModalError] = useState('');
 
     const currency = business?.currency || 'Rs.';
-    const formatCurrency = (amt) =>
-        `${currency} ${Math.abs(amt || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
+    const formatCurrency = (amt) => {
+        const v = amt || 0;
+        return `${v < 0 ? '-' : ''}${currency} ${Math.abs(v).toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
+    };
 
     // =========================================================================
     // Data fetching
@@ -184,6 +186,11 @@ const CashBook = () => {
         const amount = parseFloat(modalForm.amount);
         if (!amount || amount <= 0) {
             setModalError('Enter a valid amount');
+            return;
+        }
+
+        if (showModal === 'withdraw' && amount > balance) {
+            setModalError(`Insufficient cash. Available balance: ${formatCurrency(balance)}`);
             return;
         }
 
@@ -453,7 +460,7 @@ const CashBook = () => {
                                                 <td colSpan={2} className="px-4 py-2.5 text-right text-xs text-slate-500 dark:text-d-muted font-medium">
                                                     Opening Balance
                                                 </td>
-                                                <td className="px-4 py-2.5 text-right font-semibold text-slate-700 dark:text-d-heading text-sm">
+                                                <td className={`px-4 py-2.5 text-right font-semibold text-sm ${group.openingBalance < 0 ? 'text-d-red' : 'text-slate-700 dark:text-d-heading'}`}>
                                                     {formatCurrency(group.openingBalance)}
                                                 </td>
                                             </tr>
@@ -490,7 +497,7 @@ const CashBook = () => {
                                                         <td className="px-4 py-3 text-right font-medium text-d-red">
                                                             {entry.direction === 'out' ? formatCurrency(entry.amount) : ''}
                                                         </td>
-                                                        <td className="px-4 py-3 text-right font-bold text-slate-800 dark:text-d-heading">
+                                                        <td className={`px-4 py-3 text-right font-bold ${entry.runningBalance < 0 ? 'text-d-red' : 'text-slate-800 dark:text-d-heading'}`}>
                                                             {formatCurrency(entry.runningBalance)}
                                                         </td>
                                                     </tr>
@@ -503,7 +510,7 @@ const CashBook = () => {
                                                 <td colSpan={2} className="px-4 py-2.5 text-right text-xs font-semibold text-slate-600 dark:text-d-text">
                                                     Closing Balance
                                                 </td>
-                                                <td className="px-4 py-2.5 text-right font-bold text-slate-800 dark:text-d-heading text-sm">
+                                                <td className={`px-4 py-2.5 text-right font-bold text-sm ${group.closingBalance < 0 ? 'text-d-red' : 'text-slate-800 dark:text-d-heading'}`}>
                                                     {formatCurrency(group.closingBalance)}
                                                 </td>
                                             </tr>

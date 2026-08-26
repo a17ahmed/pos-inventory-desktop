@@ -311,8 +311,15 @@ const Closing = () => {
                         data={preview}
                         tenderEditors={
                             canCreate
-                                ? {
-                                    cash: (
+                                ? (() => {
+                                    const cashExpected = preview?.tenderReconciliation?.cash?.expected ?? 0;
+                                    const cashNegative = cashExpected < 0;
+                                    return {
+                                    cash: cashNegative ? (
+                                        <div className="w-full px-3 py-2 bg-red-50 dark:bg-[rgba(255,107,107,0.08)] border border-red-200 dark:border-[rgba(255,107,107,0.2)] rounded-lg text-xs text-red-600 dark:text-d-red font-medium">
+                                            Reconcile cash first — expected is negative
+                                        </div>
+                                    ) : (
                                         <input
                                             type="number"
                                             step="0.01"
@@ -342,7 +349,7 @@ const Closing = () => {
                                             className="w-full px-2 py-1 bg-slate-50 dark:bg-d-bg border border-slate-200 dark:border-d-border rounded-lg text-base font-bold text-slate-800 dark:text-d-heading focus:outline-none focus:ring-2 focus:ring-primary-500"
                                         />
                                     ),
-                                }
+                                }; })()
                                 : null
                         }
                     />

@@ -864,8 +864,14 @@ const Receipts = () => {
                                                 ))}
                                                 <div className="flex justify-between text-sm font-semibold mt-2 pt-2 border-t border-red-200 dark:border-red-500/20">
                                                     <span className="text-red-700 dark:text-d-red">Refund ({ret.refundMethod?.replace('_', ' ') || 'cash'})</span>
-                                                    <span className="text-red-700 dark:text-d-red">-{formatCurrency(ret.refundAmount)}</span>
+                                                    <span className="text-red-700 dark:text-d-red">-{formatCurrency(ret.cashRefundAmount ?? ret.refundAmount)}</span>
                                                 </div>
+                                                {(ret.debtCancelled > 0) && (
+                                                    <div className="flex justify-between text-xs mt-1 text-slate-500 dark:text-d-muted">
+                                                        <span>Outstanding balance cancelled</span>
+                                                        <span>{formatCurrency(ret.debtCancelled)}</span>
+                                                    </div>
+                                                )}
                                             </div>
                                         ))}
                                     </div>

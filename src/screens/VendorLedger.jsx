@@ -71,8 +71,10 @@ const VendorLedger = () => {
     const [paymentError, setPaymentError] = useState('');
 
     const currency = business?.currency || 'Rs.';
-    const formatCurrency = (amount) =>
-        `${currency} ${Math.abs(amount || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
+    const formatCurrency = (amount) => {
+        const v = amount || 0;
+        return `${v < 0 ? '-' : ''}${currency} ${Math.abs(v).toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
+    };
 
     // =========================================================================
     // Data
@@ -251,6 +253,11 @@ const VendorLedger = () => {
         const amount = parseFloat(paymentForm.amount);
         if (!amount || amount <= 0) {
             setPaymentError('Enter a valid amount');
+            return;
+        }
+
+        if (paymentForm.method === 'cash' && cashInHand != null && amount > cashInHand) {
+            setPaymentError(`Insufficient cash. Available: ${formatCurrency(cashInHand)}`);
             return;
         }
 

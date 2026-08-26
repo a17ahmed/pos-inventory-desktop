@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { todayLocalDate, toLocalDateStr } from '../utils/date';
 import { useBusiness } from '../context/BusinessContext';
 import { getExpenses, createExpense, updateExpense, deleteExpense, approveExpense, rejectExpense } from '../services/api/expenses';
+import { getCashBalance } from '../services/api/cashbook';
 import {
     FiPlus,
     FiSearch,
@@ -44,6 +45,7 @@ const Expenses = () => {
     const [rejectModal, setRejectModal] = useState({ show: false, expenseId: null, reason: '' });
     const [submitting, setSubmitting] = useState(false);
     const [rejecting, setRejecting] = useState(false);
+    const [cashBalance, setCashBalance] = useState(null);
     const [approvingId, setApprovingId] = useState(null);
     const [formData, setFormData] = useState({
         category: 'supplies',
@@ -111,6 +113,7 @@ const Expenses = () => {
                 notes: '',
             });
         }
+        getCashBalance().then(res => setCashBalance(res.data?.balance ?? null)).catch(() => setCashBalance(null));
         setShowModal(true);
     };
 
@@ -122,6 +125,9 @@ const Expenses = () => {
         }
         if (!formData.description?.trim()) {
             return alert('Please enter a description');
+        }
+        if (formData.paymentMethod === 'cash' && cashBalance != null && amount > cashBalance) {
+            return alert(`Insufficient cash. Available balance: ${formatCurrency(cashBalance)}`);
         }
         setSubmitting(true);
         try {
@@ -511,6 +517,21 @@ const Expenses = () => {
                                     </select>
                                 </div>
                             </div>
+
+                            {formData.paymentMethod === 'cash' && cashBalance != null && (
+                                <div className={`flex items-center justify-between p-3 rounded-xl border ${
+                                    (Number(formData.amount) || 0) > cashBalance
+                                        ? 'bg-red-50 dark:bg-[rgba(239,68,68,0.08)] border-red-200 dark:border-[rgba(239,68,68,0.2)]'
+                                        : 'bg-slate-50 dark:bg-d-bg border-slate-200 dark:border-d-border'
+                                }`}>
+                                    <span className="text-xs font-medium text-slate-500 dark:text-d-muted">Cash in Hand</span>
+                                    <span className={`text-sm font-bold ${
+                                        (Number(formData.amount) || 0) > cashBalance
+                                            ? 'text-red-600 dark:text-d-red'
+                                            : 'text-slate-800 dark:text-d-heading'
+                                    }`}>{formatCurrency(cashBalance)}</span>
+                                </div>
+                            )}
 
                             <div>
                                 <label className="block text-sm font-medium text-slate-700 dark:text-d-muted mb-1">
