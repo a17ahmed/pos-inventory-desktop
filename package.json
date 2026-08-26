@@ -2,6 +2,10 @@
   "name": "pos-desktop",
   "version": "1.2.0",
   "description": "POS Desktop Application for Windows and Mac",
+  "author": {
+    "name": "Ahmed Irfan",
+    "url": "https://github.com/a17ahmed"
+  },
   "main": "electron/main.js",
   "scripts": {
     "dev": "vite",
