@@ -3,14 +3,11 @@ import { toLocalDateStr } from '../utils/date';
 import { useNavigate } from 'react-router-dom';
 import { useBusiness } from '../context/BusinessContext';
 import { useAuth } from '../context/AuthContext';
-import { getProducts, getDeadStock, getLowStockProducts } from '../services/api/products';
+import { getProducts } from '../services/api/products';
 import { getReceiptStats, getTopProducts } from '../services/api/receipts';
-import { createBill, getSalesByProduct, getSalesByCashier, getPaymentMethodReport } from '../services/api/bills';
-import { getEmployees } from '../services/api/employees';
-import { getSupplyStats } from '../services/api/supplies';
+import { createBill } from '../services/api/bills';
 import { searchCustomers } from '../services/api/customers';
-import { getExpenses as getApprovedExpenses } from '../services/api/expenses';
-import { getCashBalance } from '../services/api/cashbook';
+import { getDashboardSummary } from '../services/api/dashboard';
 import { printReceipt as printReceiptUtil } from '../utils/printReceipt';
 import {
     FiTrendingUp,
@@ -1701,7 +1698,7 @@ const AdminDashboard = () => {
 
     // Employee & Payment data
     const [cashierData, setCashierData] = useState([]);
-    const [employeeList, setEmployeeList] = useState([]);
+    const [employeeCount, setEmployeeCount] = useState(0);
     const [paymentMethods, setPaymentMethods] = useState([]);
     const [supplyStats, setSupplyStats] = useState(null);
 
@@ -1711,18 +1708,21 @@ const AdminDashboard = () => {
         return () => clearInterval(timer);
     }, []);
 
-    // Fetch financial data on filter change
+    // Fetch dashboard data (single consolidated call) on mount and filter change.
+    // Insight sections (top products, dead stock, low stock, cash balance, employee
+    // count, supply stats) aren't time-filtered, so only populate them once —
+    // otherwise every filter click would flash-reload sections that never change.
+    const insightsLoadedRef = useRef(false);
     useEffect(() => {
-        fetchDashboardData();
+        const controller = new AbortController();
+        fetchDashboardData(controller.signal);
+        return () => controller.abort();
     }, [timeFilter]);
 
-    // Fetch product intelligence once on mount
-    useEffect(() => {
-        fetchInsights();
-    }, []);
-
-    const fetchDashboardData = async () => {
+    const fetchDashboardData = async (signal) => {
+        const includeInsights = !insightsLoadedRef.current;
         setLoading(true);
+        if (includeInsights) setInsightsLoading(true);
         try {
             const now = new Date();
             let startDate = new Date();
@@ -1732,21 +1732,11 @@ const AdminDashboard = () => {
                 case 'month': startDate = new Date(now.getFullYear(), now.getMonth(), 1); break;
             }
 
-            const dateParams = { startDate: startDate.toISOString(), endDate: now.toISOString() };
+            const { data } = await getDashboardSummary(timeFilter, { signal });
 
-            const [statsRes, expensesRes, salesByProdRes, cashierRes, payMethodRes] = await Promise.all([
-                getReceiptStats({ filter: timeFilter, chart: 'true' }),
-                getApprovedExpenses({ status: 'approved' }).catch(() => ({ data: [] })),
-                getSalesByProduct(dateParams).catch(() => ({ data: { products: [] } })),
-                getSalesByCashier(dateParams).catch(() => ({ data: { cashiers: [] } })),
-                getPaymentMethodReport(dateParams).catch(() => ({ data: { methods: [] } })),
-            ]);
+            const backendStats = data.stats || {};
 
-            const backendStats = statsRes.data;
-
-            const allExpenses = Array.isArray(expensesRes.data) ? expensesRes.data : expensesRes.data?.expenses || [];
-            const periodExpenses = allExpenses.filter(e => new Date(e.date || e.createdAt) >= startDate);
-            const expenses = periodExpenses.reduce((sum, e) => sum + (e.amount || 0), 0);
+            const expenses = (data.expenses || []).reduce((sum, e) => sum + (e.amount || 0), 0);
 
             const linkedReturns = backendStats.linkedReturns || 0;
             const standaloneRefunds = backendStats.standaloneRefunds || 0;
@@ -1758,14 +1748,14 @@ const AdminDashboard = () => {
             const profitMargin = netRevenue > 0 ? (netProfit / netRevenue) * 100 : 0;
 
             setStats({
-                totalSales: backendStats.grossRevenue,
-                totalOrders: backendStats.totalOrders,
-                avgOrderValue: backendStats.avgOrderValue,
-                growth: backendStats.growth
+                totalSales: backendStats.grossRevenue || 0,
+                totalOrders: backendStats.totalOrders || 0,
+                avgOrderValue: backendStats.avgOrderValue || 0,
+                growth: backendStats.growth || 0
             });
 
             setProfitLoss({
-                grossRevenue: backendStats.grossRevenue,
+                grossRevenue: backendStats.grossRevenue || 0,
                 returns,
                 linkedReturns,
                 standaloneRefunds,
@@ -1777,40 +1767,30 @@ const AdminDashboard = () => {
                 profitMargin
             });
 
-            setSalesByProductData(salesByProdRes.data?.products || []);
-            setCashierData(cashierRes.data?.cashiers || []);
-            setPaymentMethods(payMethodRes.data?.methods || payMethodRes.data || []);
+            setSalesByProductData(data.salesByProduct || []);
+            setCashierData(data.salesByCashier || []);
+            setPaymentMethods(data.paymentMethods || []);
             generateChartDataFromStats(backendStats.chartData || [], startDate, now, timeFilter);
-        } catch (error) {
-            console.error('Error fetching dashboard data:', error);
-        } finally {
-            setLoading(false);
-        }
-    };
 
-    const fetchInsights = async () => {
-        setInsightsLoading(true);
-        try {
-            const [topRes, deadRes, lowRes, cashRes, empRes, supplyStatsRes] = await Promise.all([
-                getTopProducts(10).catch(() => ({ data: [] })),
-                getDeadStock(30).catch(() => ({ data: { deadStock: [], summary: {} } })),
-                getLowStockProducts().catch(() => ({ data: [] })),
-                getCashBalance().catch(() => ({ data: { balance: 0 } })),
-                getEmployees().catch(() => ({ data: [] })),
-                getSupplyStats().catch(() => ({ data: null })),
-            ]);
-            setTopSellingProducts(Array.isArray(topRes.data) ? topRes.data : []);
-            setDeadStockData({
-                products: deadRes.data?.deadStock || [],
-                summary: deadRes.data?.summary || {},
-            });
-            setLowStockData(Array.isArray(lowRes.data) ? lowRes.data : []);
-            setCashInHand(cashRes.data?.balance ?? 0);
-            setEmployeeList(Array.isArray(empRes.data) ? empRes.data : empRes.data?.employees || []);
-            setSupplyStats(supplyStatsRes.data || null);
+            if (includeInsights) {
+                setTopSellingProducts(Array.isArray(data.topProducts) ? data.topProducts : []);
+                setDeadStockData({
+                    products: data.deadStock?.deadStock || [],
+                    summary: data.deadStock?.summary || {},
+                });
+                setLowStockData(Array.isArray(data.lowStock) ? data.lowStock : []);
+                setCashInHand(data.cashBalance?.balance ?? 0);
+                setEmployeeCount(data.employeeCount || 0);
+                setSupplyStats(data.supplyStats || null);
+                insightsLoadedRef.current = true;
+                setInsightsLoading(false);
+            }
+
+            setLoading(false);
         } catch (error) {
-            console.error('Error fetching insights:', error);
-        } finally {
+            if (error.code === 'ERR_CANCELED' || error.name === 'CanceledError') return;
+            console.error('Error fetching dashboard data:', error);
+            setLoading(false);
             setInsightsLoading(false);
         }
     };
@@ -2355,7 +2335,7 @@ const AdminDashboard = () => {
                                 {/* Employee count summary */}
                                 <div className="flex items-center gap-3 mt-2 pt-2 border-t border-slate-200 dark:border-[rgba(255,255,255,0.06)] px-3">
                                     <span className="text-[9px] uppercase tracking-wider text-slate-500 dark:text-d-faint font-bold">Total Employees</span>
-                                    <span className="font-bebas text-[14px] text-d-blue">{employeeList.length}</span>
+                                    <span className="font-bebas text-[14px] text-d-blue">{employeeCount}</span>
                                     <span className="text-[9px] text-slate-500 dark:text-d-faint mx-2">|</span>
                                     <span className="text-[9px] uppercase tracking-wider text-slate-500 dark:text-d-faint font-bold">Active Sellers</span>
                                     <span className="font-bebas text-[14px] text-d-green">{cashierData.length}</span>
@@ -2386,7 +2366,7 @@ const AdminDashboard = () => {
                                         const name = (m._id || m.method || 'Other').toLowerCase();
                                         const displayName = (m._id || m.method || 'Other');
                                         const amount = m.totalAmount || m.total || 0;
-                                        const count = m.count || m.billCount || 0;
+                                        const count = m.count || m.billCount || m.transactionCount || 0;
                                         const pct = totalAmount > 0 ? (amount / totalAmount) * 100 : 0;
                                         const color = colors[name] || '#5b9cf6';
                                         return (
