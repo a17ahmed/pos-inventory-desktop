@@ -57,7 +57,8 @@
       {
         "provider": "github",
         "owner": "a17ahmed",
-        "repo": "pos-inventory-desktop"
+        "repo": "pos-inventory-desktop",
+        "releaseType": "release"
       }
     ],
     "win": {
