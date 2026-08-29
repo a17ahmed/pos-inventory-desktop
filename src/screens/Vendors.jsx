@@ -7,6 +7,7 @@ import { getSupplies, getSupplyStats, createSupply, updateSupply, deleteSupply, 
 import { getCashBalance } from '../services/api/cashbook';
 import { getProducts } from '../services/api/products';
 import ProductFormModal from '../components/ProductFormModal';
+import { appAlert, appConfirm } from '../components/AppDialog';
 import {
     FiPlus,
     FiSearch,
@@ -333,20 +334,20 @@ const Vendors = () => {
         // Validate: every item must have a product picked
         const missingProduct = supplyItems.some((i) => !i.product);
         if (missingProduct) {
-            alert('Please select a product for every supply item.');
+            appAlert('Please select a product for every supply item.');
             return;
         }
 
         // Validate: paid amount cannot exceed total
         const paid = Number(supplyForm.paidAmount) || 0;
         if (paid > itemsTotal) {
-            alert(`Paid amount (${paid}) cannot exceed items total (${itemsTotal}).`);
+            appAlert(`Paid amount (${paid}) cannot exceed items total (${itemsTotal}).`);
             return;
         }
 
         // Validate: cannot pay more cash than available
         if (paid > 0 && supplyCashBalance != null && paid > supplyCashBalance) {
-            alert(`Insufficient cash. Available balance: ${formatCurrency(supplyCashBalance)}`);
+            appAlert(`Insufficient cash. Available balance: ${formatCurrency(supplyCashBalance)}`);
             return;
         }
 
@@ -383,20 +384,20 @@ const Vendors = () => {
             fetchSupplies();
         } catch (err) {
             console.error('Error saving supply:', err);
-            alert(err.response?.data?.message || 'Failed to save supply');
+            appAlert(err.response?.data?.message || 'Failed to save supply');
         } finally {
             setSubmitting(false);
         }
     };
 
     const handleDeleteSupply = async (id) => {
-        if (!window.confirm('Delete this supply record?')) return;
+        if (!(await appConfirm('Delete this supply record?', { danger: true }))) return;
         try {
             await deleteSupply(id);
             fetchSupplies();
         } catch (err) {
             console.error('Error deleting supply:', err);
-            alert('Failed to delete supply');
+            appAlert('Failed to delete supply');
         }
     };
 
@@ -423,7 +424,7 @@ const Vendors = () => {
             fetchSupplies();
         } catch (err) {
             console.error('Error recording payment:', err);
-            alert(err.response?.data?.message || 'Failed to record payment');
+            appAlert(err.response?.data?.message || 'Failed to record payment');
         } finally {
             setPaying(false);
         }
@@ -479,7 +480,7 @@ const Vendors = () => {
             }
         } catch (err) {
             console.error('Error saving vendor:', err);
-            alert(err.response?.data?.message || 'Failed to save vendor');
+            appAlert(err.response?.data?.message || 'Failed to save vendor');
         } finally {
             setVendorSubmitting(false);
         }
@@ -516,13 +517,13 @@ const Vendors = () => {
     };
 
     const handleDeleteVendor = async (id) => {
-        if (!window.confirm('Delete this vendor? This will not delete their supply records.')) return;
+        if (!(await appConfirm('Delete this vendor? This will not delete their supply records.', { danger: true }))) return;
         try {
             await deleteVendor(id);
             fetchVendors();
         } catch (err) {
             console.error('Error deleting vendor:', err);
-            alert('Failed to delete vendor');
+            appAlert('Failed to delete vendor');
         }
     };
 

@@ -3,6 +3,7 @@ import { todayLocalDate, toLocalDateStr } from '../utils/date';
 import { useBusiness } from '../context/BusinessContext';
 import { getEmployees, getEmployeePrefix, createEmployee, updateEmployee, deleteEmployee, reactivateEmployee } from '../services/api/employees';
 import { getEmployeeAccess, updateEmployeeAccess } from '../services/api/access';
+import { appAlert, appConfirm } from '../components/AppDialog';
 import {
     FiPlus,
     FiSearch,
@@ -226,7 +227,7 @@ const Employees = () => {
                 data.username = formData.name.toLowerCase().replace(/\s+/g, '');
                 data.requirePasswordChange = formData.requirePasswordChange;
                 if (!data.password) {
-                    alert('Password is required');
+                    appAlert('Password is required');
                     return;
                 }
             }
@@ -249,31 +250,31 @@ const Employees = () => {
             fetchEmployees();
         } catch (error) {
             console.error('Error saving employee:', error);
-            alert(error.response?.data?.message || 'Failed to save employee');
+            appAlert(error.response?.data?.message || 'Failed to save employee');
         } finally {
             setSubmitting(false);
         }
     };
 
     const handleDelete = async (employeeId) => {
-        if (!window.confirm('Are you sure you want to deactivate this employee? They will not be able to login.')) return;
+        if (!(await appConfirm('Are you sure you want to deactivate this employee? They will not be able to login.', { danger: true }))) return;
         try {
             await deleteEmployee(employeeId);
             fetchEmployees();
         } catch (error) {
             console.error('Error deactivating employee:', error);
-            alert(error.response?.data?.message || 'Failed to deactivate employee');
+            appAlert(error.response?.data?.message || 'Failed to deactivate employee');
         }
     };
 
     const handleReactivate = async (employeeId) => {
-        if (!window.confirm('Reactivate this employee? They will be able to login again.')) return;
+        if (!(await appConfirm('Reactivate this employee? They will be able to login again.', { danger: true }))) return;
         try {
             await reactivateEmployee(employeeId);
             fetchEmployees();
         } catch (error) {
             console.error('Error reactivating employee:', error);
-            alert(error.response?.data?.message || 'Failed to reactivate employee');
+            appAlert(error.response?.data?.message || 'Failed to reactivate employee');
         }
     };
 
@@ -318,7 +319,7 @@ const Employees = () => {
             setShowAccessModal(false);
         } catch (error) {
             console.error('Error saving access:', error);
-            alert('Failed to save permissions');
+            appAlert('Failed to save permissions');
         } finally {
             setSavingAccess(false);
         }

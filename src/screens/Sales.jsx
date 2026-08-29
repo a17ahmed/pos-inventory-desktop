@@ -18,6 +18,7 @@ import {
     FiPrinter,
 } from 'react-icons/fi';
 import { printReceipt } from '../utils/printReceipt';
+import { appAlert, appConfirm } from '../components/AppDialog';
 
 const Sales = () => {
     const { business } = useBusiness();
@@ -166,7 +167,7 @@ const Sales = () => {
 
         // Validate cash amount for cash payments
         if (paymentMethod === 'cash' && parseFloat(cashGiven || 0) < total) {
-            alert('Cash amount is less than the total bill');
+            appAlert('Cash amount is less than the total bill');
             return;
         }
 
@@ -250,13 +251,13 @@ const Sales = () => {
 
             // Handle duplicate payment (409)
             if (error.response?.status === 409 && error.response?.data?.alreadyPaid) {
-                alert(`Bill #${error.response.data.receipt?.billNumber} has already been paid`);
+                appAlert(`Bill #${error.response.data.receipt?.billNumber} has already been paid`);
                 setShowPaymentModal(false);
                 clearCart();
                 return;
             }
 
-            alert(error.response?.data?.message || 'Failed to create receipt');
+            appAlert(error.response?.data?.message || 'Failed to create receipt');
         } finally {
             setProcessing(false);
         }

@@ -4,6 +4,7 @@ import { FiMail, FiLock, FiEye, FiEyeOff, FiUser, FiUsers, FiUserPlus } from 're
 import { useAuth } from '../context/AuthContext';
 import { useBusiness } from '../context/BusinessContext';
 import { adminLogin, employeeLogin } from '../services/api/auth';
+import { appAlert } from '../components/AppDialog';
 
 const Login = () => {
     const navigate = useNavigate();
@@ -102,7 +103,7 @@ const Login = () => {
 
                 // Redirect to profile if password change required
                 if (response.data.requirePasswordChange) {
-                    alert('You must change your password before continuing.');
+                    appAlert('You must change your password before continuing.');
                     navigate('/profile', { replace: true });
                 } else {
                     navigate('/dashboard', { replace: true });

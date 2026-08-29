@@ -24,6 +24,7 @@ import {
     FiFileText,
     FiBookOpen,
 } from 'react-icons/fi';
+import { appAlert, appConfirm } from '../components/AppDialog';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -150,7 +151,7 @@ const Customers = () => {
     const handleSubmit = async (e) => {
         e.preventDefault();
         if (!form.name.trim() || !form.phone.trim()) {
-            alert('Name and phone are required');
+            appAlert('Name and phone are required');
             return;
         }
         setSubmitting(true);
@@ -179,7 +180,7 @@ const Customers = () => {
             fetchCustomers();
         } catch (err) {
             console.error('Error saving customer:', err);
-            alert(err.response?.data?.message || 'Failed to save customer');
+            appAlert(err.response?.data?.message || 'Failed to save customer');
         } finally {
             setSubmitting(false);
         }
@@ -187,18 +188,18 @@ const Customers = () => {
 
     const handleDelete = async (customer) => {
         if (customer.balance > 0) {
-            alert(
+            appAlert(
                 `Cannot delete customer with outstanding balance of ${formatCurrency(customer.balance)}`
             );
             return;
         }
-        if (!window.confirm(`Delete customer "${customer.name}"?`)) return;
+        if (!(await appConfirm(`Delete customer "${customer.name}"?`, { danger: true }))) return;
         try {
             await deleteCustomer(customer._id);
             fetchCustomers();
         } catch (err) {
             console.error('Error deleting customer:', err);
-            alert(err.response?.data?.message || 'Failed to delete customer');
+            appAlert(err.response?.data?.message || 'Failed to delete customer');
         }
     };
 

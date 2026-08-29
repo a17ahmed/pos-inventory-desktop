@@ -3,6 +3,7 @@ import { todayLocalDate, toLocalDateStr } from '../utils/date';
 import { useBusiness } from '../context/BusinessContext';
 import { getExpenses, createExpense, updateExpense, deleteExpense, approveExpense, rejectExpense } from '../services/api/expenses';
 import { getCashBalance } from '../services/api/cashbook';
+import { appAlert, appConfirm } from '../components/AppDialog';
 import {
     FiPlus,
     FiSearch,
@@ -121,13 +122,13 @@ const Expenses = () => {
         e.preventDefault();
         const amount = Number(formData.amount);
         if (!amount || amount <= 0) {
-            return alert('Please enter a valid amount');
+            return appAlert('Please enter a valid amount');
         }
         if (!formData.description?.trim()) {
-            return alert('Please enter a description');
+            return appAlert('Please enter a description');
         }
         if (formData.paymentMethod === 'cash' && cashBalance != null && amount > cashBalance) {
-            return alert(`Insufficient cash. Available balance: ${formatCurrency(cashBalance)}`);
+            return appAlert(`Insufficient cash. Available balance: ${formatCurrency(cashBalance)}`);
         }
         setSubmitting(true);
         try {
@@ -146,7 +147,7 @@ const Expenses = () => {
             fetchExpenses();
         } catch (error) {
             console.error('Error saving expense:', error);
-            alert(error.response?.data?.message || 'Failed to save expense');
+            appAlert(error.response?.data?.message || 'Failed to save expense');
         } finally {
             setSubmitting(false);
         }
@@ -159,7 +160,7 @@ const Expenses = () => {
             fetchExpenses();
         } catch (error) {
             console.error('Error approving expense:', error);
-            alert('Failed to approve expense');
+            appAlert('Failed to approve expense');
         } finally {
             setApprovingId(null);
         }
@@ -167,7 +168,7 @@ const Expenses = () => {
 
     const handleReject = async () => {
         if (!rejectModal.reason?.trim()) {
-            return alert('Please enter a rejection reason');
+            return appAlert('Please enter a rejection reason');
         }
         setRejecting(true);
         try {
@@ -176,21 +177,21 @@ const Expenses = () => {
             fetchExpenses();
         } catch (error) {
             console.error('Error rejecting expense:', error);
-            alert('Failed to reject expense');
+            appAlert('Failed to reject expense');
         } finally {
             setRejecting(false);
         }
     };
 
     const handleDelete = async (expenseId) => {
-        if (!window.confirm('Are you sure you want to delete this expense?')) return;
+        if (!(await appConfirm('Are you sure you want to delete this expense?', { danger: true }))) return;
 
         try {
             await deleteExpense(expenseId);
             fetchExpenses();
         } catch (error) {
             console.error('Error deleting expense:', error);
-            alert('Failed to delete expense');
+            appAlert('Failed to delete expense');
         }
     };
 

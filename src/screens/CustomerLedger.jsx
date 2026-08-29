@@ -5,6 +5,7 @@ import { useBusiness } from '../context/BusinessContext';
 import { todayLocalDate, toLocalDateStr } from '../utils/date';
 import { getCustomer, getCustomerLedger, collectFromCustomer } from '../services/api/customers';
 import { addBillPayment } from '../services/api/bills';
+import { appAlert, appConfirm } from '../components/AppDialog';
 import {
     FiArrowLeft,
     FiDownload,
@@ -239,7 +240,7 @@ const CustomerLedger = () => {
         e.preventDefault();
         const amount = parseFloat(paymentForm.amount);
         if (!amount || amount <= 0) {
-            alert('Enter a valid amount');
+            appAlert('Enter a valid amount');
             return;
         }
 
@@ -247,7 +248,7 @@ const CustomerLedger = () => {
         try {
             if (paymentMode === 'fifo') {
                 if (amount > totalOutstanding + 0.01) {
-                    alert(`Amount exceeds total outstanding (${formatCurrency(totalOutstanding)})`);
+                    appAlert(`Amount exceeds total outstanding (${formatCurrency(totalOutstanding)})`);
                     setSubmittingPayment(false);
                     return;
                 }
@@ -258,7 +259,7 @@ const CustomerLedger = () => {
                 });
             } else {
                 if (!paymentForm.billId) {
-                    alert('Select a bill');
+                    appAlert('Select a bill');
                     setSubmittingPayment(false);
                     return;
                 }
@@ -272,7 +273,7 @@ const CustomerLedger = () => {
             fetchLedger();
         } catch (err) {
             console.error('Payment error:', err);
-            alert(err.response?.data?.message || 'Failed to record payment');
+            appAlert(err.response?.data?.message || 'Failed to record payment');
         } finally {
             setSubmittingPayment(false);
         }

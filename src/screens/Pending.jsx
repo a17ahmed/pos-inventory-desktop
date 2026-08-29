@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useBusiness } from '../context/BusinessContext';
 import { useAuth } from '../context/AuthContext';
 import { getPendingBills, resumePendingBill, cancelPendingBill } from '../services/api/pendingBills';
+import { appAlert, appConfirm } from '../components/AppDialog';
 import {
     FiClock,
     FiUser,
@@ -69,19 +70,19 @@ const Pending = () => {
             navigate('/');
         } catch (error) {
             console.error('Error loading bill:', error);
-            alert(error.response?.data?.message || 'Failed to load bill');
+            appAlert(error.response?.data?.message || 'Failed to load bill');
         }
     };
 
     const handleCancelBill = async (billId) => {
-        if (!window.confirm('Are you sure you want to cancel this pending bill?')) return;
+        if (!(await appConfirm('Are you sure you want to cancel this pending bill?', { danger: true }))) return;
 
         try {
             await cancelPendingBill(billId);
             fetchPendingBills();
         } catch (error) {
             console.error('Error cancelling pending bill:', error);
-            alert('Failed to cancel pending bill');
+            appAlert('Failed to cancel pending bill');
         }
     };
 

@@ -3,6 +3,7 @@ import { useBusiness } from '../context/BusinessContext';
 import { useAuth } from '../context/AuthContext';
 import { getProducts, deleteProduct } from '../services/api/products';
 import ProductFormModal from '../components/ProductFormModal';
+import { appAlert, appConfirm } from '../components/AppDialog';
 import {
     FiPlus,
     FiSearch,
@@ -59,14 +60,14 @@ const Products = () => {
     };
 
     const handleDelete = async (productId) => {
-        if (!window.confirm('Are you sure you want to delete this product?')) return;
+        if (!(await appConfirm('Are you sure you want to delete this product?', { danger: true }))) return;
 
         try {
             await deleteProduct(productId);
             fetchProducts();
         } catch (error) {
             console.error('Error deleting product:', error);
-            alert('Failed to delete product');
+            appAlert('Failed to delete product');
         }
     };
 

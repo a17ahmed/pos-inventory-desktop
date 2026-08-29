@@ -9,6 +9,7 @@ import { createBill } from '../services/api/bills';
 import { searchCustomers } from '../services/api/customers';
 import { getDashboardSummary } from '../services/api/dashboard';
 import { printReceipt as printReceiptUtil } from '../utils/printReceipt';
+import { appAlert, appConfirm } from '../components/AppDialog';
 import {
     FiTrendingUp,
     FiShoppingCart,
@@ -1020,10 +1021,10 @@ const EmployeeDashboard = () => {
                                 )}
                                 {bills.length > 1 && (
                                     <button
-                                        onClick={(e) => {
+                                        onClick={async (e) => {
                                             e.stopPropagation();
                                             if (bill.items.length > 0) {
-                                                if (window.confirm(`Cancel ${bill.name} with ${bill.items.length} items?`)) {
+                                                if (await appConfirm(`Cancel ${bill.name} with ${bill.items.length} items?`, { danger: true })) {
                                                     deleteBill(bill.id);
                                                 }
                                             } else {

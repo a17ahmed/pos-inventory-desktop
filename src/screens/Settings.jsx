@@ -6,6 +6,7 @@ import { updateBusiness, updateAdmin, changeAdminPassword } from '../services/ap
 import { useTheme } from '../context/ThemeContext';
 import { buildReceiptHTML } from '../utils/receiptTemplate';
 import { printReceipt as printReceiptUtil } from '../utils/printReceipt';
+import { appAlert, appConfirm } from '../components/AppDialog';
 import {
     FiUser,
     FiLogOut,
@@ -72,7 +73,7 @@ const Settings = () => {
             await refreshBusiness();
             setActiveModal(null);
         } catch (err) {
-            alert('Failed to save: ' + (err.response?.data?.message || err.message));
+            appAlert('Failed to save: ' + (err.response?.data?.message || err.message));
         } finally {
             setSavingBusiness(false);
         }
@@ -136,14 +137,14 @@ const Settings = () => {
             setActiveModal(null);
             window.location.reload();
         } catch (err) {
-            alert('Failed to save: ' + (err.response?.data?.message || err.message));
+            appAlert('Failed to save: ' + (err.response?.data?.message || err.message));
         } finally {
             setSavingProfile(false);
         }
     };
 
     const handleLogout = async () => {
-        if (window.confirm('Are you sure you want to logout?')) {
+        if (await appConfirm('Are you sure you want to logout?', { danger: true })) {
             await logout();
             navigate('/login');
         }
@@ -152,13 +153,13 @@ const Settings = () => {
 
     const handleChangePassword = async () => {
         if (!passwordForm.currentPassword || !passwordForm.newPassword) {
-            return alert('Please fill in all fields');
+            return appAlert('Please fill in all fields');
         }
         if (passwordForm.newPassword.length < 8) {
-            return alert('New password must be at least 8 characters');
+            return appAlert('New password must be at least 8 characters');
         }
         if (passwordForm.newPassword !== passwordForm.confirmPassword) {
-            return alert('New passwords do not match');
+            return appAlert('New passwords do not match');
         }
         setSavingPassword(true);
         try {
@@ -166,11 +167,11 @@ const Settings = () => {
                 currentPassword: passwordForm.currentPassword,
                 newPassword: passwordForm.newPassword,
             });
-            alert('Password changed successfully');
+            appAlert('Password changed successfully');
             setPasswordForm({ currentPassword: '', newPassword: '', confirmPassword: '' });
             setActiveModal(null);
         } catch (err) {
-            alert(err.response?.data?.message || 'Failed to change password');
+            appAlert(err.response?.data?.message || 'Failed to change password');
         } finally {
             setSavingPassword(false);
         }

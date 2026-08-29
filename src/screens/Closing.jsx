@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { getLastClosing, getClosingPreview, createClosing, getClosings } from '../services/api/closing';
 import ClosingReport from '../components/ClosingReport';
+import { appAlert } from '../components/AppDialog';
 import {
     FiPlus,
     FiClock,
@@ -211,7 +212,7 @@ const Closing = () => {
                 countedNote: countedNote || undefined,
             });
             setShowConfirm(false);
-            alert(
+            appAlert(
                 `Closing #${res.data.closingNumber} finalized.\n\nDon't forget to physically collect the counted cash and update the Cash Book's opening balance to match — this keeps tomorrow's reconciliation starting from the right number.`
             );
             navigate(`/closing/${res.data._id}`);

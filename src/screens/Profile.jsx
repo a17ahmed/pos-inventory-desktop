@@ -4,6 +4,7 @@ import { useBusiness } from '../context/BusinessContext';
 import { useAuth } from '../context/AuthContext';
 import { getReceiptStats } from '../services/api/receipts';
 import { employeeChangePassword } from '../services/api/auth';
+import { appAlert, appConfirm } from '../components/AppDialog';
 import {
     FiUser,
     FiMail,
@@ -71,7 +72,7 @@ const Profile = () => {
     };
 
     const handleLogout = async () => {
-        if (window.confirm('Are you sure you want to sign out?')) {
+        if (await appConfirm('Are you sure you want to sign out?', { danger: true })) {
             await logout();
             navigate('/login');
         }

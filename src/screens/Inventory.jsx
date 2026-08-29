@@ -27,6 +27,7 @@ import {
     getDeadStock,
     updateStock,
 } from '../services/api/products';
+import { appAlert } from '../components/AppDialog';
 
 // ── Tabs ─────────────────────────────────────────────────────
 const TABS = [
@@ -184,7 +185,7 @@ const Inventory = () => {
             fetchProducts();
             fetchOverview();
         } catch (err) {
-            alert(err.response?.data?.message || 'Failed to adjust stock');
+            appAlert(err.response?.data?.message || 'Failed to adjust stock');
         }
     };
 

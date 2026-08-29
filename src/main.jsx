@@ -8,6 +8,7 @@ import { AuthProvider } from './context/AuthContext';
 import { BusinessProvider } from './context/BusinessContext';
 import { ThemeProvider } from './context/ThemeContext';
 import NetworkStatus from './components/NetworkStatus';
+import AppDialogHost from './components/AppDialog';
 import './index.css';
 
 // Sentry — production builds only. DSN is safe to embed in a client bundle
@@ -33,6 +34,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(
                         </BusinessProvider>
                     </AuthProvider>
                 </Router>
+                <AppDialogHost />
             </NetworkStatus>
         </ThemeProvider>
     </React.StrictMode>

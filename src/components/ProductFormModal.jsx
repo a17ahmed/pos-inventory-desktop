@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useBusiness } from '../context/BusinessContext';
 import { createProduct, updateProduct, generateSku, generateBarcode } from '../services/api/products';
+import { appAlert, appConfirm } from './AppDialog';
 import {
     FiX,
     FiSave,
@@ -61,12 +62,12 @@ const ProductFormModal = ({ show, onClose, editingProduct = null, categories = [
         const sellingPrice = Number(formData.price);
         const costPrice = Number(formData.costPrice) || 0;
         if (costPrice > sellingPrice) {
-            alert('Cost price cannot be greater than the selling price.');
+            appAlert('Cost price cannot be greater than the selling price.');
             return;
         }
         const maxDiscountPercent = formData.maxDiscountPercent !== '' ? Number(formData.maxDiscountPercent) : null;
         if (maxDiscountPercent !== null && (maxDiscountPercent < 0 || maxDiscountPercent > 100)) {
-            alert('Max discount % must be between 0 and 100.');
+            appAlert('Max discount % must be between 0 and 100.');
             return;
         }
         setSubmitting(true);
@@ -104,7 +105,7 @@ const ProductFormModal = ({ show, onClose, editingProduct = null, categories = [
             onClose();
         } catch (error) {
             console.error('Error saving product:', error);
-            alert('Failed to save product');
+            appAlert('Failed to save product');
         } finally {
             setSubmitting(false);
         }
@@ -117,7 +118,7 @@ const ProductFormModal = ({ show, onClose, editingProduct = null, categories = [
             setFormData((prev) => ({ ...prev, sku: res.data.sku }));
         } catch (error) {
             console.error('Error generating SKU:', error);
-            alert(error.response?.data?.message || 'Failed to generate SKU');
+            appAlert(error.response?.data?.message || 'Failed to generate SKU');
         } finally {
             setGeneratingSku(false);
         }
@@ -130,7 +131,7 @@ const ProductFormModal = ({ show, onClose, editingProduct = null, categories = [
             setFormData((prev) => ({ ...prev, barcode: res.data.barcode }));
         } catch (error) {
             console.error('Error generating barcode:', error);
-            alert(error.response?.data?.message || 'Failed to generate barcode');
+            appAlert(error.response?.data?.message || 'Failed to generate barcode');
         } finally {
             setGeneratingBarcode(false);
         }
