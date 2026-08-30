@@ -1,6 +1,6 @@
 {
   "name": "pos-desktop",
-  "version": "1.2.4-beta.1",
+  "version": "1.2.4-beta.2",
   "description": "POS Desktop Application for Windows and Mac",
   "author": {
     "name": "Ahmed Irfan",
@@ -22,7 +22,7 @@
     "@sentry/electron": "^7.17.0",
     "@sentry/react": "^10.71.0",
     "axios": "^1.6.0",
-    "better-sqlite3": "^13.0.3",
+    "better-sqlite3": "^11.10.0",
     "date-fns": "^2.30.0",
     "electron-updater": "^6.8.3",
     "escpos": "^3.0.0-alpha.6",
@@ -61,6 +61,7 @@
     "asarUnpack": [
       "**/node_modules/better-sqlite3/**"
     ],
+    "npmRebuild": false,
     "publish": [
       {
         "provider": "github",

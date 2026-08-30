@@ -11,6 +11,9 @@ permissions:
 jobs:
   release:
     strategy:
+      # Don't cancel the Mac build if Windows fails (or vice-versa) — we want
+      # every platform's installer even if one leg has an issue.
+      fail-fast: false
       matrix:
         include:
           - os: windows-latest
