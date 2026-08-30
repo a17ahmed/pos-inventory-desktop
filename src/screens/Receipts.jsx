@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useBusiness } from '../context/BusinessContext';
 import { useAuth } from '../context/AuthContext';
-import { getAllReceipts, getReceiptStats, getReceiptsPaginated } from '../services/api/receipts';
+import { getReceipts, getReceiptStats } from '../services/api/receipts';
 import { printReceipt } from '../utils/printReceipt';
 import { downloadReceipt } from '../utils/downloadReceipt';
 import {
@@ -21,6 +21,34 @@ import {
     FiInbox,
 } from 'react-icons/fi';
 
+// Local YYYY-MM-DD — never toISOString(), which shifts to UTC and can land on
+// the wrong calendar day. The backend applies start-of-day/end-of-day in the
+// business timezone, so we send the plain local date only.
+const fmtLocalDate = (d) =>
+    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+
+// Server-side date-range params for a filter. "Week" = rolling last 7 days, to
+// match the rest of the app (Reports/Dashboard), not a calendar week.
+const dateRangeParams = (filter) => {
+    const now = new Date();
+    const today = fmtLocalDate(now);
+    switch (filter) {
+        case 'today':
+            return { startDate: today, endDate: today };
+        case 'week': {
+            const start = new Date(now);
+            start.setDate(start.getDate() - 7);
+            return { startDate: fmtLocalDate(start), endDate: today };
+        }
+        case 'month': {
+            const start = new Date(now.getFullYear(), now.getMonth(), 1);
+            return { startDate: fmtLocalDate(start), endDate: today };
+        }
+        default:
+            return {};
+    }
+};
+
 const Receipts = () => {
     const { business } = useBusiness();
     const { permissions } = useAuth();
@@ -32,12 +60,16 @@ const Receipts = () => {
     const [searchQuery, setSearchQuery] = useState('');
     const [dateFilter, setDateFilter] = useState('all');
     const [showDetail, setShowDetail] = useState(null);
+    // Collapses the stat cards into a slim strip once the list is scrolled,
+    // handing the freed vertical space to the receipts table.
+    const [collapsed, setCollapsed] = useState(false);
 
     // Pagination state
     const [page, setPage] = useState(1);
     const [hasMore, setHasMore] = useState(true);
     const [totalReceipts, setTotalReceipts] = useState(0);
     const scrollContainerRef = useRef(null);
+    const stickyBarRef = useRef(null);
 
     // Stats from API
     const [stats, setStats] = useState({
@@ -57,33 +89,17 @@ const Receipts = () => {
         fetchStats();
     }, []);
 
-    // When date filter changes, fetch appropriately
+    // When the date filter changes, reset to page 1 and re-fetch server-side.
+    // Date scoping now happens on the backend (startDate/endDate + pagination),
+    // so every filter paginates the same way — no more all=true + client filter.
     useEffect(() => {
-        if (dateFilter !== 'all') {
-            // Load all receipts when filtering by date
-            fetchAllReceipts();
-        } else {
-            // Reset to paginated loading when switching to "All"
-            setPage(1);
-            setHasMore(true);
-            fetchReceipts(1, true);
-        }
+        // New view → show full cards again and jump back to the top.
+        setCollapsed(false);
+        scrollContainerRef.current?.scrollTo({ top: 0 });
+        setPage(1);
+        setHasMore(true);
+        fetchReceipts(1, true);
     }, [dateFilter]);
-
-    const fetchAllReceipts = async () => {
-        setLoading(true);
-        try {
-            const res = await getAllReceipts();
-            const data = res.data?.receipts || res.data || [];
-            setReceipts(Array.isArray(data) ? data : []);
-            setHasMore(false);
-            setTotalReceipts(data.length);
-        } catch (error) {
-            console.error('Error fetching all receipts:', error);
-        } finally {
-            setLoading(false);
-        }
-    };
 
     const fetchStats = async () => {
         try {
@@ -113,7 +129,10 @@ const Receipts = () => {
         }
 
         try {
-            const res = await getReceiptsPaginated(pageNum);
+            // Server-side date scoping when a filter is active (empty for "All").
+            // Backend caps limit at 100 — 30 is well within that.
+            const params = { page: pageNum, limit: 30, ...dateRangeParams(dateFilter) };
+            const res = await getReceipts(params);
 
             // Handle both old (array) and new (object with receipts) response formats
             const data = res.data?.receipts || res.data || [];
@@ -160,18 +179,30 @@ const Receipts = () => {
         hasMoreRef.current = hasMore;
     }, [hasMore]);
 
+
     // Handle scroll for infinite loading (only when viewing "All" receipts)
     const handleScroll = useCallback(() => {
-        // Don't auto-load when filtering by date (client-side filtering)
-        if (dateFilter !== 'all') return;
-        if (loadingMoreRef.current || !hasMoreRef.current) return;
-
         const container = scrollContainerRef.current;
         if (!container) return;
 
         const { scrollTop, scrollHeight, clientHeight } = container;
-        const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
 
+        // The whole page scrolls. Collapse the stat cards into the compact strip
+        // exactly when the sticky controls bar reaches the top of the scroll
+        // area (i.e. the cards have scrolled out of view). Rect-based so there's
+        // no threshold guesswork and no bounce — showing the strip lives *inside*
+        // the sticky bar, so it never moves the bar's own top.
+        const bar = stickyBarRef.current;
+        if (bar) {
+            const stuck = bar.getBoundingClientRect().top - container.getBoundingClientRect().top <= 1;
+            setCollapsed(stuck);
+        }
+
+        // Infinite loading — works in every mode now (date filters paginate
+        // server-side too).
+        if (loadingMoreRef.current || !hasMoreRef.current) return;
+
+        const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
         // Load more when user scrolls to within 300px of bottom
         if (distanceFromBottom < 300) {
             fetchReceipts(pageRef.current + 1, false);
@@ -185,47 +216,25 @@ const Receipts = () => {
             container.addEventListener('scroll', handleScroll, { passive: true });
             return () => container.removeEventListener('scroll', handleScroll);
         }
-    }, [handleScroll]);
+        // `loading` is a dep because the table (and thus scrollContainerRef) only
+        // mounts after the initial spinner clears — re-run then to attach the listener.
+    }, [handleScroll, loading]);
 
     const handleRefresh = () => {
         setPage(1);
         setHasMore(true);
+        setCollapsed(false);
         fetchReceipts(1, true);
         fetchStats();
     };
 
-    const filteredReceipts = receipts.filter((r) => {
-        const matchesSearch =
-            r.receiptNumber?.toString().includes(searchQuery) ||
-            r.billNumber?.toString().includes(searchQuery) ||
-            r.customerName?.toLowerCase().includes(searchQuery.toLowerCase());
-
-        let matchesDate = true;
-        if (dateFilter !== 'all') {
-            const receiptDate = new Date(r.createdAt);
-            const now = new Date();
-
-            switch (dateFilter) {
-                case 'today':
-                    matchesDate = receiptDate.toDateString() === now.toDateString();
-                    break;
-                case 'week':
-                    // Use midnight 7 days ago (consistent with backend)
-                    const weekAgo = new Date(now);
-                    weekAgo.setDate(weekAgo.getDate() - 7);
-                    weekAgo.setHours(0, 0, 0, 0);
-                    matchesDate = receiptDate >= weekAgo;
-                    break;
-                case 'month':
-                    matchesDate =
-                        receiptDate.getMonth() === now.getMonth() &&
-                        receiptDate.getFullYear() === now.getFullYear();
-                    break;
-            }
-        }
-
-        return matchesSearch && matchesDate;
-    });
+    // Date scoping is server-side now; only the search box filters locally
+    // (over the pages loaded so far).
+    const filteredReceipts = receipts.filter((r) =>
+        r.receiptNumber?.toString().includes(searchQuery) ||
+        r.billNumber?.toString().includes(searchQuery) ||
+        r.customerName?.toLowerCase().includes(searchQuery.toLowerCase())
+    );
 
     const currency = business?.currency || 'Rs.';
 
@@ -320,8 +329,8 @@ const Receipts = () => {
     }
 
     return (
-        <div className="h-full bg-slate-50 dark:bg-d-bg overflow-hidden flex flex-col">
-            <div className="p-6 animate-fade-slide-up flex flex-col flex-1 overflow-hidden">
+        <div ref={scrollContainerRef} className="h-full bg-slate-50 dark:bg-d-bg overflow-y-auto">
+            <div className="p-6 animate-fade-slide-up">
                 {/* Header */}
                 <div className="flex items-center justify-between mb-6">
                     <div>
@@ -339,10 +348,10 @@ const Receipts = () => {
                     </button>
                 </div>
 
-                {/* Stats Cards — Row 1: Sales overview */}
+                {/* Stats Cards — Row 1: Sales overview (scroll away on page scroll) */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-4">
                     {/* Today's Sales (total billed) */}
-                    <div className="bg-white dark:bg-d-card border border-slate-200 dark:border-d-border rounded-2xl p-5">
+                    <div className="bg-white dark:bg-d-card border border-slate-200 dark:border-d-border rounded-2xl p-4">
                         <div className="flex items-center gap-3 mb-2">
                             <div className="w-10 h-10 bg-[rgba(91,156,246,0.1)] rounded-xl flex items-center justify-center">
                                 <FiDollarSign className="text-d-blue" size={20} />
@@ -354,7 +363,7 @@ const Receipts = () => {
                     </div>
 
                     {/* Collected (paid by customers) */}
-                    <div className="bg-white dark:bg-d-card border border-slate-200 dark:border-d-border rounded-2xl p-5">
+                    <div className="bg-white dark:bg-d-card border border-slate-200 dark:border-d-border rounded-2xl p-4">
                         <div className="flex items-center gap-3 mb-2">
                             <div className="w-10 h-10 bg-[rgba(52,232,161,0.1)] rounded-xl flex items-center justify-center">
                                 <FiDollarSign className="text-d-green" size={20} />
@@ -366,7 +375,7 @@ const Receipts = () => {
                     </div>
 
                     {/* Credit (owed by customers) */}
-                    <div className="bg-white dark:bg-d-card border border-slate-200 dark:border-d-border rounded-2xl p-5">
+                    <div className="bg-white dark:bg-d-card border border-slate-200 dark:border-d-border rounded-2xl p-4">
                         <div className="flex items-center gap-3 mb-2">
                             <div className="w-10 h-10 bg-[rgba(255,107,107,0.1)] rounded-xl flex items-center justify-center">
                                 <FiTrendingUp className="text-d-red" size={20} />
@@ -381,7 +390,7 @@ const Receipts = () => {
                 {/* Stats Cards — Row 2: Refunds & Drawer */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
                     {/* Total Refunded */}
-                    <div className="bg-white dark:bg-d-card border border-slate-200 dark:border-d-border rounded-2xl p-5">
+                    <div className="bg-white dark:bg-d-card border border-slate-200 dark:border-d-border rounded-2xl p-4">
                         <div className="flex items-center gap-3 mb-2">
                             <div className="w-10 h-10 bg-[rgba(255,107,107,0.1)] rounded-xl flex items-center justify-center">
                                 <FiCornerDownLeft className="text-d-red" size={20} />
@@ -403,7 +412,7 @@ const Receipts = () => {
                     </div>
 
                     {/* Cash in Drawer = Collected - Cash Refunds */}
-                    <div className="bg-white dark:bg-d-card border border-slate-200 dark:border-d-border rounded-2xl p-5">
+                    <div className="bg-white dark:bg-d-card border border-slate-200 dark:border-d-border rounded-2xl p-4">
                         <div className="flex items-center gap-3 mb-2">
                             <div className="w-10 h-10 bg-[rgba(52,232,161,0.15)] rounded-xl flex items-center justify-center">
                                 <FiInbox className="text-d-green" size={20} />
@@ -415,7 +424,7 @@ const Receipts = () => {
                     </div>
 
                     {/* Today's Orders */}
-                    <div className="bg-white dark:bg-d-card border border-slate-200 dark:border-d-border rounded-2xl p-5">
+                    <div className="bg-white dark:bg-d-card border border-slate-200 dark:border-d-border rounded-2xl p-4">
                         <div className="flex items-center gap-3 mb-2">
                             <div className="w-10 h-10 bg-[rgba(255,210,100,0.1)] rounded-xl flex items-center justify-center">
                                 <FiShoppingCart className="text-d-accent" size={20} />
@@ -426,7 +435,7 @@ const Receipts = () => {
                     </div>
 
                     {/* Month Orders */}
-                    <div className="bg-white dark:bg-d-card border border-slate-200 dark:border-d-border rounded-2xl p-5">
+                    <div className="bg-white dark:bg-d-card border border-slate-200 dark:border-d-border rounded-2xl p-4">
                         <div className="flex items-center gap-3 mb-2">
                             <div className="w-10 h-10 bg-[rgba(91,156,246,0.1)] rounded-xl flex items-center justify-center">
                                 <FiFileText className="text-d-blue" size={20} />
@@ -438,8 +447,27 @@ const Receipts = () => {
                     </div>
                 </div>
 
-                {/* Filters */}
-                <div className="flex flex-wrap items-center gap-4 mb-6">
+                {/* Sticky controls — search + filters. A compact stats strip appears
+                    here once the full cards have scrolled out of view. */}
+                <div ref={stickyBarRef} className="sticky top-0 z-20 -mx-6 px-6 pt-2 pb-4 bg-slate-50 dark:bg-d-bg">
+                    {collapsed && (
+                        <div className="flex items-center gap-2 flex-wrap mb-3">
+                            {[
+                                { label: "Today's Sales", value: formatCurrency(stats.todaySales), color: 'text-slate-800 dark:text-d-heading' },
+                                { label: 'Collected', value: formatCurrency(stats.todayCollected), color: 'text-d-green' },
+                                { label: 'Credit', value: formatCurrency(stats.todayCredit), color: 'text-d-red' },
+                                { label: 'Refunded', value: formatCurrency(stats.todayRefunded), color: 'text-d-red' },
+                                { label: 'Cash in Drawer', value: formatCurrency(stats.todayCashInDrawer), color: 'text-d-green' },
+                                { label: 'Orders', value: stats.todayOrders, color: 'text-slate-800 dark:text-d-heading' },
+                            ].map((s) => (
+                                <div key={s.label} className="flex items-center gap-2 px-3 py-1.5 bg-white dark:bg-d-card border border-slate-200 dark:border-d-border rounded-lg">
+                                    <span className="text-xs text-slate-500 dark:text-d-muted">{s.label}</span>
+                                    <span className={`text-sm font-semibold font-display ${s.color}`}>{s.value}</span>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                    <div className="flex flex-wrap items-center gap-4">
                     <div className="relative flex-1 max-w-md">
                         <FiSearch className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 dark:text-d-faint" />
                         <input
@@ -471,15 +499,15 @@ const Receipts = () => {
                             </button>
                         ))}
                     </div>
+                    </div>
                 </div>
 
-                {/* Receipts Table */}
-                <div
-                    ref={scrollContainerRef}
-                    className="bg-white dark:bg-d-card rounded-2xl border border-slate-200 dark:border-d-border overflow-hidden max-h-[calc(100vh-350px)] overflow-y-auto"
-                >
+                {/* Receipts Table — min-height keeps the page tall enough that the
+                    sticky bar can always reach the top (so the cards collapse) and
+                    the bills fill the viewport once it does. */}
+                <div className="bg-white dark:bg-d-card rounded-2xl border border-slate-200 dark:border-d-border overflow-hidden mt-2 min-h-[calc(100vh-120px)]">
                     <table className="w-full">
-                        <thead className="bg-slate-50 dark:bg-d-elevated sticky top-0 z-10 shadow-[0_2px_8px_rgba(0,0,0,0.15)]">
+                        <thead className="bg-slate-50 dark:bg-d-elevated">
                             <tr>
                                 <th className="text-left py-4 px-6 font-semibold text-slate-600 dark:text-d-muted text-sm bg-slate-50 dark:bg-d-elevated">Receipt #</th>
                                 <th className="text-left py-4 px-6 font-semibold text-slate-600 dark:text-d-muted text-sm bg-slate-50 dark:bg-d-elevated">Customer</th>
@@ -571,8 +599,8 @@ const Receipts = () => {
                         </div>
                     )}
 
-                    {/* Load More Button - only show when viewing "All" receipts */}
-                    {hasMore && !loading && receipts.length > 0 && dateFilter === 'all' && (
+                    {/* Load More Button */}
+                    {hasMore && !loading && receipts.length > 0 && (
                         <div className="flex justify-center py-6">
                             <button
                                 onClick={() => fetchReceipts(page + 1, false)}
@@ -594,19 +622,9 @@ const Receipts = () => {
                     )}
 
                     {/* End of List Indicator */}
-                    {!hasMore && receipts.length > 0 && !loading && dateFilter === 'all' && (
+                    {!hasMore && receipts.length > 0 && !loading && (
                         <div className="text-center py-6 text-slate-400 dark:text-d-faint text-sm">
                             You've reached the end ({totalReceipts} receipts)
-                        </div>
-                    )}
-
-                    {/* Filtered results count */}
-                    {dateFilter !== 'all' && !loading && (
-                        <div className="text-center py-6 text-slate-400 dark:text-d-faint text-sm">
-                            {filteredReceipts.length > 0
-                                ? `${filteredReceipts.length} ${dateFilter === 'today' ? "today's" : dateFilter === 'week' ? "this week's" : "this month's"} receipts`
-                                : `No receipts ${dateFilter === 'today' ? "today" : dateFilter === 'week' ? "this week" : "this month"}`
-                            }
                         </div>
                     )}
                 </div>
