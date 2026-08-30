@@ -3,6 +3,10 @@ import api from '../api';
 export const getCustomers = (params) =>
     api.get('/customer', { params });
 
+// KPI cards (business-wide totals) — computed server-side so the list can stay paged.
+export const getCustomerSummary = () =>
+    api.get('/customer/summary');
+
 export const searchCustomers = (q) =>
     api.get('/customer/search', { params: { q } });
 

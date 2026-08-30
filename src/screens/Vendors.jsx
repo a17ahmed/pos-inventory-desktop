@@ -85,8 +85,9 @@ const Vendors = () => {
     const [products, setProducts] = useState([]);
 
     // ── Supplies list ────────────────────────────────────────────────────────
-    const [supplies, setSupplies] = useState([]);
+    const [supplies, setSupplies] = useState([]); // current page only
     const [supplyTotal, setSupplyTotal] = useState(0);
+    const [supplyPagination, setSupplyPagination] = useState({ page: 1, totalPages: 1 });
     const [searchQuery, setSearchQuery] = useState('');
     const [statusFilter, setStatusFilter] = useState('all');
     const [vendorFilter, setVendorFilter] = useState('');
@@ -148,25 +149,23 @@ const Vendors = () => {
         }
     }, []);
 
-    const fetchSupplies = useCallback(async () => {
+    // One page at a time (limit ≤ 100). Money stats come from getSupplyStats
+    // (server-side), so paging the list here doesn't affect any totals.
+    const fetchSupplies = useCallback(async (pageNum = 1) => {
         setLoading(true);
         setError(null);
         try {
-            const params = {};
+            const params = { page: pageNum, limit: 50 };
             if (statusFilter !== 'all') params.paymentStatus = statusFilter;
             if (vendorFilter) params.vendor = vendorFilter;
             const res = await getSupplies(params);
             const data = res.data;
-            if (data && Array.isArray(data.supplies)) {
-                setSupplies(data.supplies);
-                setSupplyTotal(data.total || data.supplies.length);
-            } else if (Array.isArray(data)) {
-                setSupplies(data);
-                setSupplyTotal(data.length);
-            } else {
-                setSupplies([]);
-                setSupplyTotal(0);
-            }
+            const list = Array.isArray(data?.supplies)
+                ? data.supplies
+                : (Array.isArray(data) ? data : []);
+            setSupplies(list);
+            setSupplyTotal(data?.total ?? list.length);
+            setSupplyPagination({ page: data?.page ?? pageNum, totalPages: data?.totalPages ?? 1 });
         } catch (err) {
             console.error('Error fetching supplies:', err);
             setError(err.response?.data?.message || 'Failed to load supplies');
@@ -196,7 +195,8 @@ const Vendors = () => {
     }, [activeTab, fetchSupplies]);
 
     useEffect(() => {
-        if (activeTab === 'stats') fetchStats();
+        // Both tabs show money cards sourced from stats, so load it for either.
+        if (activeTab === 'supplies' || activeTab === 'stats') fetchStats();
     }, [activeTab, fetchStats]);
 
     // =========================================================================
@@ -218,17 +218,10 @@ const Vendors = () => {
         );
     });
 
-    const outstandingTotal = supplies
-        .filter((s) => s.paymentStatus !== 'paid')
-        .reduce((acc, s) => acc + (s.remainingAmount || s.totalAmount - (s.paidAmount || 0) || 0), 0);
-
-    const thisMonthTotal = supplies
-        .filter((s) => {
-            const d = new Date(s.billDate || s.createdAt);
-            const now = new Date();
-            return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
-        })
-        .reduce((acc, s) => acc + (s.totalAmount || 0), 0);
+    // Money cards use server-side stats (getSupplyStats), NOT the paginated list —
+    // summing only the current page would undercount once there are >50 supplies.
+    const outstandingTotal = stats?.overall?.totalRemaining ?? 0;
+    const thisMonthTotal = stats?.thisMonth?.totalAmount ?? stats?.thisMonth?.total ?? 0;
 
     // =========================================================================
     // Supply modal handlers
@@ -382,6 +375,7 @@ const Vendors = () => {
 
             closeSupplyModal();
             fetchSupplies();
+            fetchStats();
         } catch (err) {
             console.error('Error saving supply:', err);
             appAlert(err.response?.data?.message || 'Failed to save supply');
@@ -395,6 +389,7 @@ const Vendors = () => {
         try {
             await deleteSupply(id);
             fetchSupplies();
+            fetchStats();
         } catch (err) {
             console.error('Error deleting supply:', err);
             appAlert('Failed to delete supply');
@@ -422,6 +417,7 @@ const Vendors = () => {
             setShowPayModal(false);
             setPayingSupply(null);
             fetchSupplies();
+            fetchStats();
         } catch (err) {
             console.error('Error recording payment:', err);
             appAlert(err.response?.data?.message || 'Failed to record payment');
@@ -580,7 +576,7 @@ const Vendors = () => {
                 <h2 className="text-xl font-semibold text-slate-800 dark:text-d-heading">Failed to load data</h2>
                 <p className="text-slate-500 dark:text-d-muted">{error}</p>
                 <button
-                    onClick={fetchSupplies}
+                    onClick={() => fetchSupplies(1)}
                     className="px-4 py-2 bg-primary-500 text-white rounded-xl hover:bg-primary-600 transition-colors"
                 >
                     Try Again
@@ -758,6 +754,31 @@ const Vendors = () => {
                             <p className="text-sm mt-1">Add your first supply record to get started</p>
                         </div>
                     )}
+
+                    {/* Pagination */}
+                    {supplyPagination.totalPages > 1 && (
+                        <div className="flex items-center justify-between px-4 py-3 border-t border-slate-100 dark:border-d-border">
+                            <p className="text-sm text-slate-500 dark:text-d-muted">
+                                Page {supplyPagination.page} of {supplyPagination.totalPages} ({supplyTotal} supplies)
+                            </p>
+                            <div className="flex gap-2">
+                                <button
+                                    disabled={supplyPagination.page <= 1 || loading}
+                                    onClick={() => fetchSupplies(supplyPagination.page - 1)}
+                                    className="px-3 py-1.5 text-sm rounded-lg bg-slate-100 dark:bg-d-elevated hover:bg-slate-200 dark:hover:bg-d-glass disabled:opacity-40 transition-colors text-slate-700 dark:text-d-text"
+                                >
+                                    Previous
+                                </button>
+                                <button
+                                    disabled={supplyPagination.page >= supplyPagination.totalPages || loading}
+                                    onClick={() => fetchSupplies(supplyPagination.page + 1)}
+                                    className="px-3 py-1.5 text-sm rounded-lg bg-slate-100 dark:bg-d-elevated hover:bg-slate-200 dark:hover:bg-d-glass disabled:opacity-40 transition-colors text-slate-700 dark:text-d-text"
+                                >
+                                    Next
+                                </button>
+                            </div>
+                        </div>
+                    )}
                 </div>
             )}
         </>
@@ -898,7 +919,7 @@ const Vendors = () => {
                             <p className="text-sm text-slate-500 dark:text-d-muted">Total Outstanding</p>
                         </div>
                         <p className="text-2xl font-bold text-red-600 dark:text-d-red">
-                            {formatCurrency(overall.totalOutstanding || overall.outstanding || 0)}
+                            {formatCurrency(overall.totalRemaining ?? overall.totalOutstanding ?? overall.outstanding ?? 0)}
                         </p>
                     </div>
 

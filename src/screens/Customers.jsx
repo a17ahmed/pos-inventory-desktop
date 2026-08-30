@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useBusiness } from '../context/BusinessContext';
 import {
     getCustomers,
+    getCustomerSummary,
     createCustomer,
     updateCustomer,
     deleteCustomer,
@@ -49,8 +50,9 @@ const Customers = () => {
     const { business } = useBusiness();
     const navigate = useNavigate();
 
-    const [customers, setCustomers] = useState([]);
-    const [total, setTotal] = useState(0);
+    const [customers, setCustomers] = useState([]); // current page only
+    const [pagination, setPagination] = useState({ page: 1, totalPages: 1, total: 0 });
+    const [summary, setSummary] = useState({ totalCustomers: 0, totalOutstandingDues: 0, customersWithDues: 0 });
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState(null);
 
@@ -69,24 +71,25 @@ const Customers = () => {
     // Data fetching
     // =========================================================================
 
-    const fetchCustomers = useCallback(async () => {
+    // List: one page at a time (limit ≤ 100). Only the current page is held in state.
+    const fetchCustomers = useCallback(async (pageNum = 1) => {
         setLoading(true);
         setError(null);
         try {
-            const params = { limit: 200 };
+            const params = { page: pageNum, limit: 50 };
             if (duesFilter === 'dues') params.hasDues = 'true';
+            if (searchQuery.trim()) params.search = searchQuery.trim();
             const res = await getCustomers(params);
             const data = res.data;
-            if (data && Array.isArray(data.customers)) {
-                setCustomers(data.customers);
-                setTotal(data.total || data.customers.length);
-            } else if (Array.isArray(data)) {
-                setCustomers(data);
-                setTotal(data.length);
-            } else {
-                setCustomers([]);
-                setTotal(0);
-            }
+            const list = Array.isArray(data?.customers)
+                ? data.customers
+                : (Array.isArray(data) ? data : []);
+            setCustomers(list);
+            setPagination({
+                page: data?.page ?? pageNum,
+                totalPages: data?.totalPages ?? 1,
+                total: data?.total ?? list.length,
+            });
         } catch (err) {
             console.error('Error fetching customers:', err);
             setError(err.response?.data?.message || 'Failed to load customers');
@@ -94,31 +97,36 @@ const Customers = () => {
         } finally {
             setLoading(false);
         }
-    }, [duesFilter]);
+    }, [duesFilter, searchQuery]);
+
+    // KPI cards: business-wide totals from the server summary (independent of paging).
+    const fetchSummary = useCallback(async () => {
+        try {
+            const res = await getCustomerSummary();
+            setSummary(res.data || { totalCustomers: 0, totalOutstandingDues: 0, customersWithDues: 0 });
+        } catch (err) {
+            console.error('Error fetching customer summary:', err);
+        }
+    }, []);
+
+    // Debounced: re-query page 1 whenever the search text or dues filter changes
+    // (fetchCustomers is memoised on [duesFilter, searchQuery]).
+    useEffect(() => {
+        const t = setTimeout(() => fetchCustomers(1), 300);
+        return () => clearTimeout(t);
+    }, [fetchCustomers]);
 
     useEffect(() => {
-        fetchCustomers();
-    }, [fetchCustomers]);
+        fetchSummary();
+    }, [fetchSummary]);
 
     // =========================================================================
     // Derived values
     // =========================================================================
 
-    const filteredCustomers = customers.filter((c) => {
-        if (!searchQuery) return true;
-        const q = searchQuery.toLowerCase();
-        return (
-            (c.name || '').toLowerCase().includes(q) ||
-            (c.phone || '').toLowerCase().includes(q) ||
-            (c.email || '').toLowerCase().includes(q)
-        );
-    });
-
-    const totalOutstanding = customers.reduce(
-        (acc, c) => acc + (c.balance > 0 ? c.balance : 0),
-        0
-    );
-    const customersWithDues = customers.filter((c) => c.balance > 0).length;
+    // Search is server-side now (?search=), so the current page is already the
+    // filtered result — no client-side filtering.
+    const filteredCustomers = customers;
 
     // =========================================================================
     // Modal handlers
@@ -177,7 +185,8 @@ const Customers = () => {
             }
 
             closeModal();
-            fetchCustomers();
+            fetchCustomers(1);
+            fetchSummary();
         } catch (err) {
             console.error('Error saving customer:', err);
             appAlert(err.response?.data?.message || 'Failed to save customer');
@@ -196,7 +205,8 @@ const Customers = () => {
         if (!(await appConfirm(`Delete customer "${customer.name}"?`, { danger: true }))) return;
         try {
             await deleteCustomer(customer._id);
-            fetchCustomers();
+            fetchCustomers(pagination.page);
+            fetchSummary();
         } catch (err) {
             console.error('Error deleting customer:', err);
             appAlert(err.response?.data?.message || 'Failed to delete customer');
@@ -242,7 +252,7 @@ const Customers = () => {
                             </div>
                             <p className="text-sm text-slate-500 dark:text-d-muted">Total Customers</p>
                         </div>
-                        <p className="text-2xl font-bold text-slate-800 dark:text-d-heading">{total}</p>
+                        <p className="text-2xl font-bold text-slate-800 dark:text-d-heading">{summary.totalCustomers}</p>
                     </div>
                     <div className="bg-white dark:bg-d-card rounded-2xl p-6 shadow-sm dark:shadow-[0_4px_20px_rgba(0,0,0,0.3)] border border-slate-100 dark:border-d-border">
                         <div className="flex items-center gap-3 mb-2">
@@ -252,7 +262,7 @@ const Customers = () => {
                             <p className="text-sm text-slate-500 dark:text-d-muted">Outstanding Dues</p>
                         </div>
                         <p className="text-2xl font-bold text-red-600 dark:text-d-red">
-                            {formatCurrency(totalOutstanding)}
+                            {formatCurrency(summary.totalOutstandingDues)}
                         </p>
                     </div>
                     <div className="bg-white dark:bg-d-card rounded-2xl p-6 shadow-sm dark:shadow-[0_4px_20px_rgba(0,0,0,0.3)] border border-slate-100 dark:border-d-border">
@@ -263,7 +273,7 @@ const Customers = () => {
                             <p className="text-sm text-slate-500 dark:text-d-muted">Customers with Dues</p>
                         </div>
                         <p className="text-2xl font-bold text-slate-800 dark:text-d-heading">
-                            {customersWithDues}
+                            {summary.customersWithDues}
                         </p>
                     </div>
                 </div>
@@ -319,7 +329,7 @@ const Customers = () => {
                             </h2>
                             <p className="text-slate-500 dark:text-d-muted">{error}</p>
                             <button
-                                onClick={fetchCustomers}
+                                onClick={() => { fetchCustomers(1); fetchSummary(); }}
                                 className="px-4 py-2 bg-primary-500 dark:bg-d-accent text-white dark:text-d-card rounded-xl hover:bg-primary-600 transition-colors"
                             >
                                 Try Again
@@ -440,6 +450,31 @@ const Customers = () => {
                                 <p className="text-sm mt-1">
                                     Add your first customer to get started
                                 </p>
+                            </div>
+                        )}
+
+                        {/* Pagination */}
+                        {pagination.totalPages > 1 && (
+                            <div className="flex items-center justify-between px-4 py-3 border-t border-slate-100 dark:border-d-border">
+                                <p className="text-sm text-slate-500 dark:text-d-muted">
+                                    Page {pagination.page} of {pagination.totalPages} ({pagination.total} customers)
+                                </p>
+                                <div className="flex gap-2">
+                                    <button
+                                        disabled={pagination.page <= 1 || loading}
+                                        onClick={() => fetchCustomers(pagination.page - 1)}
+                                        className="px-3 py-1.5 text-sm rounded-lg bg-slate-100 dark:bg-d-elevated hover:bg-slate-200 dark:hover:bg-d-glass disabled:opacity-40 transition-colors text-slate-700 dark:text-d-text"
+                                    >
+                                        Previous
+                                    </button>
+                                    <button
+                                        disabled={pagination.page >= pagination.totalPages || loading}
+                                        onClick={() => fetchCustomers(pagination.page + 1)}
+                                        className="px-3 py-1.5 text-sm rounded-lg bg-slate-100 dark:bg-d-elevated hover:bg-slate-200 dark:hover:bg-d-glass disabled:opacity-40 transition-colors text-slate-700 dark:text-d-text"
+                                    >
+                                        Next
+                                    </button>
+                                </div>
                             </div>
                         )}
                     </div>

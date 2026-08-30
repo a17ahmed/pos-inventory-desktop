@@ -24,3 +24,9 @@ npm-debug.log*
 
 # Electron
 out/
+
+# Local diagnostics & tooling (not part of the app)
+API_DIAGNOSTICS*.md
+scripts/diagnose-apis.mjs
+.playwright-mcp/
+receipts-*.png

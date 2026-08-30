@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { todayLocalDate, toLocalDateStr } from '../utils/date';
 import { useBusiness } from '../context/BusinessContext';
-import { getExpenses, createExpense, updateExpense, deleteExpense, approveExpense, rejectExpense } from '../services/api/expenses';
+import { getExpenses, getExpenseStats, createExpense, updateExpense, deleteExpense, approveExpense, rejectExpense } from '../services/api/expenses';
 import { getCashBalance } from '../services/api/cashbook';
 import { appAlert, appConfirm } from '../components/AppDialog';
 import {
@@ -36,7 +36,9 @@ const CATEGORIES = [
 
 const Expenses = () => {
     const { business } = useBusiness();
-    const [expenses, setExpenses] = useState([]);
+    const [expenses, setExpenses] = useState([]); // current page only
+    const [pagination, setPagination] = useState({ page: 1, totalPages: 1, total: 0 });
+    const [stats, setStats] = useState({ totalExpenses: 0, monthExpenses: 0, pendingCount: 0, pendingTotal: 0 });
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
     const [searchQuery, setSearchQuery] = useState('');
@@ -57,24 +59,35 @@ const Expenses = () => {
         notes: '',
     });
 
+    // Debounced: re-query page 1 whenever the status filter or search text changes.
     useEffect(() => {
-        fetchExpenses();
-    }, [statusFilter]);
+        const t = setTimeout(() => fetchExpenses(1), 300);
+        return () => clearTimeout(t);
+    }, [statusFilter, searchQuery]);
 
-    const fetchExpenses = async () => {
+    useEffect(() => {
+        fetchStats();
+    }, []);
+
+    // List: one page at a time (limit ≤ 100), only the current page held in state.
+    const fetchExpenses = async (pageNum = 1) => {
         setLoading(true);
         setError(null);
         try {
-            const params = statusFilter !== 'all' ? { status: statusFilter } : {};
+            const params = { page: pageNum, limit: 50 };
+            if (statusFilter !== 'all') params.status = statusFilter;
+            if (searchQuery.trim()) params.search = searchQuery.trim();
             const res = await getExpenses(params);
             const data = res.data;
-            if (Array.isArray(data)) {
-                setExpenses(data);
-            } else if (data && Array.isArray(data.expenses)) {
-                setExpenses(data.expenses);
-            } else {
-                setExpenses([]);
-            }
+            const list = Array.isArray(data)
+                ? data
+                : (Array.isArray(data?.expenses) ? data.expenses : []);
+            setExpenses(list);
+            setPagination({
+                page: data?.page ?? pageNum,
+                totalPages: data?.totalPages ?? 1,
+                total: data?.total ?? list.length,
+            });
         } catch (err) {
             console.error('Error fetching expenses:', err);
             setError(err.response?.data?.message || 'Failed to load expenses');
@@ -84,11 +97,26 @@ const Expenses = () => {
         }
     };
 
-    const filteredExpenses = Array.isArray(expenses) ? expenses.filter(
-        (e) =>
-            e?.description?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-            e?.category?.toLowerCase().includes(searchQuery.toLowerCase())
-    ) : [];
+    // KPI cards: server-side stats (approved totals + pending count), not summed
+    // from the paged list.
+    const fetchStats = async () => {
+        try {
+            const res = await getExpenseStats();
+            const d = res.data || {};
+            setStats({
+                totalExpenses: d.totalExpenses ?? 0,
+                monthExpenses: d.monthExpenses ?? 0,
+                pendingCount: d.pendingCount ?? 0,
+                pendingTotal: d.pendingTotal ?? 0,
+            });
+        } catch (err) {
+            console.error('Error fetching expense stats:', err);
+        }
+    };
+
+    // Search is server-side now (?search= over description), so the current page
+    // is already the filtered result — no client-side filtering.
+    const filteredExpenses = Array.isArray(expenses) ? expenses : [];
 
     const openModal = (expense = null) => {
         if (expense) {
@@ -144,7 +172,8 @@ const Expenses = () => {
             }
 
             setShowModal(false);
-            fetchExpenses();
+            fetchExpenses(1);
+            fetchStats();
         } catch (error) {
             console.error('Error saving expense:', error);
             appAlert(error.response?.data?.message || 'Failed to save expense');
@@ -157,7 +186,8 @@ const Expenses = () => {
         setApprovingId(expenseId);
         try {
             await approveExpense(expenseId);
-            fetchExpenses();
+            fetchExpenses(pagination.page);
+            fetchStats();
         } catch (error) {
             console.error('Error approving expense:', error);
             appAlert('Failed to approve expense');
@@ -174,7 +204,8 @@ const Expenses = () => {
         try {
             await rejectExpense(rejectModal.expenseId, rejectModal.reason);
             setRejectModal({ show: false, expenseId: null, reason: '' });
-            fetchExpenses();
+            fetchExpenses(pagination.page);
+            fetchStats();
         } catch (error) {
             console.error('Error rejecting expense:', error);
             appAlert('Failed to reject expense');
@@ -188,7 +219,8 @@ const Expenses = () => {
 
         try {
             await deleteExpense(expenseId);
-            fetchExpenses();
+            fetchExpenses(pagination.page);
+            fetchStats();
         } catch (error) {
             console.error('Error deleting expense:', error);
             appAlert('Failed to delete expense');
@@ -214,14 +246,6 @@ const Expenses = () => {
         return CATEGORIES.find((c) => c.value === value)?.label || value;
     };
 
-    const safeExpenses = Array.isArray(expenses) ? expenses : [];
-    const totalApproved = safeExpenses
-        .filter((e) => e?.status === 'approved')
-        .reduce((sum, e) => sum + (e?.amount || 0), 0);
-    const totalPending = safeExpenses
-        .filter((e) => e?.status === 'pending')
-        .reduce((sum, e) => sum + (e?.amount || 0), 0);
-
     if (loading) {
         return (
             <div className="flex items-center justify-center h-full p-6 bg-slate-50 dark:bg-d-bg">
@@ -243,7 +267,7 @@ const Expenses = () => {
                     <h2 className="text-xl font-semibold text-slate-800 dark:text-d-heading">Failed to load expenses</h2>
                     <p className="text-slate-500 dark:text-d-muted">{error}</p>
                     <button
-                        onClick={fetchExpenses}
+                        onClick={() => { fetchExpenses(1); fetchStats(); }}
                         className="px-4 py-2 bg-gradient-to-r from-amber-400 to-amber-500 dark:from-d-accent dark:to-d-accent-s text-white dark:text-d-card rounded-xl hover:shadow-md transition-all"
                     >
                         Try Again
@@ -259,7 +283,7 @@ const Expenses = () => {
             <div className="flex items-center justify-between mb-6">
                 <div>
                     <h1 className="text-2xl font-bold text-slate-800 dark:text-d-heading">Expenses</h1>
-                    <p className="text-slate-500 dark:text-d-muted">{safeExpenses.length} expenses recorded</p>
+                    <p className="text-slate-500 dark:text-d-muted">{pagination.total} expenses recorded</p>
                 </div>
                 <button
                     onClick={() => openModal()}
@@ -274,28 +298,18 @@ const Expenses = () => {
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
                 <div className="bg-white dark:bg-d-card rounded-2xl p-6 shadow-sm border border-slate-100 dark:border-d-border">
                     <p className="text-sm text-slate-500 dark:text-d-muted">Total Approved</p>
-                    <p className="text-2xl font-bold text-green-600 dark:text-d-green">{formatCurrency(totalApproved)}</p>
+                    <p className="text-2xl font-bold text-green-600 dark:text-d-green">{formatCurrency(stats.totalExpenses)}</p>
                 </div>
                 <div className="bg-white dark:bg-d-card rounded-2xl p-6 shadow-sm border border-slate-100 dark:border-d-border">
                     <p className="text-sm text-slate-500 dark:text-d-muted">Pending Approval</p>
-                    <p className="text-2xl font-bold text-yellow-600 dark:text-d-accent">{formatCurrency(totalPending)}</p>
+                    <p className="text-2xl font-bold text-yellow-600 dark:text-d-accent">
+                        {formatCurrency(Math.round((stats.pendingTotal || 0) * 100) / 100)}
+                    </p>
+                    <p className="text-xs text-slate-400 dark:text-d-faint mt-1">{stats.pendingCount} pending</p>
                 </div>
                 <div className="bg-white dark:bg-d-card rounded-2xl p-6 shadow-sm border border-slate-100 dark:border-d-border">
                     <p className="text-sm text-slate-500 dark:text-d-muted">This Month</p>
-                    <p className="text-2xl font-bold text-slate-800 dark:text-d-heading">
-                        {formatCurrency(
-                            safeExpenses
-                                .filter((e) => {
-                                    const d = new Date(e?.createdAt);
-                                    const now = new Date();
-                                    return (
-                                        d.getMonth() === now.getMonth() &&
-                                        d.getFullYear() === now.getFullYear()
-                                    );
-                                })
-                                .reduce((sum, e) => sum + (e?.amount || 0), 0)
-                        )}
-                    </p>
+                    <p className="text-2xl font-bold text-slate-800 dark:text-d-heading">{formatCurrency(stats.monthExpenses)}</p>
                 </div>
             </div>
 
@@ -416,6 +430,31 @@ const Expenses = () => {
                     <div className="flex flex-col items-center justify-center py-16 text-slate-400 dark:text-d-faint">
                         <FiDollarSign size={48} />
                         <p className="mt-4 dark:text-d-muted">No expenses found</p>
+                    </div>
+                )}
+
+                {/* Pagination */}
+                {pagination.totalPages > 1 && (
+                    <div className="flex items-center justify-between px-4 py-3 border-t border-slate-100 dark:border-d-border">
+                        <p className="text-sm text-slate-500 dark:text-d-muted">
+                            Page {pagination.page} of {pagination.totalPages} ({pagination.total} expenses)
+                        </p>
+                        <div className="flex gap-2">
+                            <button
+                                disabled={pagination.page <= 1 || loading}
+                                onClick={() => fetchExpenses(pagination.page - 1)}
+                                className="px-3 py-1.5 text-sm rounded-lg bg-slate-100 dark:bg-d-elevated hover:bg-slate-200 dark:hover:bg-d-glass disabled:opacity-40 transition-colors text-slate-700 dark:text-d-text"
+                            >
+                                Previous
+                            </button>
+                            <button
+                                disabled={pagination.page >= pagination.totalPages || loading}
+                                onClick={() => fetchExpenses(pagination.page + 1)}
+                                className="px-3 py-1.5 text-sm rounded-lg bg-slate-100 dark:bg-d-elevated hover:bg-slate-200 dark:hover:bg-d-glass disabled:opacity-40 transition-colors text-slate-700 dark:text-d-text"
+                            >
+                                Next
+                            </button>
+                        </div>
                     </div>
                 )}
             </div>
