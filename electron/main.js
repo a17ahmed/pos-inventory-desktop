@@ -1,6 +1,7 @@
 const { app, BrowserWindow, ipcMain, Menu, shell, dialog } = require('electron');
 const path = require('path');
 const { autoUpdater } = require('electron-updater');
+const { runOfflineDbSmokeTest } = require('./offlineDbSmokeTest');
 
 // Sentry — production builds only, initialized as early as possible to catch startup crashes.
 // DSN is safe to embed in source (it's a public write-only identifier, not a secret).
@@ -244,7 +245,11 @@ function setupAutoUpdater() {
 }
 
 // App ready
+// Phase 0 offline-store probe (better-sqlite3). Guarded internally — never throws.
+let offlineDbSmokeResult = null;
+
 app.whenReady().then(() => {
+    offlineDbSmokeResult = runOfflineDbSmokeTest(app);
     createWindow();
     createMenu();
     setupAutoUpdater();
@@ -279,6 +284,9 @@ ipcMain.on('set-titlebar-colors', (event, bgColor, symbolColor) => {
 ipcMain.handle('get-platform', () => {
     return process.platform;
 });
+
+// Phase 0: lets the renderer read the offline-store smoke-test outcome.
+ipcMain.handle('get-offline-db-status', () => offlineDbSmokeResult);
 
 ipcMain.handle('check-for-updates', () => {
     if (!isDev) {
