@@ -4,6 +4,7 @@ import html2pdf from 'html2pdf.js';
 import { useBusiness } from '../context/BusinessContext';
 import { todayLocalDate, toLocalDateStr } from '../utils/date';
 import { getCustomer, getCustomerLedger, collectFromCustomer } from '../services/api/customers';
+import { findCustomerByIdLocal } from '../services/offline/reads';
 import { addBillPayment } from '../services/api/bills';
 import { appAlert, appConfirm } from '../components/AppDialog';
 import {
@@ -36,6 +37,7 @@ const CustomerLedger = () => {
 
     const [customer, setCustomer] = useState(null);
     const [ledgerData, setLedgerData] = useState(null);
+    const [offlineMode, setOfflineMode] = useState(false); // serving from local cache
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
 
@@ -91,9 +93,28 @@ const CustomerLedger = () => {
 
             setLedgerData(ledgerRes.data);
             setCustomer(customerRes.data);
+            setOfflineMode(false);
         } catch (err) {
-            console.error('Error fetching ledger:', err);
-            setError(err.response?.data?.message || 'Failed to load ledger');
+            // Offline: the transaction history needs the network (bills aren't cached),
+            // but the customer's current dues ARE in the local mirror — show those.
+            const localCust = await findCustomerByIdLocal(id);
+            if (localCust) {
+                setCustomer(localCust);
+                setLedgerData({
+                    summary: {
+                        currentBalance: localCust.balance || 0,
+                        totalBilled: localCust.totalBilled || 0,
+                        totalPaid: localCust.totalPaid || 0,
+                        openingBalance: localCust.openingBalance || 0,
+                    },
+                    ledger: [],
+                });
+                setOfflineMode(true);
+                setError(null);
+            } else {
+                console.error('Error fetching ledger:', err);
+                setError(err.response?.data?.message || 'Failed to load ledger');
+            }
         } finally {
             setLoading(false);
         }
@@ -732,8 +753,17 @@ const CustomerLedger = () => {
                     {filteredEntries.length === 0 ? (
                         <div className="flex flex-col items-center justify-center py-20 text-slate-400 dark:text-d-faint">
                             <FiFileText size={48} />
-                            <p className="mt-4 text-base">No entries found</p>
-                            <p className="text-xs mt-1">Try adjusting your filters</p>
+                            {offlineMode ? (
+                                <>
+                                    <p className="mt-4 text-base">Transaction history needs internet</p>
+                                    <p className="text-xs mt-1">You're offline — showing the current balance only.</p>
+                                </>
+                            ) : (
+                                <>
+                                    <p className="mt-4 text-base">No entries found</p>
+                                    <p className="text-xs mt-1">Try adjusting your filters</p>
+                                </>
+                            )}
                         </div>
                     ) : (
                         <div className="overflow-x-auto">

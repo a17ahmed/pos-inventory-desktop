@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useBusiness } from '../context/BusinessContext';
 import { useAuth } from '../context/AuthContext';
-import { getProducts } from '../services/api/products';
 import { createReceipt } from '../services/api/receipts';
+import { loadProducts } from '../services/offline/reads';
 import {
     FiSearch,
     FiPlus,
@@ -97,8 +97,9 @@ const Sales = () => {
 
     const fetchProducts = async () => {
         try {
-            const res = await getProducts();
-            const productList = res.data || [];
+            // Local-first: instant from the offline SQLite cache (and works with no
+            // internet); falls back to the network API if the cache isn't populated.
+            const { data: productList } = await loadProducts();
             setProducts(productList);
             const cats = [...new Set(productList.map((p) => p.category).filter(Boolean))];
             setCategories(cats);

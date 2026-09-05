@@ -3,6 +3,7 @@ import { NavLink, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useBusiness } from '../context/BusinessContext';
 import { useTheme } from '../context/ThemeContext';
+import { syncOffline, isOfflineAvailable } from '../services/offline/sync';
 import {
     FiHome,
     FiPackage,
@@ -30,6 +31,21 @@ const Layout = ({ children }) => {
     const { isDark, toggleTheme } = useTheme();
     const navigate = useNavigate();
     const [sidebarExpanded, setSidebarExpanded] = useState(false);
+
+    // Offline sync (Phase 1): once the business is known and we're in the desktop
+    // app with a connection, mirror products + customers into the local SQLite
+    // store. Fire-and-forget and de-duped per business so it never blocks the UI.
+    const syncedBusinessRef = React.useRef(null);
+    useEffect(() => {
+        const businessId = business?._id || business?.id;
+        if (!businessId || !isOfflineAvailable()) return;
+        if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
+        if (syncedBusinessRef.current === businessId) return;
+        syncedBusinessRef.current = businessId;
+        syncOffline()
+            .then((s) => console.log('[offline sync]', JSON.stringify(s)))
+            .catch((e) => console.error('[offline sync] failed', e));
+    }, [business]);
 
     const handleLogout = async () => {
         await logout();

@@ -2,6 +2,7 @@ const { app, BrowserWindow, ipcMain, Menu, shell, dialog } = require('electron')
 const path = require('path');
 const { autoUpdater } = require('electron-updater');
 const { runOfflineDbSmokeTest } = require('./offlineDbSmokeTest');
+const offlineDb = require('./offline/offlineDb');
 
 // Sentry — production builds only, initialized as early as possible to catch startup crashes.
 // DSN is safe to embed in source (it's a public write-only identifier, not a secret).
@@ -287,6 +288,32 @@ ipcMain.handle('get-platform', () => {
 
 // Phase 0: lets the renderer read the offline-store smoke-test outcome.
 ipcMain.handle('get-offline-db-status', () => offlineDbSmokeResult);
+
+// ── Offline store IPC (Phase 1) ─────────────────────────────────────────────
+// All handlers are wrapped so a DB error surfaces as a rejected promise to the
+// renderer rather than crashing the main process.
+const offlineHandler = (fn) => async (event, args = {}) => {
+    try {
+        return { ok: true, data: fn(args) };
+    } catch (err) {
+        console.error('[offline]', err);
+        return { ok: false, error: err.message || String(err) };
+    }
+};
+
+ipcMain.handle('offline:cacheProducts', offlineHandler(({ businessId, docs }) => offlineDb.upsertProducts(app, businessId, docs)));
+ipcMain.handle('offline:cacheCustomers', offlineHandler(({ businessId, docs }) => offlineDb.upsertCustomers(app, businessId, docs)));
+ipcMain.handle('offline:setSyncMeta', offlineHandler(({ businessId, resource, meta }) => offlineDb.setSyncMeta(app, businessId, resource, meta)));
+ipcMain.handle('offline:getProductByBarcode', offlineHandler(({ businessId, barcode }) => offlineDb.getProductByBarcode(app, businessId, barcode)));
+ipcMain.handle('offline:getProductBySku', offlineHandler(({ businessId, sku }) => offlineDb.getProductBySku(app, businessId, sku)));
+ipcMain.handle('offline:searchProducts', offlineHandler(({ businessId, query, limit }) => offlineDb.searchProducts(app, businessId, query, limit)));
+ipcMain.handle('offline:getAllProducts', offlineHandler(({ businessId, opts }) => offlineDb.getAllProducts(app, businessId, opts)));
+ipcMain.handle('offline:searchCustomers', offlineHandler(({ businessId, query, limit }) => offlineDb.searchCustomers(app, businessId, query, limit)));
+ipcMain.handle('offline:getAllCustomers', offlineHandler(({ businessId, limit }) => offlineDb.getAllCustomers(app, businessId, limit)));
+ipcMain.handle('offline:getCustomerById', offlineHandler(({ businessId, id }) => offlineDb.getCustomerById(app, businessId, id)));
+ipcMain.handle('offline:getCustomerSummary', offlineHandler(({ businessId }) => offlineDb.getCustomerSummary(app, businessId)));
+ipcMain.handle('offline:getStatus', offlineHandler(({ businessId }) => offlineDb.getStatus(app, businessId)));
+ipcMain.handle('offline:clear', offlineHandler(({ businessId }) => offlineDb.clearBusiness(app, businessId)));
 
 ipcMain.handle('check-for-updates', () => {
     if (!isDev) {

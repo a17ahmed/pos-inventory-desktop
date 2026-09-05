@@ -8,6 +8,7 @@ import {
     updateCustomer,
     deleteCustomer,
 } from '../services/api/customers';
+import { loadCustomersLocal, customerSummaryLocal, offlineReady } from '../services/offline/reads';
 import {
     FiPlus,
     FiSearch,
@@ -55,6 +56,7 @@ const Customers = () => {
     const [summary, setSummary] = useState({ totalCustomers: 0, totalOutstandingDues: 0, customersWithDues: 0 });
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState(null);
+    const [offlineMode, setOfflineMode] = useState(false); // serving from local cache
 
     const [searchQuery, setSearchQuery] = useState('');
     const [duesFilter, setDuesFilter] = useState('all'); // 'all' | 'dues'
@@ -90,22 +92,43 @@ const Customers = () => {
                 totalPages: data?.totalPages ?? 1,
                 total: data?.total ?? list.length,
             });
+            setOfflineMode(false);
         } catch (err) {
-            console.error('Error fetching customers:', err);
-            setError(err.response?.data?.message || 'Failed to load customers');
-            setCustomers([]);
+            // Network failure / offline → serve from the local mirror so the list
+            // and everyone's dues stay visible. Filter (dues + search) locally.
+            const localAll = await loadCustomersLocal();
+            if (localAll.length || offlineReady()) {
+                const q = searchQuery.trim().toLowerCase();
+                let list = localAll;
+                if (duesFilter === 'dues') list = list.filter((c) => (c.balance || 0) > 0);
+                if (q) list = list.filter((c) =>
+                    (c.name || '').toLowerCase().includes(q) ||
+                    (c.phone || '').toLowerCase().includes(q) ||
+                    (c.email || '').toLowerCase().includes(q));
+                setCustomers(list);
+                setPagination({ page: 1, totalPages: 1, total: list.length });
+                setOfflineMode(true);
+                setError(null);
+            } else {
+                console.error('Error fetching customers:', err);
+                setError(err.response?.data?.message || 'Failed to load customers');
+                setCustomers([]);
+            }
         } finally {
             setLoading(false);
         }
     }, [duesFilter, searchQuery]);
 
-    // KPI cards: business-wide totals from the server summary (independent of paging).
+    // KPI cards: business-wide totals from the server summary; fall back to the
+    // locally-computed summary when offline.
     const fetchSummary = useCallback(async () => {
         try {
             const res = await getCustomerSummary();
             setSummary(res.data || { totalCustomers: 0, totalOutstandingDues: 0, customersWithDues: 0 });
         } catch (err) {
-            console.error('Error fetching customer summary:', err);
+            const local = await customerSummaryLocal();
+            if (local) setSummary(local);
+            else console.error('Error fetching customer summary:', err);
         }
     }, []);
 
@@ -242,6 +265,13 @@ const Customers = () => {
                         Add Customer
                     </button>
                 </div>
+
+                {/* Offline banner — data is served from the local cache */}
+                {offlineMode && (
+                    <div className="mb-4 px-4 py-2.5 rounded-xl text-sm bg-amber-50 dark:bg-[rgba(255,210,100,0.1)] text-amber-700 dark:text-d-accent border border-amber-200 dark:border-[rgba(255,210,100,0.2)]">
+                        Offline — showing saved customer data (dues as of the last sync).
+                    </div>
+                )}
 
                 {/* Stats Cards */}
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
