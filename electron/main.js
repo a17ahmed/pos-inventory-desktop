@@ -487,11 +487,15 @@ async function deliverPrintFile(tmpFile, printerName, event, byteLen) {
         if (!printed) {
             const names = printers.map((p) => p.name).join(', ') || 'none detected';
             logPrint('RESULT: FAILED — no delivery method worked');
-            throw new Error(
+            const err = new Error(
                 'Could not reach the receipt printer' + (target ? ' ("' + target + '")' : '') +
                 '. Installed printers: ' + names +
                 '. Open Settings → Receipt Settings and pick your thermal printer under "Receipt Printer".'
             );
+            // No printer resolved at all = nothing attached → skip quietly.
+            // A resolved-but-unreachable printer is a real error worth showing.
+            err.noPrinter = !target;
+            throw err;
         }
         logPrint('RESULT: SUCCESS via', target ? ('printer "' + target + '"') : 'fallback port');
     } else {
@@ -524,11 +528,14 @@ async function deliverPrintFile(tmpFile, printerName, event, byteLen) {
 
         if (!printed) {
             logPrint('RESULT: FAILED — no CUPS printer worked');
-            throw new Error(
+            const err = new Error(
                 'No thermal printer found on this Mac' + (printerName ? ' ("' + printerName + '")' : '') +
                 '. CUPS printers: ' + (cupsList.trim() || 'none') +
                 '. (This is a Mac-only path — the shop\'s Windows PC prints via the spooler and is unaffected.)'
             );
+            // No CUPS printer at all = nothing attached → skip quietly.
+            err.noPrinter = !cupsList.trim();
+            throw err;
         }
     }
 }
@@ -743,7 +750,8 @@ ipcMain.handle('print-receipt', async (event, { receiptData, printerName, paperW
     } catch (error) {
         logPrint('RESULT: ERROR —', error.message);
         console.error('Print error:', error);
-        return { success: false, error: error.message };
+        // noPrinter = nothing attached → the frontend skips the popup for this.
+        return { success: false, error: error.message, noPrinter: !!error.noPrinter };
     } finally {
         try { fs.unlinkSync(tmpFile); } catch (e) { /* ignore */ }
     }

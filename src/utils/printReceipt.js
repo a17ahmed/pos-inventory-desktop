@@ -71,10 +71,15 @@ export const printReceipt = (opts) => {
             },
         })
             .then(result => {
-                if (!result.success) {
-                    console.error('Print failed:', result.error);
-                    appAlert(result.error || 'The receipt could not be printed.', { title: 'Printing failed', danger: true });
+                if (result.success) return;
+                // No printer attached → skip quietly. Only alert on real failures
+                // (printer present but unreachable/errored).
+                if (result.noPrinter) {
+                    console.warn('Print skipped — no printer attached:', result.error);
+                    return;
                 }
+                console.error('Print failed:', result.error);
+                appAlert(result.error || 'The receipt could not be printed.', { title: 'Printing failed', danger: true });
             })
             .catch(err => {
                 console.error('Print error:', err);

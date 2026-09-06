@@ -405,9 +405,10 @@ const EmployeeDashboard = () => {
                         newItems[existingIndex] = { ...newItems[existingIndex], qty: currentQty + 1 };
                         return { ...bill, items: newItems };
                     } else {
+                        // Newest item goes on top so the last thing added is first.
                         return {
                             ...bill,
-                            items: [...bill.items, {
+                            items: [{
                                 _id: product._id,
                                 name: product.name,
                                 price: product.sellingPrice || product.price,
@@ -421,7 +422,7 @@ const EmployeeDashboard = () => {
                                 trackStock: product.trackStock,
                                 stockQuantity: product.stockQuantity,
                                 category: product.category,
-                            }]
+                            }, ...bill.items]
                         };
                     }
                 }
@@ -453,6 +454,29 @@ const EmployeeDashboard = () => {
                     return { ...bill, items: newItems };
                 }
                 return bill;
+            });
+            saveBills(updated, activeBillId);
+            return updated;
+        });
+    };
+
+    // Set an absolute quantity (from the editable qty field). Empty/invalid → 1;
+    // clamped to available stock when the item tracks stock.
+    const setItemQuantity = (itemId, rawQty) => {
+        setBills(prev => {
+            const updated = prev.map(bill => {
+                if (bill.id !== activeBillId) return bill;
+                const newItems = bill.items.map(item => {
+                    if (item._id !== itemId) return item;
+                    let qty = parseInt(rawQty, 10);
+                    if (isNaN(qty) || qty < 1) qty = 1;
+                    if (item.trackStock && qty > item.stockQuantity) {
+                        showToast(`Only ${item.stockQuantity} in stock`);
+                        qty = item.stockQuantity;
+                    }
+                    return { ...item, qty };
+                });
+                return { ...bill, items: newItems };
             });
             saveBills(updated, activeBillId);
             return updated;
@@ -622,6 +646,10 @@ const EmployeeDashboard = () => {
 
         const totals = getBillTotal(bill);
         const currentEffectiveTotal = totals.total;
+
+        // The cart shows newest-first on screen, but the saved record and printed
+        // receipt should read oldest-first (the order items were actually added).
+        const orderedItems = [...bill.items].reverse();
         const currentChangeAmount = Math.max(0, parseFloat(cashGiven || 0) - currentEffectiveTotal);
 
         if (paymentMethod === 'cash' && parseFloat(cashGiven || 0) < currentEffectiveTotal) {
@@ -649,7 +677,7 @@ const EmployeeDashboard = () => {
         setProcessing(true);
         try {
             const response = await createBill({
-                items: bill.items.map((item) => ({
+                items: orderedItems.map((item) => ({
                     product: item._id,
                     name: item.name,
                     barcode: item.barcode || '',
@@ -706,7 +734,7 @@ const EmployeeDashboard = () => {
                 paymentMethod,
                 amountPaid,
                 customerBalanceBefore: response.data?.customerBalanceBefore ?? bill.customerBalance ?? 0,
-                bill: { ...bill, items: [...bill.items] },
+                bill: { ...bill, items: orderedItems },
             };
             setSuccessData(sData);
             setShowPaymentModal(false);
@@ -1170,7 +1198,14 @@ const EmployeeDashboard = () => {
                                                     >
                                                         −
                                                     </button>
-                                                    <span className="font-display font-semibold text-base min-w-[22px] text-center text-slate-800 dark:text-d-text">{item.qty}</span>
+                                                    <input
+                                                        type="text"
+                                                        inputMode="numeric"
+                                                        value={item.qty}
+                                                        onFocus={(e) => e.target.select()}
+                                                        onChange={(e) => setItemQuantity(item._id, e.target.value.replace(/[^0-9]/g, ''))}
+                                                        className="font-display font-semibold text-base w-12 text-center bg-transparent border border-slate-300 dark:border-d-border rounded-lg py-1 text-slate-800 dark:text-d-text focus:border-amber-400 dark:focus:border-d-accent focus:outline-none"
+                                                    />
                                                     <button
                                                         onClick={() => updateQuantity(item._id, 1)}
                                                         className="w-7 h-7 rounded-lg border border-slate-300 dark:border-d-border bg-slate-100 dark:bg-d-glass text-slate-700 dark:text-d-text flex items-center justify-center hover:border-amber-400 dark:hover:border-d-border-hover hover:text-amber-600 dark:hover:text-d-accent hover:bg-amber-100 dark:hover:bg-[rgba(255,210,100,0.12)] transition-all"
