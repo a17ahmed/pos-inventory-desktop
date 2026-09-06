@@ -5,7 +5,7 @@ import { useBusiness } from '../context/BusinessContext';
 import { updateBusiness, updateAdmin, changeAdminPassword } from '../services/api/business';
 import { useTheme } from '../context/ThemeContext';
 import { buildReceiptHTML } from '../utils/receiptTemplate';
-import { printReceipt as printReceiptUtil, PRINTER_NAME_KEY } from '../utils/printReceipt';
+import { printReceipt as printReceiptUtil, PRINTER_NAME_KEY, PAPER_WIDTH_KEY } from '../utils/printReceipt';
 import { appAlert, appConfirm } from '../components/AppDialog';
 import {
     FiUser,
@@ -53,6 +53,30 @@ const Settings = () => {
     const [selectedPrinter, setSelectedPrinter] = useState(() => {
         try { return localStorage.getItem(PRINTER_NAME_KEY) || ''; } catch (e) { return ''; }
     });
+    const [paperWidth, setPaperWidth] = useState(() => {
+        try { return localStorage.getItem(PAPER_WIDTH_KEY) || '42'; } catch (e) { return '42'; }
+    });
+    const [printingTest, setPrintingTest] = useState(false);
+
+    const handleSelectPaperWidth = (w) => {
+        setPaperWidth(w);
+        try { localStorage.setItem(PAPER_WIDTH_KEY, w); } catch (e) { /* ignore */ }
+    };
+
+    const handlePrintWidthTest = async () => {
+        if (!window.electronAPI?.printWidthTest) return;
+        setPrintingTest(true);
+        try {
+            const res = await window.electronAPI.printWidthTest({
+                printerName: (() => { try { return localStorage.getItem(PRINTER_NAME_KEY) || undefined; } catch (e) { return undefined; } })(),
+            });
+            if (!res?.success) appAlert(res?.error || 'Could not print the width test.', { title: 'Printing failed', danger: true });
+        } catch (e) {
+            appAlert(e?.message || 'Could not print the width test.', { title: 'Printing failed', danger: true });
+        } finally {
+            setPrintingTest(false);
+        }
+    };
 
     // Load installed printers (Windows/Mac) so the user can pick their thermal printer.
     const loadPrinters = () => {
@@ -713,6 +737,34 @@ const Settings = () => {
                                             Open print log (for troubleshooting)
                                         </button>
                                     )}
+                                </div>
+                            )}
+
+                            {window.electronAPI?.printWidthTest && (
+                                <div>
+                                    <label className="block text-sm font-medium text-slate-700 dark:text-d-text mb-1">Paper Width</label>
+                                    <div className="flex gap-2">
+                                        <select
+                                            value={paperWidth}
+                                            onChange={(e) => handleSelectPaperWidth(e.target.value)}
+                                            className="flex-1 px-4 py-3 border border-slate-200 dark:border-d-border rounded-xl focus:ring-2 focus:ring-primary-500 bg-white dark:bg-d-elevated text-slate-800 dark:text-d-heading"
+                                        >
+                                            <option value="32">58 mm paper (32 chars)</option>
+                                            <option value="42">80 mm paper — narrow (42 chars)</option>
+                                            <option value="48">80 mm paper — standard (48 chars)</option>
+                                        </select>
+                                        <button
+                                            type="button"
+                                            onClick={handlePrintWidthTest}
+                                            disabled={printingTest}
+                                            className="px-4 py-3 border border-primary-500 text-primary-500 rounded-xl font-medium hover:bg-primary-50 dark:hover:bg-primary-500/10 disabled:opacity-50 whitespace-nowrap"
+                                        >
+                                            {printingTest ? 'Printing…' : 'Print test'}
+                                        </button>
+                                    </div>
+                                    <p className="text-xs text-slate-400 dark:text-d-muted mt-1">
+                                        If bills print too long or wrap, tap “Print test”, then pick the largest number that fits on one line.
+                                    </p>
                                 </div>
                             )}
                             <div>

@@ -427,9 +427,93 @@ if ([RawPrinterHelper]::SendFile($PrinterName, $FilePath)) { exit 0 } else { exi
     }
 }
 
-// Handle print request — uses node-thermal-printer for cross-platform support
-ipcMain.handle('print-receipt', async (event, { receiptData, printerName }) => {
+// Characters per line, chosen per-machine in Settings. Defaults to 42 (the
+// value the first deployed shop needs) when unset/invalid, so an app that
+// updates before the setting is picked keeps working. 58mm = 32, 80mm = 42 or 48.
+function resolvePaperWidth(paperWidth) {
+    const w = parseInt(paperWidth, 10);
+    return [32, 42, 48].includes(w) ? w : 42;
+}
+
+// Deliver an ESC/POS temp file to the printer (cross-platform). Throws on
+// failure. Shared by the receipt print and the paper-width test.
+async function deliverPrintFile(tmpFile, printerName, event, byteLen) {
     const { execSync } = require('child_process');
+
+    if (process.platform === 'win32') {
+        // Windows: print through the spooler/driver (RAW) — the same path a
+        // Windows test page or PDF uses. Writing straight to \\.\USBxxx does
+        // not work for driver-installed USB printers.
+        let printers = [];
+        try {
+            printers = await event.sender.getPrintersAsync();
+        } catch (e) {
+            logPrint('getPrintersAsync FAILED:', e.message);
+        }
+        logPrint('installed printers:', JSON.stringify(printers.map((p) => ({ name: p.name, default: p.isDefault, status: p.status }))));
+
+        const target = pickPrinterName(printers, printerName);
+        logPrint('chosen target:', target || '(none)', '| ESC/POS bytes:', byteLen);
+
+        let printed = false;
+        if (target) {
+            const res = sendRawToWindowsPrinter(tmpFile, target);
+            logPrint('RAW spool ->', '"' + target + '":', res.ok ? 'OK' : 'FAILED', res.detail ? ('| ' + res.detail) : '');
+            printed = res.ok;
+        } else {
+            logPrint('no target printer resolved — skipping RAW spool');
+        }
+
+        // Last-resort fallback for older setups where a printer exposes a
+        // raw USB/LPT port directly.
+        if (!printed) {
+            const ports = ['USB001', 'USB002', 'USB003', 'LPT1'];
+            for (const port of ports) {
+                try {
+                    execSync(`copy /b "${tmpFile}" \\\\.\\${port}`, {
+                        shell: 'cmd.exe',
+                        timeout: 10000,
+                        windowsHide: true,
+                    });
+                    printed = true;
+                    logPrint('fallback direct-port', port, ': OK');
+                    break;
+                } catch (e) {
+                    logPrint('fallback direct-port', port, ': failed');
+                }
+            }
+        }
+
+        if (!printed) {
+            const names = printers.map((p) => p.name).join(', ') || 'none detected';
+            logPrint('RESULT: FAILED — no delivery method worked');
+            throw new Error(
+                'Could not reach the receipt printer' + (target ? ' ("' + target + '")' : '') +
+                '. Installed printers: ' + names +
+                '. Open Settings → Receipt Settings and pick your thermal printer under "Receipt Printer".'
+            );
+        }
+        logPrint('RESULT: SUCCESS via', target ? ('printer "' + target + '"') : 'fallback port');
+    } else {
+        // macOS / Linux: use CUPS lp command
+        try {
+            execSync(`lp -d STMicroelectronics_POS80_Printer_USB -o raw "${tmpFile}" 2>&1`, { timeout: 10000 });
+            logPrint('RESULT: SUCCESS via CUPS default printer');
+        } catch (lpError) {
+            const printers = execSync('lpstat -p 2>/dev/null', { timeout: 5000 }).toString();
+            const posMatch = printers.match(/printer (\S*(?:POS|STM|Thermal|Receipt|Speed)\S*)/i);
+            if (posMatch) {
+                execSync(`lp -d "${posMatch[1]}" -o raw "${tmpFile}" 2>&1`, { timeout: 10000 });
+                logPrint('RESULT: SUCCESS via CUPS printer', posMatch[1]);
+            } else {
+                throw new Error('No thermal printer found. Printers: ' + printers);
+            }
+        }
+    }
+}
+
+// Handle print request — uses node-thermal-printer for cross-platform support
+ipcMain.handle('print-receipt', async (event, { receiptData, printerName, paperWidth }) => {
     const fs = require('fs');
     const os = require('os');
     const ThermalPrinter = require('node-thermal-printer').printer;
@@ -448,12 +532,11 @@ ipcMain.handle('print-receipt', async (event, { receiptData, printerName }) => {
             receiptFooter, receiptNote
         } = receiptData;
 
-        logPrint('--- print-receipt START ---', 'platform:', process.platform, '| bill:', billNumber, '| requested printer:', printerName || '(auto)', '| store:', storeName);
+        // Chars per line for this printer (32/42/48), chosen in Settings. Column
+        // widths below are computed from W so any paper size stays aligned.
+        const W = resolvePaperWidth(paperWidth);
 
-        // Characters per line for this printer. Most 80mm thermal printers fit
-        // 48, but this shop's printer fits 42 (content built for 48 wraps every
-        // row onto a 2nd line, doubling the receipt length). 58mm printers = 32.
-        const W = 42;
+        logPrint('--- print-receipt START ---', 'platform:', process.platform, '| bill:', billNumber, '| printer:', printerName || '(auto)', '| width:', W, '| store:', storeName);
         const money = (amt) => currency + ' ' + Number(amt).toLocaleString();
         const num = (n) => Number(n).toLocaleString();
 
@@ -499,9 +582,17 @@ ipcMain.handle('print-receipt', async (event, { receiptData, printerName }) => {
         printer.drawLine();
 
         // ──── ITEMS TABLE ────
-        // Column widths must sum to W (42). 'disc' is the last column, so its
-        // right edge is the paper edge — keeping the sum exact prevents wrapping.
-        const c = { sr: 3, name: 14, qty: 4, rate: 7, amt: 8, disc: 6 };
+        // Column widths must sum to W. Numeric columns are fixed (tighter on
+        // 58mm); 'name' absorbs the remaining space. 'disc' is the last column,
+        // so its right edge is the paper edge — an exact sum prevents wrapping.
+        const c = {
+            sr: W >= 42 ? 3 : 2,
+            qty: W >= 42 ? 4 : 3,
+            rate: W >= 42 ? 7 : 6,
+            amt: W >= 42 ? 8 : 6,
+            disc: W >= 42 ? 6 : 5,
+        };
+        c.name = W - (c.sr + c.qty + c.rate + c.amt + c.disc);
 
         printer.tableCustom([
             { text: '#', cols: c.sr, bold: true },
@@ -622,90 +713,68 @@ ipcMain.handle('print-receipt', async (event, { receiptData, printerName }) => {
         // Cut paper
         printer.partialCut();
 
-        // Get the raw ESC/POS buffer
+        // Get the raw ESC/POS buffer and deliver it to the printer.
         const buffer = printer.getBuffer();
-
-        // Write buffer to temp file
         fs.writeFileSync(tmpFile, buffer);
-
-        // ──── SEND TO PRINTER (cross-platform) ────
-        const platform = process.platform;
-
-        if (platform === 'win32') {
-            // Windows: print through the spooler/driver (RAW) — the same path a
-            // Windows test page or PDF uses. Writing straight to \\.\USBxxx does
-            // not work for driver-installed USB printers.
-            let printers = [];
-            try {
-                printers = await event.sender.getPrintersAsync();
-            } catch (e) {
-                logPrint('getPrintersAsync FAILED:', e.message);
-            }
-            logPrint('installed printers:', JSON.stringify(printers.map((p) => ({ name: p.name, default: p.isDefault, status: p.status }))));
-
-            const target = pickPrinterName(printers, printerName);
-            logPrint('chosen target:', target || '(none)', '| ESC/POS bytes:', buffer.length);
-
-            let printed = false;
-            if (target) {
-                const res = sendRawToWindowsPrinter(tmpFile, target);
-                logPrint('RAW spool ->', '"' + target + '":', res.ok ? 'OK' : 'FAILED', res.detail ? ('| ' + res.detail) : '');
-                printed = res.ok;
-            } else {
-                logPrint('no target printer resolved — skipping RAW spool');
-            }
-
-            // Last-resort fallback for older setups where a printer exposes a
-            // raw USB/LPT port directly.
-            if (!printed) {
-                const ports = ['USB001', 'USB002', 'USB003', 'LPT1'];
-                for (const port of ports) {
-                    try {
-                        execSync(`copy /b "${tmpFile}" \\\\.\\${port}`, {
-                            shell: 'cmd.exe',
-                            timeout: 10000,
-                            windowsHide: true,
-                        });
-                        printed = true;
-                        logPrint('fallback direct-port', port, ': OK');
-                        break;
-                    } catch (e) {
-                        logPrint('fallback direct-port', port, ': failed');
-                    }
-                }
-            }
-
-            if (!printed) {
-                const names = printers.map((p) => p.name).join(', ') || 'none detected';
-                logPrint('RESULT: FAILED — no delivery method worked');
-                throw new Error(
-                    'Could not reach the receipt printer' + (target ? ' ("' + target + '")' : '') +
-                    '. Installed printers: ' + names +
-                    '. Open Settings → Receipt Settings and pick your thermal printer under "Receipt Printer".'
-                );
-            }
-            logPrint('RESULT: SUCCESS via', target ? ('printer "' + target + '"') : 'fallback port');
-        } else {
-            // macOS / Linux: use CUPS lp command
-            try {
-                execSync(`lp -d STMicroelectronics_POS80_Printer_USB -o raw "${tmpFile}" 2>&1`, { timeout: 10000 });
-                logPrint('RESULT: SUCCESS via CUPS default printer');
-            } catch (lpError) {
-                const printers = execSync('lpstat -p 2>/dev/null', { timeout: 5000 }).toString();
-                const posMatch = printers.match(/printer (\S*(?:POS|STM|Thermal|Receipt|Speed)\S*)/i);
-                if (posMatch) {
-                    execSync(`lp -d "${posMatch[1]}" -o raw "${tmpFile}" 2>&1`, { timeout: 10000 });
-                    logPrint('RESULT: SUCCESS via CUPS printer', posMatch[1]);
-                } else {
-                    throw new Error('No thermal printer found. Printers: ' + printers);
-                }
-            }
-        }
+        await deliverPrintFile(tmpFile, printerName, event, buffer.length);
 
         return { success: true };
     } catch (error) {
         logPrint('RESULT: ERROR —', error.message);
         console.error('Print error:', error);
+        return { success: false, error: error.message };
+    } finally {
+        try { fs.unlinkSync(tmpFile); } catch (e) { /* ignore */ }
+    }
+});
+
+// Print a paper-width ruler so the shop can see which width their printer fits.
+// Each line is exactly N characters ending in '|'; the largest number whose
+// line does NOT wrap is the printer's characters-per-line.
+ipcMain.handle('print-width-test', async (event, { printerName } = {}) => {
+    const fs = require('fs');
+    const os = require('os');
+    const ThermalPrinter = require('node-thermal-printer').printer;
+    const PrinterTypes = require('node-thermal-printer').types;
+    const tmpFile = path.join(os.tmpdir(), 'widthtest_' + Date.now() + '.bin');
+
+    try {
+        logPrint('--- print-width-test START --- printer:', printerName || '(auto)');
+        const printer = new ThermalPrinter({
+            type: PrinterTypes.EPSON,
+            interface: tmpFile,
+            width: 48,
+            characterSet: 'PC437_USA',
+        });
+
+        printer.alignCenter();
+        printer.bold(true);
+        printer.println('PAPER WIDTH TEST');
+        printer.bold(false);
+        printer.alignLeft();
+        printer.println('The largest number whose line');
+        printer.println('ends with | on ONE line (does');
+        printer.println('not wrap) is your paper width.');
+        printer.println('-'.repeat(30));
+        [32, 42, 48].forEach((w) => {
+            const label = String(w);
+            printer.println(label + '-'.repeat(w - label.length - 1) + '|');
+        });
+        printer.println('-'.repeat(30));
+        printer.println('Set it in Receipt Settings ->');
+        printer.println('Paper Width.');
+        printer.newLine();
+        printer.newLine();
+        printer.partialCut();
+
+        const buffer = printer.getBuffer();
+        fs.writeFileSync(tmpFile, buffer);
+        await deliverPrintFile(tmpFile, printerName, event, buffer.length);
+
+        return { success: true };
+    } catch (error) {
+        logPrint('width-test ERROR —', error.message);
+        console.error('Width test error:', error);
         return { success: false, error: error.message };
     } finally {
         try { fs.unlinkSync(tmpFile); } catch (e) { /* ignore */ }

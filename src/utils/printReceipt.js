@@ -1,8 +1,9 @@
 import { buildReceiptHTML } from './receiptTemplate';
 import { appAlert } from '../components/AppDialog';
 
-// localStorage key for the user's chosen receipt printer (per-machine, not synced).
+// localStorage keys for per-machine printer settings (not synced to backend).
 export const PRINTER_NAME_KEY = 'posPrinterName';
+export const PAPER_WIDTH_KEY = 'posPaperWidth'; // chars per line: '32' | '42' | '48'
 
 /**
  * Print a receipt via Electron ESC/POS or browser iframe fallback.
@@ -46,9 +47,13 @@ export const printReceipt = (opts) => {
         const printerName = (() => {
             try { return localStorage.getItem(PRINTER_NAME_KEY) || undefined; } catch (e) { return undefined; }
         })();
+        const paperWidth = (() => {
+            try { return localStorage.getItem(PAPER_WIDTH_KEY) || undefined; } catch (e) { return undefined; }
+        })();
 
         window.electronAPI.printReceipt({
             printerName,
+            paperWidth,
             receiptData: {
                 storeName, storeAddress, storePhone, cashierName,
                 billNumber, date, customerName, customerBalanceBefore,
