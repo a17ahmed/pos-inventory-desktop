@@ -450,7 +450,10 @@ ipcMain.handle('print-receipt', async (event, { receiptData, printerName }) => {
 
         logPrint('--- print-receipt START ---', 'platform:', process.platform, '| bill:', billNumber, '| requested printer:', printerName || '(auto)', '| store:', storeName);
 
-        const W = 48;
+        // Characters per line for this printer. Most 80mm thermal printers fit
+        // 48, but this shop's printer fits 42 (content built for 48 wraps every
+        // row onto a 2nd line, doubling the receipt length). 58mm printers = 32.
+        const W = 42;
         const money = (amt) => currency + ' ' + Number(amt).toLocaleString();
         const num = (n) => Number(n).toLocaleString();
 
@@ -496,7 +499,9 @@ ipcMain.handle('print-receipt', async (event, { receiptData, printerName }) => {
         printer.drawLine();
 
         // ──── ITEMS TABLE ────
-        const c = { sr: 3, name: 16, qty: 5, rate: 7, amt: 9, disc: 8 };
+        // Column widths must sum to W (42). 'disc' is the last column, so its
+        // right edge is the paper edge — keeping the sum exact prevents wrapping.
+        const c = { sr: 3, name: 14, qty: 4, rate: 7, amt: 8, disc: 6 };
 
         printer.tableCustom([
             { text: '#', cols: c.sr, bold: true },
