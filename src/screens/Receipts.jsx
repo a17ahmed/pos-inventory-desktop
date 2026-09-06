@@ -248,6 +248,7 @@ const Receipts = () => {
             qty: it.qty || it.quantity || 0,
             price: it.price || it.sellingPrice || 0,
             discountAmount: it.discountAmount || 0,
+            returnedQty: it.returnedQty || 0,
         }));
         const subtotal = items.reduce((s, it) => s + (it.price * it.qty - (Number(it.discountAmount) || 0)), 0);
         // Use paymentStatus from bill data — if unpaid, it's credit
@@ -280,6 +281,8 @@ const Receipts = () => {
             amountDue: receipt.amountDue || 0,
             cashGiven: receipt.cashGiven || 0,
             change: receipt.change || 0,
+            totalRefunded: receipt.totalRefunded || 0,
+            netAmount: receipt.netAmount ?? ((receipt.total || 0) - (receipt.totalRefunded || 0)),
         };
     };
 

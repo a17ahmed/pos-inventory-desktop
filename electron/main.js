@@ -602,6 +602,7 @@ ipcMain.handle('print-receipt', async (event, { receiptData, printerName, paperW
             customerPhone, customerAddress, showCustomerPhone, showCustomerAddress,
             items, subtotal, tax, itemDiscounts, billDiscount, total,
             paymentMethod, amountPaid, cashGiven, change, currency,
+            totalRefunded, netAmount,
             receiptFooter, receiptNote
         } = receiptData;
 
@@ -713,6 +714,14 @@ ipcMain.handle('print-receipt', async (event, { receiptData, printerName, paperW
                     { text: '', cols: c.disc },
                 ]);
             }
+
+            // Show returned quantity under the item, if any was returned.
+            if (Number(item.returnedQty) > 0) {
+                printer.tableCustom([
+                    { text: '', cols: c.sr },
+                    { text: '(' + item.returnedQty + ' returned)', cols: c.name + c.qty + c.rate + c.amt + c.disc, align: 'LEFT' },
+                ]);
+            }
         });
 
         printer.drawLine();
@@ -743,6 +752,17 @@ ipcMain.handle('print-receipt', async (event, { receiptData, printerName, paperW
         printer.setTextNormal();
         printer.bold(false);
         printer.drawLine('=');
+
+        // ──── RETURNS / REFUND ────
+        if (Number(totalRefunded) > 0) {
+            printer.leftRight('Total Refunded:', '-' + money(totalRefunded));
+            printer.bold(true);
+            printer.setTextDoubleHeight();
+            printer.leftRight('Net Amount:', money(netAmount != null ? netAmount : (total - totalRefunded)));
+            printer.setTextNormal();
+            printer.bold(false);
+            printer.drawLine('=');
+        }
 
         // ──── PAYMENT ────
         // Derived from amounts, not the payment-method string — a partial

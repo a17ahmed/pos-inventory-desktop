@@ -23,6 +23,8 @@ export const buildReceiptHTML = ({
     amountDue = 0,
     cashGiven = 0,
     change = 0,
+    totalRefunded = 0,
+    netAmount = total,
 }) => {
     const storeName = store.name || 'Store';
     const storePhone = store.phone || '';
@@ -52,8 +54,9 @@ export const buildReceiptHTML = ({
         totalQty += qty;
         totalAmt += amt;
         totalDisc += disc;
+        const returnedQty = Number(item.returnedQty) || 0;
         return `<tr>
-            <td style="font-size:11px;padding:2px 0;">${idx + 1} ${item.name}</td>
+            <td style="font-size:11px;padding:2px 0;">${idx + 1} ${item.name}${returnedQty > 0 ? `<div style="font-size:9px;color:#b91c1c;">${returnedQty} returned</div>` : ''}</td>
             <td style="text-align:center;font-size:11px;padding:2px 0;">${qty}</td>
             <td style="text-align:right;font-size:11px;padding:2px 0;">${price.toLocaleString()}</td>
             <td style="text-align:right;font-size:11px;padding:2px 0;">${amt.toLocaleString()}</td>
@@ -133,6 +136,18 @@ export const buildReceiptHTML = ({
             </tr>
         </table>
         ${solidLine}
+        ${Number(totalRefunded) > 0 ? `
+        <table style="width:100%;border-collapse:collapse;">
+            <tr>
+                <td style="font-size:10px;padding:2px 0;color:#b91c1c;">Total Refunded:</td>
+                <td style="text-align:right;font-size:10px;padding:2px 0;color:#b91c1c;">-${currency} ${Number(totalRefunded).toLocaleString()}</td>
+            </tr>
+            <tr>
+                <td style="font-size:12px;padding:3px 0;"><b>Net Amount:</b></td>
+                <td style="text-align:right;font-size:12px;padding:3px 0;"><b>${currency} ${Number(netAmount != null ? netAmount : (total - totalRefunded)).toLocaleString()}</b></td>
+            </tr>
+        </table>
+        ${solidLine}` : ''}
         <table style="width:100%;border-collapse:collapse;">
             <tr>
                 <td style="font-size:10px;padding:2px 0;">Payment:</td>
