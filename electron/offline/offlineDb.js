@@ -18,7 +18,7 @@ const path = require('path');
 const Database = require('better-sqlite3');
 
 // Schema version — bump when columns change so migrations can run.
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 
 const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS products (
@@ -82,6 +82,27 @@ CREATE TABLE IF NOT EXISTS sync_meta (
     lastSyncAt     TEXT,               -- when we last completed a sync
     count          INTEGER
 );
+
+-- Outbox: durable queue of offline WRITES (Phase 2). Each op carries a stable
+-- idempotencyKey so the server applies it exactly once, even across retries and
+-- crashes. Ops are pushed in insertion order (rowid) and NEVER deleted until the
+-- server confirms — a failure just leaves the row 'pending' to retry.
+CREATE TABLE IF NOT EXISTS outbox (
+    id             TEXT PRIMARY KEY,      -- local UUID for this operation
+    type           TEXT NOT NULL,         -- 'bill' | 'payment' | 'customer_create' | 'customer_update'
+    idempotencyKey TEXT NOT NULL UNIQUE,  -- exactly-once key sent to the server
+    payload        TEXT NOT NULL,         -- JSON body to send
+    status         TEXT NOT NULL DEFAULT 'pending', -- pending|syncing|synced|failed|quarantined
+    attempts       INTEGER NOT NULL DEFAULT 0,
+    lastError      TEXT,
+    dependsOn      TEXT,                  -- outbox.id this op must follow (e.g. bill after customer_create)
+    localRef       TEXT,                  -- temp local id this op created (for id remap)
+    serverId       TEXT,                  -- server _id returned on success
+    createdAt      TEXT NOT NULL,
+    updatedAt      TEXT NOT NULL,
+    nextAttemptAt  TEXT                   -- earliest time to retry (backoff)
+);
+CREATE INDEX IF NOT EXISTS idx_outbox_status ON outbox(status);
 `;
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
@@ -166,10 +187,11 @@ function upsertProducts(app, businessId, docs = []) {
     return many(docs);
 }
 
-function upsertCustomers(app, businessId, docs = []) {
-    const db = getDb(app, businessId);
-    const now = new Date().toISOString();
-    const stmt = db.prepare(`
+// Upsert a single customer document onto an already-open db (shared by the bulk
+// sync-down and the transactional offline-write path). better-sqlite3 caches the
+// prepared statement by SQL text, so re-preparing here is cheap.
+function upsertCustomerRow(db, d, now) {
+    db.prepare(`
         INSERT INTO customers (
             id, name, phone, email, address, notes, creditDays, creditLimit,
             isActive, business, openingBalance, totalBilled, totalPaid, balance,
@@ -186,33 +208,36 @@ function upsertCustomers(app, businessId, docs = []) {
             totalPaid=@totalPaid, balance=@balance, totalPurchases=@totalPurchases,
             totalReturns=@totalReturns, lastPurchase=@lastPurchase, createdAt=@createdAt,
             updatedAt=@updatedAt, raw=@raw, syncedAt=@syncedAt
-    `);
+    `).run({
+        id: idOf(d),
+        name: d.name ?? null,
+        phone: d.phone ?? null,
+        email: d.email ?? null,
+        address: d.address ?? null,
+        notes: d.notes ?? null,
+        creditDays: num(d.creditDays),
+        creditLimit: num(d.creditLimit),
+        isActive: bool(d.isActive),
+        business: d.business ? String(d.business) : null,
+        openingBalance: num(d.openingBalance),
+        totalBilled: num(d.totalBilled),
+        totalPaid: num(d.totalPaid),
+        balance: num(d.balance),
+        totalPurchases: num(d.totalPurchases),
+        totalReturns: num(d.totalReturns),
+        lastPurchase: iso(d.lastPurchase),
+        createdAt: iso(d.createdAt),
+        updatedAt: iso(d.updatedAt),
+        raw: JSON.stringify(d),
+        syncedAt: now,
+    });
+}
+
+function upsertCustomers(app, businessId, docs = []) {
+    const db = getDb(app, businessId);
+    const now = new Date().toISOString();
     const many = db.transaction((rows) => {
-        for (const d of rows) {
-            stmt.run({
-                id: idOf(d),
-                name: d.name ?? null,
-                phone: d.phone ?? null,
-                email: d.email ?? null,
-                address: d.address ?? null,
-                notes: d.notes ?? null,
-                creditDays: num(d.creditDays),
-                creditLimit: num(d.creditLimit),
-                isActive: bool(d.isActive),
-                business: d.business ? String(d.business) : null,
-                openingBalance: num(d.openingBalance),
-                totalBilled: num(d.totalBilled),
-                totalPaid: num(d.totalPaid),
-                balance: num(d.balance),
-                totalPurchases: num(d.totalPurchases),
-                totalReturns: num(d.totalReturns),
-                lastPurchase: iso(d.lastPurchase),
-                createdAt: iso(d.createdAt),
-                updatedAt: iso(d.updatedAt),
-                raw: JSON.stringify(d),
-                syncedAt: now,
-            });
-        }
+        for (const d of rows) upsertCustomerRow(db, d, now);
         return rows.length;
     });
     return many(docs);
@@ -231,6 +256,126 @@ function setSyncMeta(app, businessId, resource, { lastUpdatedAt, count }) {
         lastSyncAt: new Date().toISOString(),
         count: count ?? null,
     });
+}
+
+// ─── outbox + transactional offline writes ──────────────────────────────────
+
+// Optimistic local mutations — update BOTH the typed column and the `raw` JSON so
+// reads (which return `raw`) reflect the change immediately. Called inside a txn.
+function decrementProductStock(db, productId, qty) {
+    const row = db.prepare('SELECT raw FROM products WHERE id = ?').get(String(productId));
+    if (!row) return;
+    const doc = JSON.parse(row.raw);
+    doc.stockQuantity = (Number(doc.stockQuantity) || 0) - (Number(qty) || 0);
+    db.prepare('UPDATE products SET stockQuantity = ?, raw = ? WHERE id = ?')
+      .run(doc.stockQuantity, JSON.stringify(doc), String(productId));
+}
+
+function adjustCustomerBalance(db, customerId, delta) {
+    const row = db.prepare('SELECT raw FROM customers WHERE id = ?').get(String(customerId));
+    if (!row) return;
+    const doc = JSON.parse(row.raw);
+    doc.balance = (Number(doc.balance) || 0) + (Number(delta) || 0);
+    db.prepare('UPDATE customers SET balance = ?, raw = ? WHERE id = ?')
+      .run(doc.balance, JSON.stringify(doc), String(customerId));
+}
+
+function insertOp(db, op) {
+    const now = new Date().toISOString();
+    db.prepare(`
+        INSERT INTO outbox (id, type, idempotencyKey, payload, status, attempts, dependsOn, localRef, createdAt, updatedAt)
+        VALUES (@id, @type, @idempotencyKey, @payload, 'pending', 0, @dependsOn, @localRef, @createdAt, @updatedAt)
+    `).run({
+        id: op.id,
+        type: op.type,
+        idempotencyKey: op.idempotencyKey,
+        payload: JSON.stringify(op.payload),
+        dependsOn: op.dependsOn || null,
+        localRef: op.localRef || null,
+        createdAt: now,
+        updatedAt: now,
+    });
+}
+
+// Offline SALE: atomically decrement local stock, bump customer balance for the
+// credit portion, and enqueue the bill — all-or-nothing so we can never end up
+// with a local change that has no outbox entry (or vice-versa).
+function applyOfflineBill(app, businessId, { op, items = [], customerId = null, creditDelta = 0 }) {
+    const db = getDb(app, businessId);
+    db.transaction(() => {
+        for (const it of items) decrementProductStock(db, it.productId, it.qty);
+        if (customerId && creditDelta) adjustCustomerBalance(db, customerId, creditDelta);
+        insertOp(db, op);
+    })();
+    return { ok: true, opId: op.id };
+}
+
+// Offline PAYMENT collection: reduce the customer's balance and enqueue the op.
+function applyOfflinePayment(app, businessId, { op, customerId, amount }) {
+    const db = getDb(app, businessId);
+    db.transaction(() => {
+        if (customerId && amount) adjustCustomerBalance(db, customerId, -Math.abs(Number(amount) || 0));
+        insertOp(db, op);
+    })();
+    return { ok: true, opId: op.id };
+}
+
+// Offline CUSTOMER create/update: upsert the local row (so it shows at once) and
+// enqueue the op, in one transaction.
+function applyOfflineCustomer(app, businessId, { op, customer }) {
+    const db = getDb(app, businessId);
+    db.transaction(() => {
+        upsertCustomerRow(db, customer, new Date().toISOString());
+        insertOp(db, op);
+    })();
+    return { ok: true, opId: op.id };
+}
+
+// Ops ready to push, in insertion order.
+function getPendingOps(app, businessId) {
+    const db = getDb(app, businessId);
+    const nowIso = new Date().toISOString();
+    return db.prepare(`
+        SELECT id, type, idempotencyKey, payload, status, attempts, lastError, dependsOn, localRef, serverId
+        FROM outbox
+        WHERE status IN ('pending','failed')
+          AND (nextAttemptAt IS NULL OR nextAttemptAt <= ?)
+        ORDER BY rowid ASC
+    `).all(nowIso).map((r) => ({ ...r, payload: JSON.parse(r.payload) }));
+}
+
+function markOp(app, businessId, id, patch) {
+    const db = getDb(app, businessId);
+    const cur = db.prepare('SELECT attempts FROM outbox WHERE id = ?').get(id);
+    db.prepare(`
+        UPDATE outbox SET
+            status = COALESCE(@status, status),
+            serverId = COALESCE(@serverId, serverId),
+            lastError = @lastError,
+            attempts = @attempts,
+            nextAttemptAt = @nextAttemptAt,
+            updatedAt = @updatedAt
+        WHERE id = @id
+    `).run({
+        id,
+        status: patch.status || null,
+        serverId: patch.serverId || null,
+        lastError: patch.lastError ?? null,
+        attempts: patch.incrementAttempt ? (cur?.attempts || 0) + 1 : (cur?.attempts || 0),
+        nextAttemptAt: patch.nextAttemptAt || null,
+        updatedAt: new Date().toISOString(),
+    });
+}
+
+function getOutboxStatus(app, businessId) {
+    const db = getDb(app, businessId);
+    const rows = db.prepare('SELECT status, COUNT(*) c FROM outbox GROUP BY status').all();
+    const byStatus = {};
+    for (const r of rows) byStatus[r.status] = r.c;
+    const oldestPending = db.prepare(
+        "SELECT createdAt FROM outbox WHERE status IN ('pending','failed') ORDER BY rowid ASC LIMIT 1"
+    ).get();
+    return { byStatus, oldestPendingAt: oldestPending?.createdAt || null };
 }
 
 // ─── reads (return the verbatim documents from `raw`) ────────────────────────
@@ -313,10 +458,18 @@ function getStatus(app, businessId) {
     return { businessId, products, customers, meta, dbFile: dbFileFor(app, businessId) };
 }
 
-// Clear a business's cached data (call on logout for security/privacy).
+// Clear a business's cached REFERENCE data (call on logout for privacy).
+// Deliberately preserves the outbox — unsynced offline writes (real money) must
+// survive logout and sync once the user is back online.
 function clearBusiness(app, businessId) {
     const db = getDb(app, businessId);
     db.exec('DELETE FROM products; DELETE FROM customers; DELETE FROM sync_meta;');
+}
+
+// How many unsynced writes are still queued (guard a logout/clear if > 0).
+function pendingOpCount(app, businessId) {
+    const db = getDb(app, businessId);
+    return db.prepare("SELECT COUNT(*) c FROM outbox WHERE status IN ('pending','failed','syncing')").get().c;
 }
 
 module.exports = {
@@ -335,5 +488,13 @@ module.exports = {
     getCustomerSummary,
     getStatus,
     clearBusiness,
+    // outbox / offline writes
+    applyOfflineBill,
+    applyOfflinePayment,
+    applyOfflineCustomer,
+    getPendingOps,
+    markOp,
+    getOutboxStatus,
+    pendingOpCount,
     _internal: { dbFileFor },
 };

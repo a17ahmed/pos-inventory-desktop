@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useBusiness } from '../context/BusinessContext';
 import { useAuth } from '../context/AuthContext';
-import { createReceipt } from '../services/api/receipts';
 import { loadProducts } from '../services/offline/reads';
+import { createBillSafe } from '../services/offline/offlineWrites';
 import {
     FiSearch,
     FiPlus,
@@ -198,7 +198,15 @@ const Sales = () => {
                 idempotencyKey,
             };
 
-            const response = await createReceipt(orderData);
+            // Routes through the offline-capable facade. While the offline-writes
+            // flag is off this is identical to createReceipt(orderData); when on and
+            // offline, the sale is queued (walk-in cash sale: no customer/credit).
+            const response = await createBillSafe({
+                billPayload: orderData,
+                items: cart.map((item) => ({ productId: item._id, qty: item.qty })),
+                customerId: null,
+                creditDelta: 0,
+            });
 
             const receiptInfo = {
                 billNumber: response.data?.billNumber,

@@ -4,11 +4,10 @@ import { useBusiness } from '../context/BusinessContext';
 import {
     getCustomers,
     getCustomerSummary,
-    createCustomer,
-    updateCustomer,
     deleteCustomer,
 } from '../services/api/customers';
 import { loadCustomersLocal, customerSummaryLocal, offlineReady } from '../services/offline/reads';
+import { saveCustomerSafe } from '../services/offline/offlineWrites';
 import {
     FiPlus,
     FiSearch,
@@ -199,12 +198,12 @@ const Customers = () => {
                 // update can accept credit fields too
                 payload.creditDays = Number(form.creditDays) || 0;
                 payload.creditLimit = Number(form.creditLimit) || 0;
-                await updateCustomer(editingCustomer._id, payload);
+                await saveCustomerSafe({ id: editingCustomer._id, data: payload });
             } else {
                 if (Number(form.openingBalance) > 0) {
                     payload.openingBalance = Number(form.openingBalance);
                 }
-                await createCustomer(payload);
+                await saveCustomerSafe({ data: payload });
             }
 
             closeModal();

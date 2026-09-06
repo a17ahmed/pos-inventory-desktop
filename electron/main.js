@@ -315,6 +315,15 @@ ipcMain.handle('offline:getCustomerSummary', offlineHandler(({ businessId }) => 
 ipcMain.handle('offline:getStatus', offlineHandler(({ businessId }) => offlineDb.getStatus(app, businessId)));
 ipcMain.handle('offline:clear', offlineHandler(({ businessId }) => offlineDb.clearBusiness(app, businessId)));
 
+// Outbox (offline writes) IPC
+ipcMain.handle('offline:applyBill', offlineHandler(({ businessId, args }) => offlineDb.applyOfflineBill(app, businessId, args)));
+ipcMain.handle('offline:applyPayment', offlineHandler(({ businessId, args }) => offlineDb.applyOfflinePayment(app, businessId, args)));
+ipcMain.handle('offline:applyCustomer', offlineHandler(({ businessId, args }) => offlineDb.applyOfflineCustomer(app, businessId, args)));
+ipcMain.handle('offline:getPendingOps', offlineHandler(({ businessId }) => offlineDb.getPendingOps(app, businessId)));
+ipcMain.handle('offline:markOp', offlineHandler(({ businessId, id, patch }) => offlineDb.markOp(app, businessId, id, patch)));
+ipcMain.handle('offline:getOutboxStatus', offlineHandler(({ businessId }) => offlineDb.getOutboxStatus(app, businessId)));
+ipcMain.handle('offline:pendingOpCount', offlineHandler(({ businessId }) => offlineDb.pendingOpCount(app, businessId)));
+
 ipcMain.handle('check-for-updates', () => {
     if (!isDev) {
         autoUpdater.checkForUpdates().catch(() => {});

@@ -4,6 +4,7 @@ import { useAuth } from '../context/AuthContext';
 import { useBusiness } from '../context/BusinessContext';
 import { useTheme } from '../context/ThemeContext';
 import { syncOffline, isOfflineAvailable } from '../services/offline/sync';
+import { startOutboxAutoSync, stopOutboxAutoSync } from '../services/offline/outbox';
 import {
     FiHome,
     FiPackage,
@@ -46,6 +47,13 @@ const Layout = ({ children }) => {
             .then((s) => console.log('[offline sync]', JSON.stringify(s)))
             .catch((e) => console.error('[offline sync] failed', e));
     }, [business]);
+
+    // Drain the offline write queue (outbox) when online. No-op unless the offline
+    // writes feature flag is enabled.
+    useEffect(() => {
+        startOutboxAutoSync();
+        return () => stopOutboxAutoSync();
+    }, []);
 
     const handleLogout = async () => {
         await logout();

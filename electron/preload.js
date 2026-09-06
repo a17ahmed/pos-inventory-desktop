@@ -51,6 +51,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
         getCustomerSummary: (businessId) => ipcRenderer.invoke('offline:getCustomerSummary', { businessId }),
         getStatus: (businessId) => ipcRenderer.invoke('offline:getStatus', { businessId }),
         clear: (businessId) => ipcRenderer.invoke('offline:clear', { businessId }),
+        // writes (outbox)
+        applyBill: (businessId, args) => ipcRenderer.invoke('offline:applyBill', { businessId, args }),
+        applyPayment: (businessId, args) => ipcRenderer.invoke('offline:applyPayment', { businessId, args }),
+        applyCustomer: (businessId, args) => ipcRenderer.invoke('offline:applyCustomer', { businessId, args }),
+        getPendingOps: (businessId) => ipcRenderer.invoke('offline:getPendingOps', { businessId }),
+        markOp: (businessId, id, patch) => ipcRenderer.invoke('offline:markOp', { businessId, id, patch }),
+        getOutboxStatus: (businessId) => ipcRenderer.invoke('offline:getOutboxStatus', { businessId }),
+        pendingOpCount: (businessId) => ipcRenderer.invoke('offline:pendingOpCount', { businessId }),
     },
 });
 

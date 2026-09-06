@@ -3,8 +3,9 @@ import { useParams, useNavigate } from 'react-router-dom';
 import html2pdf from 'html2pdf.js';
 import { useBusiness } from '../context/BusinessContext';
 import { todayLocalDate, toLocalDateStr } from '../utils/date';
-import { getCustomer, getCustomerLedger, collectFromCustomer } from '../services/api/customers';
+import { getCustomer, getCustomerLedger } from '../services/api/customers';
 import { findCustomerByIdLocal } from '../services/offline/reads';
+import { collectPaymentSafe } from '../services/offline/offlineWrites';
 import { addBillPayment } from '../services/api/bills';
 import { appAlert, appConfirm } from '../components/AppDialog';
 import {
@@ -273,7 +274,9 @@ const CustomerLedger = () => {
                     setSubmittingPayment(false);
                     return;
                 }
-                await collectFromCustomer(id, {
+                // Offline-capable FIFO collection (queues + reduces dues locally
+                // when offline; identical to collectFromCustomer while flag is off).
+                await collectPaymentSafe(id, {
                     amount,
                     method: paymentForm.method,
                     note: paymentForm.note,
