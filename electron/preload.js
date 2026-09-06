@@ -11,6 +11,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getPrinters: () => ipcRenderer.invoke('get-printers'),
     printWidthTest: (data) => ipcRenderer.invoke('print-width-test', data),
     openLogsFolder: () => ipcRenderer.invoke('open-logs-folder'),
+    printPage: () => ipcRenderer.invoke('print-page'),
 
     // Menu actions
     onMenuAction: (callback) => {

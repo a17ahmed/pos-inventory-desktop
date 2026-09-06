@@ -324,6 +324,24 @@ ipcMain.handle('open-logs-folder', async () => {
     }
 });
 
+// Open the system print dialog for the current view (respects @media print CSS).
+// Explicit webContents.print is reliable on Windows, where renderer
+// window.print() can silently do nothing. Shows the same dialog as macOS.
+ipcMain.handle('print-page', async (event) => {
+    try {
+        return await new Promise((resolve) => {
+            event.sender.print({ silent: false, printBackground: true }, (success, failureReason) => {
+                resolve({ success, failureReason: failureReason || null });
+            });
+        });
+    } catch (e) {
+        // e.g. "No valid printers available" can throw synchronously on a PC
+        // with no printers — don't let it become an unhandled rejection.
+        console.error('print-page error:', e);
+        return { success: false, failureReason: e.message };
+    }
+});
+
 // List installed printers so the user can pick their thermal printer in Settings.
 ipcMain.handle('get-printers', async (event) => {
     try {
@@ -433,6 +451,33 @@ if ([RawPrinterHelper]::SendFile($PrinterName, $FilePath)) { exit 0 } else { exi
 function resolvePaperWidth(paperWidth) {
     const w = parseInt(paperWidth, 10);
     return [32, 42, 48].includes(w) ? w : 42;
+}
+
+// Word-wrap text into lines no wider than `width` chars. Wraps on spaces;
+// hard-splits any single word longer than the column. Used so long item names
+// print in full (wrapping to extra lines) instead of being truncated.
+function wrapText(text, width) {
+    const words = String(text || '').trim().split(/\s+/).filter(Boolean);
+    if (!words.length) return [''];
+    const lines = [];
+    let line = '';
+    for (let word of words) {
+        while (word.length > width) {
+            if (line) { lines.push(line); line = ''; }
+            lines.push(word.slice(0, width));
+            word = word.slice(width);
+        }
+        if (!line) {
+            line = word;
+        } else if ((line + ' ' + word).length <= width) {
+            line += ' ' + word;
+        } else {
+            lines.push(line);
+            line = word;
+        }
+    }
+    if (line) lines.push(line);
+    return lines;
 }
 
 // Deliver an ESC/POS temp file to the printer (cross-platform). Throws on
@@ -644,17 +689,30 @@ ipcMain.handle('print-receipt', async (event, { receiptData, printerName, paperW
             totalAmt += amount;
             totalDisc += disc;
 
-            let name = item.name;
-            if (name.length > c.name - 1) name = name.substring(0, c.name - 2) + '.';
+            // Full item name: first chunk shares the row with the numbers; any
+            // overflow wraps onto extra lines in the name column below, so long
+            // names print in full while short names still take a single line.
+            const nameLines = wrapText(item.name, c.name);
 
             printer.tableCustom([
                 { text: String(i + 1), cols: c.sr },
-                { text: name, cols: c.name },
+                { text: nameLines[0], cols: c.name },
                 { text: String(item.qty), cols: c.qty, align: 'RIGHT' },
                 { text: num(rate), cols: c.rate, align: 'RIGHT' },
                 { text: num(amount), cols: c.amt, align: 'RIGHT' },
                 { text: disc > 0 ? '-' + num(disc) : '0', cols: c.disc, align: 'RIGHT' },
             ]);
+
+            for (let k = 1; k < nameLines.length; k++) {
+                printer.tableCustom([
+                    { text: '', cols: c.sr },
+                    { text: nameLines[k], cols: c.name },
+                    { text: '', cols: c.qty },
+                    { text: '', cols: c.rate },
+                    { text: '', cols: c.amt },
+                    { text: '', cols: c.disc },
+                ]);
+            }
         });
 
         printer.drawLine();

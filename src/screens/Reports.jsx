@@ -47,6 +47,11 @@ import {
     getDiscountReport,
 } from '../services/api/bills';
 
+// True on Windows, where the native min/max/close overlay covers the top-right
+// of the window — so header buttons there need space reserved to stay clickable.
+const IS_WIN = typeof navigator !== 'undefined' &&
+    (navigator.userAgentData?.platform === 'Windows' || /Win/i.test(navigator.userAgent));
+
 // ── Constants ──────────��─────────────────────────────────────────
 const TABS = [
     { key: 'pnl', label: 'P&L Overview', icon: FiPieChart },
@@ -373,14 +378,23 @@ const Reports = () => {
         }
     };
 
-    const handlePrint = () => {
+    const handlePrint = async () => {
         const html = document.documentElement;
         const wasDark = html.classList.contains('dark');
         if (wasDark) html.classList.remove('dark');
-        setTimeout(() => {
-            window.print();
+        // Let the light-mode styles apply before capturing the print view.
+        await new Promise((r) => setTimeout(r, 150));
+        try {
+            // Electron: fire the print dialog from the main process — renderer
+            // window.print() can silently do nothing on Windows. Same dialog as Mac.
+            if (window.electronAPI?.printPage) {
+                await window.electronAPI.printPage();
+            } else {
+                window.print();
+            }
+        } finally {
             if (wasDark) html.classList.add('dark');
-        }, 100);
+        }
     };
 
     // ═════════════════════════════════════════════════════════════
@@ -403,7 +417,10 @@ const Reports = () => {
         return (
             <div className="fixed inset-0 z-50 bg-white dark:bg-d-bg overflow-auto print-static print:bg-white print:z-auto">
                 {/* Close / Print bar — hidden on print */}
-                <div className="sticky top-0 z-10 bg-white dark:bg-d-card border-b border-slate-200 dark:border-d-border p-4 flex items-center justify-between print:hidden">
+                <div
+                    className="sticky top-0 z-10 bg-white dark:bg-d-card border-b border-slate-200 dark:border-d-border p-4 flex items-center justify-between print:hidden"
+                    style={IS_WIN ? { paddingRight: 148 } : undefined}
+                >
                     <div className="flex items-center gap-3">
                         <button onClick={() => setShowDetailedReport(false)} className="p-2 hover:bg-slate-100 dark:hover:bg-d-glass-hover rounded-lg">
                             <FiX size={20} />
