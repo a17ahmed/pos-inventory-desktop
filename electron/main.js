@@ -495,19 +495,40 @@ async function deliverPrintFile(tmpFile, printerName, event, byteLen) {
         }
         logPrint('RESULT: SUCCESS via', target ? ('printer "' + target + '"') : 'fallback port');
     } else {
-        // macOS / Linux: use CUPS lp command
+        // macOS / Linux: use CUPS `lp -o raw`. Try the printer the user picked,
+        // then a thermal-looking CUPS printer, then the legacy default name.
+        let cupsList = '';
         try {
-            execSync(`lp -d STMicroelectronics_POS80_Printer_USB -o raw "${tmpFile}" 2>&1`, { timeout: 10000 });
-            logPrint('RESULT: SUCCESS via CUPS default printer');
-        } catch (lpError) {
-            const printers = execSync('lpstat -p 2>/dev/null', { timeout: 5000 }).toString();
-            const posMatch = printers.match(/printer (\S*(?:POS|STM|Thermal|Receipt|Speed)\S*)/i);
-            if (posMatch) {
-                execSync(`lp -d "${posMatch[1]}" -o raw "${tmpFile}" 2>&1`, { timeout: 10000 });
-                logPrint('RESULT: SUCCESS via CUPS printer', posMatch[1]);
-            } else {
-                throw new Error('No thermal printer found. Printers: ' + printers);
+            // `|| true` so a failed/empty lpstat never throws (was surfacing a
+            // cryptic "Command failed: lpstat" error to the cashier).
+            cupsList = execSync('lpstat -p 2>/dev/null || true', { timeout: 5000 }).toString();
+        } catch (e) { /* no CUPS / no printers */ }
+
+        const targets = [];
+        if (printerName) targets.push(printerName);
+        const posMatch = cupsList.match(/printer (\S*(?:POS|STM|Thermal|Receipt|Speed)\S*)/i);
+        if (posMatch) targets.push(posMatch[1]);
+        targets.push('STMicroelectronics_POS80_Printer_USB');
+
+        let printed = false;
+        for (const t of targets) {
+            try {
+                execSync(`lp -d "${t}" -o raw "${tmpFile}"`, { timeout: 10000, stdio: 'pipe' });
+                printed = true;
+                logPrint('RESULT: SUCCESS via CUPS printer', t);
+                break;
+            } catch (e) {
+                logPrint('CUPS lp ->', t, ': failed');
             }
+        }
+
+        if (!printed) {
+            logPrint('RESULT: FAILED — no CUPS printer worked');
+            throw new Error(
+                'No thermal printer found on this Mac' + (printerName ? ' ("' + printerName + '")' : '') +
+                '. CUPS printers: ' + (cupsList.trim() || 'none') +
+                '. (This is a Mac-only path — the shop\'s Windows PC prints via the spooler and is unaffected.)'
+            );
         }
     }
 }
