@@ -324,6 +324,31 @@ ipcMain.handle('open-logs-folder', async () => {
     }
 });
 
+// Generate a PDF of the current view with Chromium's own PDF engine (respects
+// @media print CSS) and save it straight to Downloads, then open it. No OS print
+// dialog / spooler involved — reliable on Windows where the print dialog fails.
+ipcMain.handle('export-report-pdf', async (event, { filename } = {}) => {
+    const fs = require('fs');
+    try {
+        const pdf = await event.sender.printToPDF({ printBackground: true, pageSize: 'A4' });
+        const dir = app.getPath('downloads');
+        const base = (String(filename || 'Report').replace(/[^a-z0-9\-_ ]/gi, '_').trim().slice(0, 80)) || 'Report';
+        let filePath = path.join(dir, base + '.pdf');
+        try {
+            fs.writeFileSync(filePath, pdf);
+        } catch (e) {
+            // Previous file may be open in a viewer (EBUSY on Windows) — use a fresh name.
+            filePath = path.join(dir, base + '-' + Date.now() + '.pdf');
+            fs.writeFileSync(filePath, pdf);
+        }
+        shell.openPath(filePath); // open the PDF so the user sees the result
+        return { success: true, filePath };
+    } catch (e) {
+        console.error('export-report-pdf error:', e);
+        return { success: false, error: e.message };
+    }
+});
+
 // Open the system print dialog for the current view (respects @media print CSS).
 // Explicit webContents.print is reliable on Windows, where renderer
 // window.print() can silently do nothing. Shows the same dialog as macOS.

@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useBusiness } from '../context/BusinessContext';
+import { appAlert } from '../components/AppDialog';
 import {
     FiTrendingUp,
     FiTrendingDown,
@@ -385,10 +386,13 @@ const Reports = () => {
         // Let the light-mode styles apply before capturing the print view.
         await new Promise((r) => setTimeout(r, 150));
         try {
-            // Electron: fire the print dialog from the main process — renderer
-            // window.print() can silently do nothing on Windows. Same dialog as Mac.
-            if (window.electronAPI?.printPage) {
-                await window.electronAPI.printPage();
+            // Electron: generate the PDF with Chromium's own engine and save it to
+            // Downloads (no OS print dialog — that silently fails on some Windows PCs).
+            if (window.electronAPI?.exportReportPdf) {
+                const res = await window.electronAPI.exportReportPdf({ filename: `${business?.name || 'Sales'} Report` });
+                if (!res?.success) {
+                    appAlert(res?.error || 'Could not create the PDF.', { title: 'Download failed', danger: true });
+                }
             } else {
                 window.print();
             }

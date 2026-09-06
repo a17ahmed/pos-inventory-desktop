@@ -1079,7 +1079,7 @@ const CustomerLedger = () => {
                 }
                 return (
                     <div className="fixed inset-0 bg-black/50 dark:bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-                        <div className="bg-white dark:bg-d-elevated border border-slate-200 dark:border-[rgba(255,255,255,0.08)] rounded-2xl shadow-2xl w-full max-w-md animate-pop-in overflow-hidden">
+                        <div className="bg-white dark:bg-d-elevated border border-slate-200 dark:border-[rgba(255,255,255,0.08)] rounded-2xl shadow-2xl w-full max-w-md animate-pop-in max-h-[90vh] overflow-y-auto">
                             {/* Header */}
                             <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100 dark:border-d-border">
                                 <div className="flex items-center gap-3">
