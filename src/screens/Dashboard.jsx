@@ -2454,9 +2454,8 @@ const AdminDashboard = () => {
                         </div>
                         <h3 className="font-bebas text-[15px] tracking-[0.06em] text-slate-800 dark:text-d-heading">QUICK ACTIONS</h3>
                     </div>
-                    <div className="grid grid-cols-4 lg:grid-cols-8 gap-2">
+                    <div className="grid grid-cols-4 lg:grid-cols-7 gap-2">
                         {[
-                            { label: 'New Sale', icon: FiShoppingCart, path: '/sales', color: '#34e8a1', bg: 'rgba(52,232,161,0.08)', border: 'rgba(52,232,161,0.18)' },
                             { label: 'Products', icon: FiPackage, path: '/products', color: '#ffd264', bg: 'rgba(255,210,100,0.08)', border: 'rgba(255,210,100,0.18)' },
                             { label: 'Vendors', icon: FiTruck, path: '/vendors', color: '#5b9cf6', bg: 'rgba(91,156,246,0.08)', border: 'rgba(91,156,246,0.18)' },
                             { label: 'Customers', icon: FiUser, path: '/customers', color: '#c084fc', bg: 'rgba(192,132,252,0.08)', border: 'rgba(192,132,252,0.18)' },

@@ -183,6 +183,13 @@ function createMenu() {
 }
 
 // ──── Auto Updater ────
+// Once an update is downloaded we stop checking so the user isn't prompted
+// (or made to re-download) repeatedly within the same session. The GitHub
+// provider always resolves to the latest release, so updates jump straight
+// to the newest version — intermediate versions are never installed.
+let updateDownloaded = false;
+let updatePromptShown = false;
+
 function setupAutoUpdater() {
     if (isDev) return; // Skip in development
 
@@ -214,10 +221,15 @@ function setupAutoUpdater() {
 
     autoUpdater.on('update-downloaded', (info) => {
         console.log('Update downloaded:', info.version);
+        updateDownloaded = true;
         mainWindow?.webContents.send('update-status', {
             status: 'ready',
             version: info.version,
         });
+
+        // Only prompt once per session so a later check can't re-open the dialog.
+        if (updatePromptShown) return;
+        updatePromptShown = true;
 
         dialog.showMessageBox(mainWindow, {
             type: 'info',
@@ -237,9 +249,10 @@ function setupAutoUpdater() {
         console.error('Auto-update error:', err);
     });
 
-    // Check for updates every 4 hours
+    // Check for updates every 4 hours (skip once an update is already downloaded)
     autoUpdater.checkForUpdates().catch(() => {});
     setInterval(() => {
+        if (updateDownloaded) return;
         autoUpdater.checkForUpdates().catch(() => {});
     }, 4 * 60 * 60 * 1000);
 }
@@ -289,7 +302,7 @@ ipcMain.handle('get-platform', () => {
 ipcMain.handle('get-offline-db-status', () => offlineDbSmokeResult);
 
 ipcMain.handle('check-for-updates', () => {
-    if (!isDev) {
+    if (!isDev && !updateDownloaded) {
         autoUpdater.checkForUpdates().catch(() => {});
     }
     return { checking: true };
