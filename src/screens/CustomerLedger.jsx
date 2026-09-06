@@ -307,16 +307,26 @@ const CustomerLedger = () => {
             </tr>`;
         }).join('');
 
+        // Refunds per bill (from the return ledger entries), so each bill card can
+        // show what was returned and the net after refund — not just the original.
+        const refundByBill = new Map();
+        for (const le of (ledgerData.ledger || [])) {
+            if (le.type === 'return' && le.billId) {
+                refundByBill.set(String(le.billId), (refundByBill.get(String(le.billId)) || 0) + (le.credit || 0));
+            }
+        }
+
         // Per-bill line-item breakdown, shown after the main ledger table.
         const billsWithItems = filteredEntries.filter((e) => e.type === 'bill' && e.items && e.items.length > 0);
         const billDetailsHtml = billsWithItems.map((e) => {
             const d = new Date(e.date);
+            const refunded = refundByBill.get(String(e.billId)) || 0;
             const itemRows = e.items.map((it, i) => {
                 const lineGross = (it.price || 0) * (it.qty || 0);
                 const lineDiscount = it.discountAmount || 0;
                 const lineTotal = it.itemTotal != null ? it.itemTotal : lineGross - lineDiscount;
                 return `<tr>
-                    <td style="padding:5px 8px;font-size:10px;border-bottom:1px solid #f1f5f9;">${i + 1}. ${it.name}</td>
+                    <td style="padding:5px 8px;font-size:10px;border-bottom:1px solid #f1f5f9;">${i + 1}. ${it.name}${Number(it.returnedQty) > 0 ? `<span style="color:#dc2626;font-size:9px;"> (${it.returnedQty} returned)</span>` : ''}</td>
                     <td style="padding:5px 8px;font-size:10px;border-bottom:1px solid #f1f5f9;text-align:center;">× ${it.qty}</td>
                     <td style="padding:5px 8px;font-size:10px;border-bottom:1px solid #f1f5f9;text-align:right;">${currency} ${fmt(it.price)}</td>
                     <td style="padding:5px 8px;font-size:10px;border-bottom:1px solid #f1f5f9;text-align:right;">${lineDiscount > 0 ? '− ' + currency + ' ' + fmt(lineDiscount) : '—'}</td>
@@ -349,6 +359,11 @@ const CustomerLedger = () => {
                 <div style="padding:6px 12px;background:#fafafa;border-top:1px solid #f1f5f9;text-align:right;font-size:10px;color:#64748b;">
                     ${taxTotal > 0 ? `Tax: ${currency} ${fmt(taxTotal)} &nbsp;&nbsp;` : ''}
                     ${discountTotal > 0 ? `<span style="color:#d97706;">Saved: ${currency} ${fmt(discountTotal)}</span>` : ''}
+                </div>` : ''}
+                ${refunded > 0 ? `
+                <div style="padding:6px 12px;background:#fef2f2;border-top:1px solid #fecaca;text-align:right;font-size:11px;">
+                    <span style="color:#dc2626;">Total Refunded: − ${currency} ${fmt(refunded)}</span>
+                    &nbsp;&nbsp;<b>Net: ${currency} ${fmt((e.debit || 0) - refunded)}</b>
                 </div>` : ''}
             </div>`;
         }).join('');
@@ -1372,7 +1387,7 @@ const CustomerLedger = () => {
             ================================================================ */}
             {showFilterModal && (
                 <div className="fixed inset-0 bg-black/50 dark:bg-black/60 flex items-center justify-center z-50 p-4">
-                    <div className="bg-white dark:bg-d-card dark:border dark:border-d-border rounded-2xl w-full max-w-md animate-fadeIn">
+                    <div className="bg-white dark:bg-d-card dark:border dark:border-d-border rounded-2xl w-full max-w-md animate-fadeIn max-h-[90vh] overflow-y-auto">
                         <div className="flex items-center justify-between p-6 border-b border-slate-200 dark:border-d-border">
                             <h3 className="text-xl font-semibold text-slate-800 dark:text-d-heading">Filter Ledger</h3>
                             <button

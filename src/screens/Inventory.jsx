@@ -917,7 +917,7 @@ const Inventory = () => {
             {/* ── ADJUST STOCK MODAL ──────────────────────────────── */}
             {adjustModal && (
                 <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-                    <div className="bg-white dark:bg-d-card border border-slate-200 dark:border-d-border rounded-2xl w-full max-w-sm animate-pop-in">
+                    <div className="bg-white dark:bg-d-card border border-slate-200 dark:border-d-border rounded-2xl w-full max-w-sm animate-pop-in max-h-[90vh] overflow-y-auto">
                         <div className="flex items-center justify-between p-5 border-b border-slate-200 dark:border-d-border">
                             <h3 className="text-lg font-semibold text-slate-800 dark:text-d-heading">Adjust Stock</h3>
                             <button onClick={() => setAdjustModal(null)} className="p-2 hover:bg-slate-100 dark:hover:bg-d-glass rounded-lg text-slate-500 dark:text-d-muted">

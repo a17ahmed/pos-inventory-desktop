@@ -462,7 +462,7 @@ const Expenses = () => {
             {/* Add/Edit Modal */}
             {showModal && (
                 <div className="fixed inset-0 bg-black/50 dark:bg-black/60 flex items-center justify-center z-50 p-4">
-                    <div className="bg-white dark:bg-d-card dark:border dark:border-d-border rounded-2xl w-full max-w-lg animate-fadeIn">
+                    <div className="bg-white dark:bg-d-card dark:border dark:border-d-border rounded-2xl w-full max-w-lg animate-fadeIn max-h-[90vh] overflow-y-auto">
                         <div className="flex items-center justify-between p-6 border-b border-slate-200 dark:border-d-border">
                             <h3 className="text-xl font-semibold text-slate-800 dark:text-d-heading">
                                 {editingExpense ? 'Edit Expense' : 'Add Expense'}
@@ -612,7 +612,7 @@ const Expenses = () => {
             {/* Reject Reason Modal */}
             {rejectModal.show && (
                 <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-                    <div className="bg-white dark:bg-d-card rounded-2xl w-full max-w-md animate-fadeIn">
+                    <div className="bg-white dark:bg-d-card rounded-2xl w-full max-w-md animate-fadeIn max-h-[90vh] overflow-y-auto">
                         <div className="flex items-center justify-between p-6 border-b border-slate-200 dark:border-d-border">
                             <h3 className="text-lg font-semibold text-slate-800 dark:text-d-heading">Reject Expense</h3>
                             <button
