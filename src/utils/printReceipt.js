@@ -1,4 +1,8 @@
 import { buildReceiptHTML } from './receiptTemplate';
+import { appAlert } from '../components/AppDialog';
+
+// localStorage key for the user's chosen receipt printer (per-machine, not synced).
+export const PRINTER_NAME_KEY = 'posPrinterName';
 
 /**
  * Print a receipt via Electron ESC/POS or browser iframe fallback.
@@ -39,7 +43,12 @@ export const printReceipt = (opts) => {
         const showCustomerPhone = !!store.showCustomerPhone;
         const showCustomerAddress = !!store.showCustomerAddress;
 
+        const printerName = (() => {
+            try { return localStorage.getItem(PRINTER_NAME_KEY) || undefined; } catch (e) { return undefined; }
+        })();
+
         window.electronAPI.printReceipt({
+            printerName,
             receiptData: {
                 storeName, storeAddress, storePhone, cashierName,
                 billNumber, date, customerName, customerBalanceBefore,
@@ -56,8 +65,16 @@ export const printReceipt = (opts) => {
                 receiptFooter, receiptNote,
             },
         })
-            .then(result => { if (!result.success) console.error('Print failed:', result.error); })
-            .catch(err => console.error('Print error:', err));
+            .then(result => {
+                if (!result.success) {
+                    console.error('Print failed:', result.error);
+                    appAlert(result.error || 'The receipt could not be printed.', { title: 'Printing failed', danger: true });
+                }
+            })
+            .catch(err => {
+                console.error('Print error:', err);
+                appAlert(err?.message || 'The receipt could not be printed.', { title: 'Printing failed', danger: true });
+            });
         return;
     }
 

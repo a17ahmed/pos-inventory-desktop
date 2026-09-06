@@ -8,6 +8,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
     // Printing
     printReceipt: (data) => ipcRenderer.invoke('print-receipt', data),
+    getPrinters: () => ipcRenderer.invoke('get-printers'),
+    openLogsFolder: () => ipcRenderer.invoke('open-logs-folder'),
 
     // Menu actions
     onMenuAction: (callback) => {

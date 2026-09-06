@@ -5,7 +5,7 @@ import { useBusiness } from '../context/BusinessContext';
 import { updateBusiness, updateAdmin, changeAdminPassword } from '../services/api/business';
 import { useTheme } from '../context/ThemeContext';
 import { buildReceiptHTML } from '../utils/receiptTemplate';
-import { printReceipt as printReceiptUtil } from '../utils/printReceipt';
+import { printReceipt as printReceiptUtil, PRINTER_NAME_KEY } from '../utils/printReceipt';
 import { appAlert, appConfirm } from '../components/AppDialog';
 import {
     FiUser,
@@ -49,6 +49,23 @@ const Settings = () => {
     const [showReceiptPreview, setShowReceiptPreview] = useState(false);
     const [previewMode, setPreviewMode] = useState('cash');
     const [previewStore, setPreviewStore] = useState(null);
+    const [printers, setPrinters] = useState([]);
+    const [selectedPrinter, setSelectedPrinter] = useState(() => {
+        try { return localStorage.getItem(PRINTER_NAME_KEY) || ''; } catch (e) { return ''; }
+    });
+
+    // Load installed printers (Windows/Mac) so the user can pick their thermal printer.
+    const loadPrinters = () => {
+        window.electronAPI?.getPrinters?.().then((list) => setPrinters(Array.isArray(list) ? list : [])).catch(() => {});
+    };
+
+    const handleSelectPrinter = (name) => {
+        setSelectedPrinter(name);
+        try {
+            if (name) localStorage.setItem(PRINTER_NAME_KEY, name);
+            else localStorage.removeItem(PRINTER_NAME_KEY);
+        } catch (e) { /* ignore */ }
+    };
 
     useEffect(() => {
         window.electronAPI?.getAppVersion?.().then(v => setAppVersion(v || ''));
@@ -118,6 +135,10 @@ const Settings = () => {
         const cashGiven = Math.ceil(total / 100) * 100 + 500;
         return { ...base, paymentMethod: 'cash', amountPaid: total, amountDue: 0, cashGiven, change: cashGiven - total, customerBalanceBefore: 0 };
     };
+
+    useEffect(() => {
+        if (activeModal === 'receipt') loadPrinters();
+    }, [activeModal]);
 
     const handleOpenReceiptPreview = () => {
         setPreviewStore({ ...business, ...bizFormRef.current });
@@ -655,6 +676,45 @@ const Settings = () => {
                             </button>
                         </div>
                         <div className="p-6 space-y-4">
+                            {window.electronAPI?.getPrinters && (
+                                <div>
+                                    <label className="block text-sm font-medium text-slate-700 dark:text-d-text mb-1">Receipt Printer</label>
+                                    <div className="flex gap-2">
+                                        <select
+                                            value={selectedPrinter}
+                                            onChange={(e) => handleSelectPrinter(e.target.value)}
+                                            className="flex-1 px-4 py-3 border border-slate-200 dark:border-d-border rounded-xl focus:ring-2 focus:ring-primary-500 bg-white dark:bg-d-elevated text-slate-800 dark:text-d-heading"
+                                        >
+                                            <option value="">Auto-detect</option>
+                                            {printers.map((p) => (
+                                                <option key={p.name} value={p.name}>
+                                                    {p.name}{p.isDefault ? ' (default)' : ''}
+                                                </option>
+                                            ))}
+                                        </select>
+                                        <button
+                                            type="button"
+                                            onClick={loadPrinters}
+                                            title="Refresh printer list"
+                                            className="px-4 py-3 border border-slate-200 dark:border-d-border rounded-xl text-slate-600 dark:text-d-text hover:bg-slate-50 dark:hover:bg-d-glass-hover"
+                                        >
+                                            Refresh
+                                        </button>
+                                    </div>
+                                    <p className="text-xs text-slate-400 dark:text-d-muted mt-1">
+                                        Choose the thermal printer that prints your bills. Saved on this computer only.
+                                    </p>
+                                    {window.electronAPI?.openLogsFolder && (
+                                        <button
+                                            type="button"
+                                            onClick={() => window.electronAPI.openLogsFolder()}
+                                            className="mt-2 text-xs font-medium text-primary-600 dark:text-d-accent hover:underline"
+                                        >
+                                            Open print log (for troubleshooting)
+                                        </button>
+                                    )}
+                                </div>
+                            )}
                             <div>
                                 <label className="block text-sm font-medium text-slate-700 dark:text-d-text mb-1">Thank You Message</label>
                                 <input

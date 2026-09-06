@@ -295,8 +295,140 @@ ipcMain.handle('check-for-updates', () => {
     return { checking: true };
 });
 
+// ──── PRINT DIAGNOSTICS ────
+// Every print attempt appends a line here so a remote failure at the customer's
+// shop can be diagnosed from one file (Settings → Receipt Settings → Open print log).
+function getPrintLogDir() {
+    const fs = require('fs');
+    let dir;
+    try { dir = app.getPath('logs'); }
+    catch (e) { dir = path.join(app.getPath('userData'), 'logs'); }
+    try { fs.mkdirSync(dir, { recursive: true }); } catch (_) { /* ignore */ }
+    return dir;
+}
+
+function logPrint(...parts) {
+    const fs = require('fs');
+    const line = '[' + new Date().toISOString() + '] ' + parts.join(' ') + '\n';
+    console.log('[PRINT]', ...parts);
+    try { fs.appendFileSync(path.join(getPrintLogDir(), 'print.log'), line); } catch (_) { /* ignore */ }
+}
+
+// Open the folder that holds print.log so the shop can send it over.
+ipcMain.handle('open-logs-folder', async () => {
+    try {
+        await shell.openPath(getPrintLogDir());
+        return { success: true, path: getPrintLogDir() };
+    } catch (e) {
+        return { success: false, error: e.message };
+    }
+});
+
+// List installed printers so the user can pick their thermal printer in Settings.
+ipcMain.handle('get-printers', async (event) => {
+    try {
+        const printers = await event.sender.getPrintersAsync();
+        return printers.map((p) => ({ name: p.name, displayName: p.displayName, isDefault: p.isDefault, status: p.status }));
+    } catch (e) {
+        console.error('get-printers error:', e);
+        return [];
+    }
+});
+
+// A virtual/software printer we must never send raw ESC/POS bytes to.
+function isVirtualPrinter(name) {
+    return /microsoft print to pdf|xps|onenote|fax|document writer|pdf/i.test(name || '');
+}
+
+// Choose which installed printer to print to: an explicit user choice wins,
+// then a name that looks like a thermal printer, then the system default,
+// then any real (non-virtual) printer.
+function pickPrinterName(printers, preferred) {
+    const list = Array.isArray(printers) ? printers : [];
+    if (preferred && list.some((p) => p.name === preferred)) return preferred;
+    const thermal = list.find((p) => /(pos|thermal|receipt|speed|stm|80mm|58mm|xprinter|xp-?80|gprinter|epson tm|rongta|bixolon|zjiang|zj-)/i.test(p.name) && !isVirtualPrinter(p.name));
+    if (thermal) return thermal.name;
+    const def = list.find((p) => p.isDefault);
+    if (def && !isVirtualPrinter(def.name)) return def.name;
+    const firstReal = list.find((p) => !isVirtualPrinter(p.name));
+    return firstReal ? firstReal.name : null;
+}
+
+// Send raw ESC/POS bytes to a Windows printer through the print spooler (RAW
+// datatype) — the same driver path a Windows test page / PDF uses. This is the
+// reliable way to reach a USB printer installed via a driver; writing straight
+// to \\.\USBxxx does NOT work for driver-installed USB printers. Returns true
+// on success.
+function sendRawToWindowsPrinter(filePath, printerName) {
+    const { execSync } = require('child_process');
+    const fs = require('fs');
+    const os = require('os');
+    const psPath = path.join(os.tmpdir(), 'posprint_' + Date.now() + '.ps1');
+    const escPs = (s) => String(s).replace(/'/g, "''"); // escape single quotes for a PS string literal
+    const ps = `$ErrorActionPreference = 'Stop'
+$PrinterName = '${escPs(printerName)}'
+$FilePath = '${escPs(filePath)}'
+$signature = @'
+using System;
+using System.IO;
+using System.Runtime.InteropServices;
+public class RawPrinterHelper {
+  [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)]
+  public struct DOCINFOW { [MarshalAs(UnmanagedType.LPWStr)] public string pDocName; [MarshalAs(UnmanagedType.LPWStr)] public string pOutputFile; [MarshalAs(UnmanagedType.LPWStr)] public string pDataType; }
+  [DllImport("winspool.Drv", EntryPoint="OpenPrinterW", SetLastError=true, CharSet=CharSet.Unicode)] public static extern bool OpenPrinter(string src, out IntPtr hPrinter, IntPtr pd);
+  [DllImport("winspool.Drv", EntryPoint="ClosePrinter", SetLastError=true)] public static extern bool ClosePrinter(IntPtr hPrinter);
+  [DllImport("winspool.Drv", EntryPoint="StartDocPrinterW", SetLastError=true, CharSet=CharSet.Unicode)] public static extern bool StartDocPrinter(IntPtr hPrinter, int level, ref DOCINFOW di);
+  [DllImport("winspool.Drv", EntryPoint="EndDocPrinter", SetLastError=true)] public static extern bool EndDocPrinter(IntPtr hPrinter);
+  [DllImport("winspool.Drv", EntryPoint="StartPagePrinter", SetLastError=true)] public static extern bool StartPagePrinter(IntPtr hPrinter);
+  [DllImport("winspool.Drv", EntryPoint="EndPagePrinter", SetLastError=true)] public static extern bool EndPagePrinter(IntPtr hPrinter);
+  [DllImport("winspool.Drv", EntryPoint="WritePrinter", SetLastError=true)] public static extern bool WritePrinter(IntPtr hPrinter, IntPtr pBytes, int dwCount, out int dwWritten);
+  public static bool SendFile(string printerName, string filePath) {
+    byte[] bytes = File.ReadAllBytes(filePath);
+    IntPtr hPrinter;
+    DOCINFOW di = new DOCINFOW(); di.pDocName = "POS Receipt"; di.pDataType = "RAW";
+    if (!OpenPrinter(printerName, out hPrinter, IntPtr.Zero)) return false;
+    bool ok = false;
+    if (StartDocPrinter(hPrinter, 1, ref di)) {
+      if (StartPagePrinter(hPrinter)) {
+        IntPtr p = Marshal.AllocCoTaskMem(bytes.Length);
+        Marshal.Copy(bytes, 0, p, bytes.Length);
+        int written;
+        ok = WritePrinter(hPrinter, p, bytes.Length, out written);
+        Marshal.FreeCoTaskMem(p);
+        EndPagePrinter(hPrinter);
+      }
+      EndDocPrinter(hPrinter);
+    }
+    ClosePrinter(hPrinter);
+    return ok;
+  }
+}
+'@
+Add-Type -TypeDefinition $signature -Language CSharp
+if ([RawPrinterHelper]::SendFile($PrinterName, $FilePath)) { exit 0 } else { exit 3 }`;
+    try {
+        fs.writeFileSync(psPath, ps, 'utf8');
+        const out = execSync(`powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "${psPath}"`, {
+            timeout: 20000,
+            windowsHide: true,
+            encoding: 'utf8',
+        });
+        return { ok: true, detail: (out || '').trim() };
+    } catch (e) {
+        // Capture PowerShell's stdout/stderr so the real reason lands in print.log.
+        const detail = [
+            e.message,
+            e.stdout && ('stdout: ' + String(e.stdout).trim()),
+            e.stderr && ('stderr: ' + String(e.stderr).trim()),
+        ].filter(Boolean).join(' | ');
+        return { ok: false, detail };
+    } finally {
+        try { fs.unlinkSync(psPath); } catch (_) { /* ignore */ }
+    }
+}
+
 // Handle print request — uses node-thermal-printer for cross-platform support
-ipcMain.handle('print-receipt', async (event, { receiptData }) => {
+ipcMain.handle('print-receipt', async (event, { receiptData, printerName }) => {
     const { execSync } = require('child_process');
     const fs = require('fs');
     const os = require('os');
@@ -316,7 +448,7 @@ ipcMain.handle('print-receipt', async (event, { receiptData }) => {
             receiptFooter, receiptNote
         } = receiptData;
 
-        console.log('[PRINT DEBUG] storeName:', storeName, '| storePhone:', storePhone, '| receiptData keys:', Object.keys(receiptData));
+        logPrint('--- print-receipt START ---', 'platform:', process.platform, '| bill:', billNumber, '| requested printer:', printerName || '(auto)', '| store:', storeName);
 
         const W = 48;
         const money = (amt) => currency + ' ' + Number(amt).toLocaleString();
@@ -495,54 +627,70 @@ ipcMain.handle('print-receipt', async (event, { receiptData }) => {
         const platform = process.platform;
 
         if (platform === 'win32') {
-            // Windows: try direct USB port, then shared printer
+            // Windows: print through the spooler/driver (RAW) — the same path a
+            // Windows test page or PDF uses. Writing straight to \\.\USBxxx does
+            // not work for driver-installed USB printers.
+            let printers = [];
+            try {
+                printers = await event.sender.getPrintersAsync();
+            } catch (e) {
+                logPrint('getPrintersAsync FAILED:', e.message);
+            }
+            logPrint('installed printers:', JSON.stringify(printers.map((p) => ({ name: p.name, default: p.isDefault, status: p.status }))));
+
+            const target = pickPrinterName(printers, printerName);
+            logPrint('chosen target:', target || '(none)', '| ESC/POS bytes:', buffer.length);
+
             let printed = false;
-            const ports = ['USB001', 'USB002', 'USB003'];
-            for (const port of ports) {
-                try {
-                    execSync(`copy /b "${tmpFile}" \\\\.\\${port}`, {
-                        shell: 'cmd.exe',
-                        timeout: 10000,
-                        windowsHide: true,
-                    });
-                    printed = true;
-                    break;
-                } catch (e) { /* try next port */ }
+            if (target) {
+                const res = sendRawToWindowsPrinter(tmpFile, target);
+                logPrint('RAW spool ->', '"' + target + '":', res.ok ? 'OK' : 'FAILED', res.detail ? ('| ' + res.detail) : '');
+                printed = res.ok;
+            } else {
+                logPrint('no target printer resolved — skipping RAW spool');
             }
 
+            // Last-resort fallback for older setups where a printer exposes a
+            // raw USB/LPT port directly.
             if (!printed) {
-                // Try finding printer via wmic
-                try {
-                    const wmicOut = execSync('wmic printer get name,portname /format:csv 2>nul', {
-                        encoding: 'utf8',
-                        shell: 'cmd.exe',
-                        timeout: 5000,
-                        windowsHide: true,
-                    });
-                    const match = wmicOut.match(/,(.*(?:POS|Thermal|Receipt|Speed|STM)[^,]*),/i);
-                    if (match) {
-                        execSync(`copy /b "${tmpFile}" "\\\\%COMPUTERNAME%\\${match[1].trim()}"`, {
+                const ports = ['USB001', 'USB002', 'USB003', 'LPT1'];
+                for (const port of ports) {
+                    try {
+                        execSync(`copy /b "${tmpFile}" \\\\.\\${port}`, {
                             shell: 'cmd.exe',
                             timeout: 10000,
                             windowsHide: true,
                         });
                         printed = true;
+                        logPrint('fallback direct-port', port, ': OK');
+                        break;
+                    } catch (e) {
+                        logPrint('fallback direct-port', port, ': failed');
                     }
-                } catch (e) { /* wmic failed */ }
+                }
             }
 
             if (!printed) {
-                throw new Error('No thermal printer found on Windows. Make sure the printer is connected and drivers are installed.');
+                const names = printers.map((p) => p.name).join(', ') || 'none detected';
+                logPrint('RESULT: FAILED — no delivery method worked');
+                throw new Error(
+                    'Could not reach the receipt printer' + (target ? ' ("' + target + '")' : '') +
+                    '. Installed printers: ' + names +
+                    '. Open Settings → Receipt Settings and pick your thermal printer under "Receipt Printer".'
+                );
             }
+            logPrint('RESULT: SUCCESS via', target ? ('printer "' + target + '"') : 'fallback port');
         } else {
             // macOS / Linux: use CUPS lp command
             try {
                 execSync(`lp -d STMicroelectronics_POS80_Printer_USB -o raw "${tmpFile}" 2>&1`, { timeout: 10000 });
+                logPrint('RESULT: SUCCESS via CUPS default printer');
             } catch (lpError) {
                 const printers = execSync('lpstat -p 2>/dev/null', { timeout: 5000 }).toString();
                 const posMatch = printers.match(/printer (\S*(?:POS|STM|Thermal|Receipt|Speed)\S*)/i);
                 if (posMatch) {
                     execSync(`lp -d "${posMatch[1]}" -o raw "${tmpFile}" 2>&1`, { timeout: 10000 });
+                    logPrint('RESULT: SUCCESS via CUPS printer', posMatch[1]);
                 } else {
                     throw new Error('No thermal printer found. Printers: ' + printers);
                 }
@@ -551,6 +699,7 @@ ipcMain.handle('print-receipt', async (event, { receiptData }) => {
 
         return { success: true };
     } catch (error) {
+        logPrint('RESULT: ERROR —', error.message);
         console.error('Print error:', error);
         return { success: false, error: error.message };
     } finally {
