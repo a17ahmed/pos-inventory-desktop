@@ -1,5 +1,11 @@
 # POS Inventory Desktop
 
+## ⛔ GIT RULE — READ FIRST
+- **NEVER `git commit`, `git tag`, or `git push` without explicit permission — ask first, every single time.**
+- "Fix it", "make the change", "update it", "tell me if I'm ready to push" mean **edit files only**. None of these authorize a commit, tag, or push.
+- Only commit/tag/push when the user says so directly (e.g. "commit this", "push it", "ship it", "release it").
+- Pushing a tag triggers a public release the client auto-updates to — treat it as irreversible. When in doubt, stop and ask.
+
 ## Project Overview
 Electron + React (Vite) desktop POS application. Frontend connects to Node.js backend deployed on Vercel.
 
