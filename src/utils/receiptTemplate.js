@@ -2,6 +2,21 @@
  * Shared receipt HTML template used by both print and download.
  * Matches the POS thermal printer receipt format.
  */
+
+// Whole amounts print without decimals; anything else always with exactly two
+// (84.7 → 84.70, 329.96999 → 329.97) so columns line up and read consistently.
+const fmt = (n) => {
+    const v = Math.round((Number(n) || 0) * 100) / 100;
+    return v.toLocaleString('en-US', {
+        minimumFractionDigits: Number.isInteger(v) ? 0 : 2,
+        maximumFractionDigits: 2,
+    });
+};
+
+// Numeric cells: never wrap, and keep a gap from the column on their left so
+// neighbouring numbers (Rate | Amt) can't run together.
+const NUM = 'text-align:right;white-space:nowrap;padding:2px 0 2px 6px;';
+
 export const buildReceiptHTML = ({
     store = {},
     currency = 'Rs.',
@@ -56,11 +71,11 @@ export const buildReceiptHTML = ({
         totalDisc += disc;
         const returnedQty = Number(item.returnedQty) || 0;
         return `<tr>
-            <td style="font-size:11px;padding:2px 0;">${idx + 1} ${item.name}${returnedQty > 0 ? `<div style="font-size:9px;color:#b91c1c;">${returnedQty} returned</div>` : ''}</td>
-            <td style="text-align:center;font-size:11px;padding:2px 0;">${qty}</td>
-            <td style="text-align:right;font-size:11px;padding:2px 0;">${price.toLocaleString()}</td>
-            <td style="text-align:right;font-size:11px;padding:2px 0;">${amt.toLocaleString()}</td>
-            <td style="text-align:right;font-size:11px;padding:2px 0;">${disc > 0 ? disc.toLocaleString() : '0'}</td>
+            <td style="font-size:11px;padding:2px 0;word-break:break-word;">${idx + 1} ${item.name}${returnedQty > 0 ? `<div style="font-size:9px;color:#b91c1c;">${returnedQty} returned</div>` : ''}</td>
+            <td style="text-align:center;font-size:11px;padding:2px 0 2px 4px;white-space:nowrap;">${qty}</td>
+            <td style="${NUM}font-size:11px;">${fmt(price)}</td>
+            <td style="${NUM}font-size:11px;">${fmt(amt)}</td>
+            <td style="${NUM}font-size:11px;">${disc > 0 ? fmt(disc) : '0'}</td>
         </tr>`;
     }).join('');
 
@@ -91,19 +106,19 @@ export const buildReceiptHTML = ({
         ${line}
         <table style="width:100%;border-collapse:collapse;">
             <colgroup>
-                <col style="width:40%;">
-                <col style="width:12%;">
-                <col style="width:16%;">
-                <col style="width:16%;">
-                <col style="width:16%;">
+                <col style="width:33%;">
+                <col style="width:9%;">
+                <col style="width:19%;">
+                <col style="width:21%;">
+                <col style="width:18%;">
             </colgroup>
             <thead>
                 <tr>
                     <th style="text-align:left;font-size:9px;padding:2px 0;"># Item</th>
-                    <th style="text-align:center;font-size:9px;padding:2px 0;">Qty</th>
-                    <th style="text-align:right;font-size:9px;padding:2px 0;">Rate</th>
-                    <th style="text-align:right;font-size:9px;padding:2px 0;">Amt</th>
-                    <th style="text-align:right;font-size:9px;padding:2px 0;">Disc</th>
+                    <th style="text-align:center;font-size:9px;padding:2px 0 2px 4px;">Qty</th>
+                    <th style="${NUM}font-size:9px;">Rate</th>
+                    <th style="${NUM}font-size:9px;">Amt</th>
+                    <th style="${NUM}font-size:9px;">Disc</th>
                 </tr>
                 <tr><td colspan="5" style="padding:0;">${solidLine}</td></tr>
             </thead>
@@ -112,10 +127,10 @@ export const buildReceiptHTML = ({
                 <tr><td colspan="5" style="padding:0;">${line}</td></tr>
                 <tr>
                     <td style="font-size:10px;padding:2px 0;font-weight:bold;">Total</td>
-                    <td style="text-align:center;font-size:10px;padding:2px 0;font-weight:bold;">${totalQty}</td>
-                    <td style="text-align:right;font-size:10px;padding:2px 0;"></td>
-                    <td style="text-align:right;font-size:10px;padding:2px 0;font-weight:bold;">${totalAmt.toLocaleString()}</td>
-                    <td style="text-align:right;font-size:10px;padding:2px 0;font-weight:bold;">${totalDisc > 0 ? totalDisc.toLocaleString() : '0'}</td>
+                    <td style="text-align:center;font-size:10px;padding:2px 0 2px 4px;font-weight:bold;">${totalQty}</td>
+                    <td style="${NUM}font-size:10px;"></td>
+                    <td style="${NUM}font-size:10px;font-weight:bold;">${fmt(totalAmt)}</td>
+                    <td style="${NUM}font-size:10px;font-weight:bold;">${totalDisc > 0 ? fmt(totalDisc) : '0'}</td>
                 </tr>
             </tbody>
         </table>
@@ -123,16 +138,16 @@ export const buildReceiptHTML = ({
         <table style="width:100%;border-collapse:collapse;">
             <tr>
                 <td style="font-size:10px;padding:2px 0;">Sub Total:</td>
-                <td style="text-align:right;font-size:10px;padding:2px 0;">${currency} ${subtotal.toLocaleString()}</td>
+                <td style="text-align:right;font-size:10px;padding:2px 0;">${currency} ${fmt(subtotal)}</td>
             </tr>
-            ${tax > 0 ? `<tr><td style="font-size:10px;padding:2px 0;">Tax:</td><td style="text-align:right;font-size:10px;padding:2px 0;">${currency} ${tax.toLocaleString()}</td></tr>` : ''}
-            ${billDiscount > 0 ? `<tr><td style="font-size:10px;padding:2px 0;">Bill Discount:</td><td style="text-align:right;font-size:10px;padding:2px 0;">-${currency} ${billDiscount.toLocaleString()}</td></tr>` : ''}
+            ${tax > 0 ? `<tr><td style="font-size:10px;padding:2px 0;">Tax:</td><td style="text-align:right;font-size:10px;padding:2px 0;">${currency} ${fmt(tax)}</td></tr>` : ''}
+            ${billDiscount > 0 ? `<tr><td style="font-size:10px;padding:2px 0;">Bill Discount:</td><td style="text-align:right;font-size:10px;padding:2px 0;">-${currency} ${fmt(billDiscount)}</td></tr>` : ''}
         </table>
         ${solidLine}
         <table style="width:100%;border-collapse:collapse;">
             <tr>
                 <td style="font-size:12px;padding:3px 0;"><b>Total:</b></td>
-                <td style="text-align:right;font-size:12px;padding:3px 0;"><b>${currency} ${total.toLocaleString()}</b></td>
+                <td style="text-align:right;font-size:12px;padding:3px 0;"><b>${currency} ${fmt(total)}</b></td>
             </tr>
         </table>
         ${solidLine}
@@ -140,11 +155,11 @@ export const buildReceiptHTML = ({
         <table style="width:100%;border-collapse:collapse;">
             <tr>
                 <td style="font-size:10px;padding:2px 0;color:#b91c1c;">Total Refunded:</td>
-                <td style="text-align:right;font-size:10px;padding:2px 0;color:#b91c1c;">-${currency} ${Number(totalRefunded).toLocaleString()}</td>
+                <td style="text-align:right;font-size:10px;padding:2px 0;color:#b91c1c;">-${currency} ${fmt(totalRefunded)}</td>
             </tr>
             <tr>
                 <td style="font-size:12px;padding:3px 0;"><b>Net Amount:</b></td>
-                <td style="text-align:right;font-size:12px;padding:3px 0;"><b>${currency} ${Number(netAmount != null ? netAmount : (total - totalRefunded)).toLocaleString()}</b></td>
+                <td style="text-align:right;font-size:12px;padding:3px 0;"><b>${currency} ${fmt(netAmount != null ? netAmount : (total - totalRefunded))}</b></td>
             </tr>
         </table>
         ${solidLine}` : ''}
@@ -154,20 +169,20 @@ export const buildReceiptHTML = ({
                 <td style="text-align:right;font-size:10px;padding:2px 0;">${paymentLabel}</td>
             </tr>
             ${isPartial ? `
-                <tr><td style="font-size:10px;padding:2px 0;">Paid Now:</td><td style="text-align:right;font-size:10px;padding:2px 0;">${currency} ${amountPaid.toLocaleString()}</td></tr>
-                <tr><td style="font-size:10px;padding:2px 0;">Credited:</td><td style="text-align:right;font-size:10px;padding:2px 0;">${currency} ${billDue.toLocaleString()}</td></tr>
+                <tr><td style="font-size:10px;padding:2px 0;">Paid Now:</td><td style="text-align:right;font-size:10px;padding:2px 0;">${currency} ${fmt(amountPaid)}</td></tr>
+                <tr><td style="font-size:10px;padding:2px 0;">Credited:</td><td style="text-align:right;font-size:10px;padding:2px 0;">${currency} ${fmt(billDue)}</td></tr>
             ` : ''}
             ${paymentMethod === 'cash' && cashGiven > 0 ? `
-                <tr><td style="font-size:10px;padding:2px 0;">Cash:</td><td style="text-align:right;font-size:10px;padding:2px 0;">${currency} ${cashGiven.toLocaleString()}</td></tr>
-                <tr><td style="font-size:10px;padding:2px 0;">Change:</td><td style="text-align:right;font-size:10px;padding:2px 0;">${currency} ${change.toLocaleString()}</td></tr>
+                <tr><td style="font-size:10px;padding:2px 0;">Cash:</td><td style="text-align:right;font-size:10px;padding:2px 0;">${currency} ${fmt(cashGiven)}</td></tr>
+                <tr><td style="font-size:10px;padding:2px 0;">Change:</td><td style="text-align:right;font-size:10px;padding:2px 0;">${currency} ${fmt(change)}</td></tr>
             ` : ''}
         </table>
         ${billDue > 0 || previousBalance > 0 ? `
             ${line}
             <table style="width:100%;border-collapse:collapse;">
-                <tr><td style="font-size:10px;padding:2px 0;">Balance:</td><td style="text-align:right;font-size:10px;padding:2px 0;">${currency} ${previousBalance.toLocaleString()}</td></tr>
-                <tr><td style="font-size:10px;padding:2px 0;">Bill Balance:</td><td style="text-align:right;font-size:10px;padding:2px 0;">${currency} ${billDue.toLocaleString()}</td></tr>
-                <tr><td style="font-size:10px;padding:3px 0;font-weight:bold;">Net Balance:</td><td style="text-align:right;font-size:10px;padding:3px 0;font-weight:bold;">${currency} ${(previousBalance + billDue).toLocaleString()}</td></tr>
+                <tr><td style="font-size:10px;padding:2px 0;">Balance:</td><td style="text-align:right;font-size:10px;padding:2px 0;">${currency} ${fmt(previousBalance)}</td></tr>
+                <tr><td style="font-size:10px;padding:2px 0;">Bill Balance:</td><td style="text-align:right;font-size:10px;padding:2px 0;">${currency} ${fmt(billDue)}</td></tr>
+                <tr><td style="font-size:10px;padding:3px 0;font-weight:bold;">Net Balance:</td><td style="text-align:right;font-size:10px;padding:3px 0;font-weight:bold;">${currency} ${fmt(previousBalance + billDue)}</td></tr>
             </table>
         ` : ''}
         ${line}

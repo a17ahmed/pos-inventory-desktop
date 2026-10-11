@@ -151,7 +151,9 @@ const CustomerLedger = () => {
         setLoading(true);
         setError(null);
         try {
-            const params = {};
+            // The screen also shows cancelled bills (greyed, no amounts). They never
+            // change the balance and are filtered out of every export/print below.
+            const params = { includeCancelled: true };
             if (startDate) params.startDate = startTime ? `${startDate}T${startTime}:00` : startDate;
             if (endDate) params.endDate = endTime ? `${endDate}T${endTime}:00` : endDate;
 
@@ -262,13 +264,21 @@ const CustomerLedger = () => {
         return entries;
     }, [ledgerData, typeFilter, searchQuery]);
 
+    // What goes on the statement (PDF, print, totals): never cancelled bills.
+    const statementEntries = useMemo(
+        () => filteredEntries.filter((e) => e.type !== 'cancelled'),
+        [filteredEntries]
+    );
+    const cancelledCount = ledgerData?.summary?.cancelledCount
+        ?? (ledgerData?.ledger || []).filter((e) => e.type === 'cancelled').length;
+
     // Outstanding bills (for payment modal dropdown)
     const outstandingBills = useMemo(() => {
         if (!ledgerData?.ledger) return [];
         // Aggregate per bill: how much was billed vs paid/returned
         const billMap = new Map();
         for (const e of ledgerData.ledger) {
-            if (!e.billId) continue;
+            if (!e.billId || e.type === 'cancelled') continue;
             const key = String(e.billId);
             if (!billMap.has(key)) {
                 billMap.set(key, {
@@ -363,7 +373,7 @@ const CustomerLedger = () => {
         const balanceLabel = (summary.currentBalance || 0) < 0 ? 'Store Credit' : 'Balance Due';
         const balanceColor = (summary.currentBalance || 0) < 0 ? '#3b82f6' : '#ef4444';
 
-        const entryRows = filteredEntries.map((e) => {
+        const entryRows = statementEntries.map((e) => {
             const d = new Date(e.date);
             const typeLabel = e.type === 'bill' ? 'BILL' : e.type === 'payment' ? 'PAID' : e.type === 'return' ? 'RETURN' : e.type === 'opening_balance' ? 'OPENING' : e.type?.toUpperCase() || '';
             const typeColor = e.type === 'bill' ? '#f59e0b' : e.type === 'payment' ? '#10b981' : e.type === 'return' ? '#3b82f6' : '#64748b';
@@ -388,7 +398,7 @@ const CustomerLedger = () => {
         }
 
         // Per-bill line-item breakdown, shown after the main ledger table.
-        const billsWithItems = filteredEntries.filter((e) => e.type === 'bill' && e.items && e.items.length > 0);
+        const billsWithItems = statementEntries.filter((e) => e.type === 'bill' && e.items && e.items.length > 0);
         const billDetailsHtml = billsWithItems.map((e) => {
             const d = new Date(e.date);
             const refunded = refundByBill.get(String(e.billId)) || 0;
@@ -520,7 +530,7 @@ const CustomerLedger = () => {
 
             <!-- Footer -->
             <div style="margin-top:12px;font-size:10px;color:#94a3b8;text-align:center;">
-                Entries: ${filteredEntries.length} | Bills: ${summary.billCount || 0}
+                Entries: ${statementEntries.length} | Bills: ${summary.billCount || 0}
             </div>
         </div>`;
 
@@ -829,6 +839,7 @@ const CustomerLedger = () => {
                                 { id: 'bill', label: 'Bills' },
                                 { id: 'payment', label: 'Payments' },
                                 { id: 'return', label: 'Returns' },
+                                ...(cancelledCount > 0 ? [{ id: 'cancelled', label: 'Cancelled' }] : []),
                             ].map((f) => (
                                 <button
                                     key={f.id}
@@ -855,8 +866,13 @@ const CustomerLedger = () => {
                             />
                         </div>
 
-                        <div className="text-xs text-slate-500 dark:text-d-muted ml-auto">
+                        <div className="text-xs text-slate-500 dark:text-d-muted ml-auto text-right">
                             {filteredEntries.length} of {ledgerData?.ledger?.length || 0} entries
+                            {cancelledCount > 0 && (
+                                <div className="text-[11px] text-slate-400 dark:text-d-faint">
+                                    {cancelledCount} cancelled bill{cancelledCount === 1 ? '' : 's'} hidden from the statement
+                                </div>
+                            )}
                         </div>
                     </div>
                 </div>
@@ -892,13 +908,16 @@ const CustomerLedger = () => {
                                             (entry.returnItems && entry.returnItems.length > 0) ||
                                             entry.notes;
                                         const d = new Date(entry.date);
+                                        // Cancelled bills: shown for reference only — greyed, no
+                                        // amounts, balance unaffected, and never printed.
+                                        const isCancelled = entry.type === 'cancelled';
                                         return (
                                             <React.Fragment key={idx}>
                                                 <tr
                                                     onClick={() => hasDetails && setExpandedRow(isExpanded ? null : idx)}
                                                     className={`border-t border-slate-100 dark:border-d-border hover:bg-slate-50 dark:hover:bg-[rgba(255,255,255,0.02)] transition-colors ${
                                                         hasDetails ? 'cursor-pointer' : ''
-                                                    }`}
+                                                    } ${isCancelled ? 'opacity-60 print:hidden' : ''}`}
                                                 >
                                                     <td className="py-3 px-2 text-center">
                                                         {hasDetails &&
@@ -924,8 +943,16 @@ const CustomerLedger = () => {
                                                     <td className="py-3 px-4">
                                                         <div className="flex items-center gap-2">
                                                             <TypeBadge type={entry.type} />
-                                                            <span className="text-slate-700 dark:text-d-text">{entry.description}</span>
+                                                            <span className={isCancelled ? 'text-slate-500 dark:text-d-muted line-through' : 'text-slate-700 dark:text-d-text'}>
+                                                                {entry.description}
+                                                            </span>
                                                         </div>
+                                                        {isCancelled && (
+                                                            <div className="text-[11px] text-slate-500 dark:text-d-muted mt-0.5">
+                                                                {formatCurrency(entry.billTotal || 0)} bill · not counted
+                                                                {entry.cancelReason ? ` · Reason: ${entry.cancelReason}` : ''}
+                                                            </div>
+                                                        )}
                                                     </td>
                                                     <td className="py-3 px-4 whitespace-nowrap text-xs">
                                                         {entry.method && (
@@ -959,7 +986,7 @@ const CustomerLedger = () => {
                                                     </td>
                                                 </tr>
                                                 {isExpanded && hasDetails && (
-                                                    <tr className="bg-slate-50/70 dark:bg-d-glass">
+                                                    <tr className={`bg-slate-50/70 dark:bg-d-glass ${isCancelled ? 'print:hidden' : ''}`}>
                                                         <td></td>
                                                         <td colSpan={7} className="py-5 px-5">
                                                             {entry.items && entry.items.length > 0 && (
@@ -1175,14 +1202,14 @@ const CustomerLedger = () => {
                                     <tr>
                                         <td colSpan={5} className="py-3 px-4 text-right font-semibold text-slate-600 dark:text-d-muted">Totals</td>
                                         <td className="py-3 px-4 text-right font-bold text-red-600 dark:text-d-red">
-                                            {formatCurrency(filteredEntries.reduce((s, e) => s + (e.debit || 0), 0))}
+                                            {formatCurrency(statementEntries.reduce((s, e) => s + (e.debit || 0), 0))}
                                         </td>
                                         <td className="py-3 px-4 text-right">
                                             <div className="font-bold text-emerald-600 dark:text-d-green">
-                                                {formatCurrency(filteredEntries.reduce((s, e) => s + (e.credit || 0), 0))}
+                                                {formatCurrency(statementEntries.reduce((s, e) => s + (e.credit || 0), 0))}
                                             </div>
                                             {(() => {
-                                                const totalDebtCancelled = filteredEntries.reduce((s, e) => s + (e.debtWriteOff || 0), 0);
+                                                const totalDebtCancelled = statementEntries.reduce((s, e) => s + (e.debtWriteOff || 0), 0);
                                                 return totalDebtCancelled > 0 ? (
                                                     <div className="text-[10px] text-slate-400 dark:text-d-faint mt-0.5">
                                                         incl. {formatCurrency(totalDebtCancelled)} cancelled
@@ -1656,6 +1683,7 @@ const TypeBadge = ({ type }) => {
         bill: { label: 'SALE', cls: 'bg-red-50 dark:bg-[rgba(255,107,107,0.1)] text-red-600 dark:text-d-red' },
         payment: { label: 'PAID', cls: 'bg-emerald-50 dark:bg-[rgba(52,232,161,0.1)] text-emerald-600 dark:text-d-green' },
         return: { label: 'RETURN', cls: 'bg-amber-50 dark:bg-[rgba(255,185,50,0.1)] text-amber-600 dark:text-d-accent' },
+        cancelled: { label: 'CANCELLED', cls: 'bg-slate-200 dark:bg-white/10 text-slate-600 dark:text-d-muted' },
     };
     const c = config[type] || { label: type, cls: 'bg-slate-100 text-slate-600' };
     return (

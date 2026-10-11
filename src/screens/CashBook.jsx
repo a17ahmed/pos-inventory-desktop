@@ -25,6 +25,7 @@ const TYPE_LABELS = {
     sale_collection: 'Sale Collection',
     vendor_payment: 'Vendor Payment',
     customer_refund: 'Customer Refund',
+    sale_cancel: 'Bill Cancelled',
     expense: 'Expense',
 };
 
@@ -35,6 +36,7 @@ const TYPE_COLORS = {
     sale_collection: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400',
     vendor_payment: 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400',
     customer_refund: 'bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-400',
+    sale_cancel: 'bg-slate-200 text-slate-700 dark:bg-slate-700/40 dark:text-slate-300',
     expense: 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400',
 };
 
@@ -391,6 +393,7 @@ const CashBook = () => {
                         <option value="sale_collection">Sale Collections</option>
                         <option value="vendor_payment">Vendor Payments</option>
                         <option value="customer_refund">Customer Refunds</option>
+                        <option value="sale_cancel">Bills Cancelled</option>
                         <option value="expense">Expenses</option>
                     </select>
 

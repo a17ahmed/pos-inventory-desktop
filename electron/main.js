@@ -649,8 +649,31 @@ ipcMain.handle('print-receipt', async (event, { receiptData, printerName, paperW
         const W = resolvePaperWidth(paperWidth);
 
         logPrint('--- print-receipt START ---', 'platform:', process.platform, '| bill:', billNumber, '| printer:', printerName || '(auto)', '| width:', W, '| store:', storeName);
-        const money = (amt) => currency + ' ' + Number(amt).toLocaleString();
-        const num = (n) => Number(n).toLocaleString();
+        // Whole amounts without decimals, anything else with exactly two
+        // (84.7 → 84.70, 329.96999 → 329.97).
+        const num = (n) => {
+            const v = Math.round((Number(n) || 0) * 100) / 100;
+            return v.toLocaleString('en-US', {
+                minimumFractionDigits: Number.isInteger(v) ? 0 : 2,
+                maximumFractionDigits: 2,
+            });
+        };
+        const money = (amt) => currency + ' ' + num(amt);
+        // Fixed-width table cell: keep at least one space before the number so it
+        // never touches the column to its left. If it doesn't fit, drop the sign
+        // prefix, then the decimals, then the thousands separators (the exact
+        // totals print below the table).
+        const cell = (n, cols, prefix = '') => {
+            const whole = Math.round(Number(n) || 0);
+            const options = [
+                prefix + num(n),
+                num(n),
+                prefix + whole.toLocaleString('en-US'),
+                whole.toLocaleString('en-US'),
+                String(whole),
+            ];
+            return options.find((s) => s.length <= cols - 1) || options[options.length - 1];
+        };
 
         // Create printer instance — writes to temp file
         const printer = new ThermalPrinter({
@@ -737,9 +760,9 @@ ipcMain.handle('print-receipt', async (event, { receiptData, printerName, paperW
                 { text: String(i + 1), cols: c.sr },
                 { text: nameLines[0], cols: c.name },
                 { text: String(item.qty), cols: c.qty, align: 'RIGHT' },
-                { text: num(rate), cols: c.rate, align: 'RIGHT' },
-                { text: num(amount), cols: c.amt, align: 'RIGHT' },
-                { text: disc > 0 ? '-' + num(disc) : '0', cols: c.disc, align: 'RIGHT' },
+                { text: cell(rate, c.rate), cols: c.rate, align: 'RIGHT' },
+                { text: cell(amount, c.amt), cols: c.amt, align: 'RIGHT' },
+                { text: disc > 0 ? cell(disc, c.disc, '-') : '0', cols: c.disc, align: 'RIGHT' },
             ]);
 
             for (let k = 1; k < nameLines.length; k++) {
@@ -770,8 +793,8 @@ ipcMain.handle('print-receipt', async (event, { receiptData, printerName, paperW
             { text: 'Total', cols: c.sr + c.name },
             { text: String(totalQty), cols: c.qty, align: 'RIGHT' },
             { text: '', cols: c.rate },
-            { text: num(totalAmt), cols: c.amt, align: 'RIGHT' },
-            { text: totalDisc > 0 ? '-' + num(totalDisc) : '0', cols: c.disc, align: 'RIGHT' },
+            { text: cell(totalAmt, c.amt), cols: c.amt, align: 'RIGHT' },
+            { text: totalDisc > 0 ? cell(totalDisc, c.disc, '-') : '0', cols: c.disc, align: 'RIGHT' },
         ]);
         printer.bold(false);
         printer.drawLine();

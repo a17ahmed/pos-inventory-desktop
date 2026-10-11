@@ -2,6 +2,8 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useBusiness } from '../context/BusinessContext';
 import { useAuth } from '../context/AuthContext';
 import { getReceipts, getReceiptStats } from '../services/api/receipts';
+import { cancelBill } from '../services/api/bills';
+import { getCancelState, estimateCashReversal, isCancelledBill, isCancelledHold } from '../utils/billCancel';
 import { printReceipt } from '../utils/printReceipt';
 import { downloadReceipt } from '../utils/downloadReceipt';
 import {
@@ -19,6 +21,8 @@ import {
     FiLoader,
     FiCornerDownLeft,
     FiInbox,
+    FiSlash,
+    FiAlertTriangle,
 } from 'react-icons/fi';
 
 // Local YYYY-MM-DD — never toISOString(), which shifts to UTC and can land on
@@ -51,7 +55,7 @@ const dateRangeParams = (filter) => {
 
 const Receipts = () => {
     const { business } = useBusiness();
-    const { permissions } = useAuth();
+    const { permissions, isAdmin } = useAuth();
     // Admins bypass all permission checks (permissions is null for them).
     const canViewProfit = !permissions || permissions.pos?.viewProfit === true;
     const [receipts, setReceipts] = useState([]);
@@ -60,6 +64,25 @@ const Receipts = () => {
     const [searchQuery, setSearchQuery] = useState('');
     const [dateFilter, setDateFilter] = useState('all');
     const [showDetail, setShowDetail] = useState(null);
+    const [statusFilter, setStatusFilter] = useState('all'); // 'all' | 'cancelled'
+
+    // Cancel bill (for bills created by mistake)
+    const [cancelTarget, setCancelTarget] = useState(null);
+    const [cancelReason, setCancelReason] = useState('');
+    const [cancelError, setCancelError] = useState('');
+    const [cancelling, setCancelling] = useState(false);
+    const [toast, setToast] = useState('');
+    const [online, setOnline] = useState(navigator.onLine);
+    useEffect(() => {
+        const up = () => setOnline(true);
+        const down = () => setOnline(false);
+        window.addEventListener('online', up);
+        window.addEventListener('offline', down);
+        return () => {
+            window.removeEventListener('online', up);
+            window.removeEventListener('offline', down);
+        };
+    }, []);
     // Collapses the stat cards into a slim strip once the list is scrolled,
     // handing the freed vertical space to the receipts table.
     const [collapsed, setCollapsed] = useState(false);
@@ -99,7 +122,7 @@ const Receipts = () => {
         setPage(1);
         setHasMore(true);
         fetchReceipts(1, true);
-    }, [dateFilter]);
+    }, [dateFilter, statusFilter]);
 
     const fetchStats = async () => {
         try {
@@ -121,8 +144,12 @@ const Receipts = () => {
         }
     };
 
-    const fetchReceipts = async (pageNum = 1, reset = false) => {
-        if (reset) {
+    // silent: reload in place without the full-page spinner (keeps toasts and
+    // scroll position visible, e.g. after cancelling a bill).
+    const fetchReceipts = async (pageNum = 1, reset = false, silent = false) => {
+        if (silent) {
+            // no spinner
+        } else if (reset) {
             setLoading(true);
         } else {
             setLoadingMore(true);
@@ -131,7 +158,12 @@ const Receipts = () => {
         try {
             // Server-side date scoping when a filter is active (empty for "All").
             // Backend caps limit at 100 — 30 is well within that.
-            const params = { page: pageNum, limit: 30, ...dateRangeParams(dateFilter) };
+            const params = {
+                page: pageNum,
+                limit: 30,
+                ...dateRangeParams(dateFilter),
+                ...(statusFilter === 'cancelled' ? { status: 'cancelled' } : {}),
+            };
             const res = await getReceipts(params);
 
             // Handle both old (array) and new (object with receipts) response formats
@@ -207,7 +239,7 @@ const Receipts = () => {
         if (distanceFromBottom < 300) {
             fetchReceipts(pageRef.current + 1, false);
         }
-    }, [dateFilter]);
+    }, [dateFilter, statusFilter]);
 
     useEffect(() => {
         const container = scrollContainerRef.current;
@@ -307,6 +339,14 @@ const Receipts = () => {
     };
 
     const getReceiptType = (receipt) => {
+        if (isCancelledBill(receipt)) {
+            return {
+                label: isCancelledHold(receipt) ? 'Cancelled hold' : 'Cancelled',
+                color: 'bg-slate-200 text-slate-600 dark:bg-white/10 dark:text-d-muted',
+                hasReturns: false,
+                cancelled: true,
+            };
+        }
         if (receipt.type === 'refund') {
             return { label: 'Refund', color: 'bg-[rgba(255,107,107,0.15)] text-d-red', hasReturns: false };
         }
@@ -319,6 +359,40 @@ const Receipts = () => {
         };
     };
 
+
+    const cancelStateFor = (receipt) => getCancelState(receipt, { isAdmin, permissions, business, online });
+
+    const openCancel = (receipt) => {
+        setCancelTarget(receipt);
+        setCancelReason('');
+        setCancelError('');
+    };
+
+    const submitCancel = async () => {
+        const reason = cancelReason.trim();
+        if (!reason) {
+            setCancelError('A reason is required to cancel a bill');
+            return;
+        }
+        setCancelling(true);
+        setCancelError('');
+        try {
+            const res = await cancelBill(cancelTarget._id, reason);
+            const cash = Number(res.data?.cashReversed) || 0;
+            setToast(`${res.data?.message || 'Bill cancelled'}${cash > 0 ? ` — ${formatCurrency(cash)} taken out of the cash book` : ''}`);
+            setTimeout(() => setToast(''), 5000);
+            setCancelTarget(null);
+            setShowDetail(null);
+            setPage(1);
+            setHasMore(true);
+            fetchReceipts(1, true, true);
+            fetchStats();
+        } catch (err) {
+            setCancelError(err.response?.data?.message || 'Failed to cancel the bill');
+        } finally {
+            setCancelling(false);
+        }
+    };
 
     if (loading) {
         return (
@@ -502,6 +576,19 @@ const Receipts = () => {
                             </button>
                         ))}
                     </div>
+
+                    <button
+                        onClick={() => setStatusFilter(statusFilter === 'cancelled' ? 'all' : 'cancelled')}
+                        className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium border transition-all ${
+                            statusFilter === 'cancelled'
+                                ? 'bg-slate-700 text-white border-slate-700 dark:bg-white/15 dark:border-white/20'
+                                : 'bg-white dark:bg-d-card text-slate-500 dark:text-d-muted border-slate-200 dark:border-d-border hover:text-slate-700 dark:hover:text-d-text'
+                        }`}
+                        title="Show only cancelled bills"
+                    >
+                        <FiSlash size={14} />
+                        Cancelled
+                    </button>
                     </div>
                 </div>
 
@@ -528,7 +615,9 @@ const Receipts = () => {
                                     <tr
                                         key={receipt._id}
                                         className={`border-t border-slate-200 dark:border-d-border transition-colors ${
-                                            type.label === 'Refund'
+                                            type.cancelled
+                                                ? 'bg-slate-50 dark:bg-white/[0.02] opacity-70 hover:opacity-100'
+                                                : type.label === 'Refund'
                                                 ? 'bg-red-100 dark:bg-[#3d2020] hover:bg-red-200 dark:hover:bg-[#4a2525]'
                                                 : type.hasReturns
                                                     ? 'bg-amber-100 dark:bg-[#3d3520] hover:bg-amber-200 dark:hover:bg-[#4a4025]'
@@ -545,7 +634,7 @@ const Receipts = () => {
                                             {receipt.items?.length || 0} items
                                         </td>
                                         <td className="py-4 px-6 font-semibold font-display">
-                                            <span className={receipt.totalBill < 0 ? 'text-d-red' : 'text-d-green'}>
+                                            <span className={type.cancelled ? 'text-slate-400 dark:text-d-faint line-through' : receipt.totalBill < 0 ? 'text-d-red' : 'text-d-green'}>
                                                 {formatCurrency(Math.abs(receipt.totalBill))}
                                             </span>
                                         </td>
@@ -580,6 +669,15 @@ const Receipts = () => {
                                                 >
                                                     <FiPrinter size={16} />
                                                 </button>
+                                                {cancelStateFor(receipt).allowed && (
+                                                    <button
+                                                        onClick={() => openCancel(receipt)}
+                                                        className="p-2 text-slate-400 dark:text-d-faint hover:text-d-red hover:bg-[rgba(255,107,107,0.1)] rounded-lg transition-colors"
+                                                        title="Cancel bill (created by mistake)"
+                                                    >
+                                                        <FiSlash size={16} />
+                                                    </button>
+                                                )}
                                             </div>
                                         </td>
                                     </tr>
@@ -675,6 +773,22 @@ const Receipts = () => {
                         </div>
 
                         <div className="p-6 space-y-5">
+                            {type.cancelled && (
+                                <div className="flex items-start gap-3 p-4 rounded-xl bg-slate-100 dark:bg-white/5 border border-slate-200 dark:border-d-border">
+                                    <FiSlash className="text-slate-500 dark:text-d-muted mt-0.5 shrink-0" size={18} />
+                                    <div className="text-sm">
+                                        <p className="font-semibold text-slate-700 dark:text-d-text">
+                                            {type.label}{r.cancelledAt ? ` on ${formatDate(r.cancelledAt)}` : ''}
+                                            {(r.cancelledByName || r.cancelledBy?.name) ? ` by ${r.cancelledByName || r.cancelledBy?.name}` : ''}
+                                        </p>
+                                        {r.cancelReason && <p className="text-slate-600 dark:text-d-muted mt-0.5">Reason: {r.cancelReason}</p>}
+                                        <p className="text-xs text-slate-400 dark:text-d-faint mt-1">
+                                            Not counted in reports, the cash book or the customer's balance.
+                                        </p>
+                                    </div>
+                                </div>
+                            )}
+
                             {/* Info Grid */}
                             <div className="grid grid-cols-2 md:grid-cols-3 gap-4 bg-slate-50 dark:bg-d-elevated rounded-xl p-4">
                                 <div>
@@ -1006,11 +1120,103 @@ const Receipts = () => {
                                     Download
                                 </button>
                             </div>
+                            {cancelStateFor(r).allowed && (
+                                <div className="pt-3 border-t border-slate-200 dark:border-d-border">
+                                    <button
+                                        onClick={() => openCancel(r)}
+                                        className="w-full py-2.5 rounded-xl text-sm font-semibold border border-red-300 dark:border-d-red/40 text-red-600 dark:text-d-red hover:bg-red-50 dark:hover:bg-[rgba(255,107,107,0.08)] transition-colors flex items-center justify-center gap-2"
+                                    >
+                                        <FiSlash size={15} />
+                                        Cancel bill
+                                    </button>
+                                    <p className="text-xs text-slate-400 dark:text-d-faint mt-1.5 text-center">
+                                        Only for bills created by mistake. If the customer returned goods, use Returns.
+                                    </p>
+                                </div>
+                            )}
                         </div>
                     </div>
                 </div>
                 );
             })()}
+
+            {/* Cancel Bill Confirm */}
+            {cancelTarget && (() => {
+                const b = cancelTarget;
+                const cash = estimateCashReversal(b);
+                return (
+                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[60] p-4">
+                    <div className="bg-white dark:bg-d-card border border-slate-200 dark:border-d-border rounded-2xl w-full max-w-md animate-pop-in">
+                        <div className="p-6">
+                            <div className="flex items-start gap-3 mb-4">
+                                <div className="w-10 h-10 rounded-full bg-red-50 dark:bg-[rgba(255,107,107,0.12)] flex items-center justify-center shrink-0">
+                                    <FiAlertTriangle className="text-red-500 dark:text-d-red" size={20} />
+                                </div>
+                                <div>
+                                    <h3 className="text-lg font-bold text-slate-800 dark:text-d-heading">Cancel bill #{b.billNumber}?</h3>
+                                    <p className="text-sm text-slate-500 dark:text-d-muted">
+                                        {b.customerName || 'Walk-in'} · {formatCurrency(b.total ?? b.totalBill)}
+                                    </p>
+                                </div>
+                            </div>
+
+                            <div className="p-3 rounded-xl bg-red-50 dark:bg-[rgba(255,107,107,0.08)] border border-red-200 dark:border-[rgba(255,107,107,0.25)] text-sm text-red-700 dark:text-d-red space-y-1 mb-3">
+                                <p>This bill will be removed from reports and the customer's balance, and its stock will come back.</p>
+                                {cash > 0 && <p className="font-semibold">Cash {formatCurrency(cash)} will be taken out of the cash book.</p>}
+                            </div>
+                            <p className="text-xs text-slate-500 dark:text-d-muted mb-4">
+                                Use this only for bills created by mistake. If the customer returned goods, use <span className="font-semibold">Returns</span> instead.
+                            </p>
+
+                            <label className="block text-sm text-slate-600 dark:text-d-muted mb-1.5">
+                                Reason <span className="text-red-500">*</span>
+                            </label>
+                            <textarea
+                                value={cancelReason}
+                                onChange={(e) => setCancelReason(e.target.value)}
+                                maxLength={300}
+                                rows={2}
+                                autoFocus
+                                placeholder="e.g. Created by mistake, duplicate bill"
+                                className="w-full px-3 py-2.5 bg-slate-50 dark:bg-d-bg border border-slate-200 dark:border-d-border rounded-xl text-sm text-slate-700 dark:text-d-text placeholder-slate-400 dark:placeholder-d-faint resize-none focus:outline-none focus:border-red-300"
+                            />
+                            <p className="text-[11px] text-slate-400 dark:text-d-faint text-right">{cancelReason.length}/300</p>
+
+                            {cancelError && (
+                                <div className="mt-2 p-3 bg-[rgba(255,107,107,0.1)] border border-[rgba(255,107,107,0.3)] rounded-xl text-d-red text-sm flex items-center gap-2">
+                                    <FiAlertTriangle className="shrink-0" size={14} />
+                                    {cancelError}
+                                </div>
+                            )}
+
+                            <div className="flex gap-3 mt-4">
+                                <button
+                                    onClick={() => setCancelTarget(null)}
+                                    disabled={cancelling}
+                                    className="flex-1 py-3 border border-slate-200 dark:border-d-border rounded-xl font-medium text-slate-600 dark:text-d-muted hover:bg-slate-100 dark:hover:bg-d-glass transition-colors disabled:opacity-50"
+                                >
+                                    Keep bill
+                                </button>
+                                <button
+                                    onClick={submitCancel}
+                                    disabled={cancelling}
+                                    className="flex-1 py-3 bg-red-500 hover:bg-red-600 dark:bg-d-red text-white rounded-xl font-semibold transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
+                                >
+                                    {cancelling ? <FiRefreshCw className="animate-spin" size={16} /> : <FiSlash size={16} />}
+                                    {cancelling ? 'Cancelling...' : 'Cancel bill'}
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                );
+            })()}
+
+            {toast && (
+                <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[70] px-5 py-3 rounded-xl bg-slate-800 text-white text-sm shadow-lg animate-fade-slide-up">
+                    {toast}
+                </div>
+            )}
         </div>
     );
 };

@@ -6,6 +6,11 @@ export const getBills = (params) => api.get('/bill', { params });
 export const getBill = (id) => api.get(`/bill/${id}`);
 export const updateBill = (id, data) => api.patch(`/bill/${id}`, data);
 
+// Cancel a completed sale created by mistake (reason required). Unlike a
+// return, the sale is treated as never having happened: stock comes back, the
+// cash is reversed and the customer balance is recalculated.
+export const cancelBill = (id, reason) => api.post(`/bill/${id}/cancel`, { reason });
+
 // ─── Payments ────────────────────────────────────────────────
 export const addBillPayment = (id, data) => api.post(`/bill/${id}/payment`, data);
 

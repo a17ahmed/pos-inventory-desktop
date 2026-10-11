@@ -212,6 +212,7 @@ const Inventory = () => {
             supply_return: { label: 'Supply Return', color: 'text-orange-600 dark:text-orange-400 bg-orange-50 dark:bg-orange-500/10' },
             bill_sold: { label: 'Sold', color: 'text-blue-600 dark:text-d-blue bg-blue-50 dark:bg-blue-500/10' },
             bill_return: { label: 'Customer Return', color: 'text-purple-600 dark:text-purple-400 bg-purple-50 dark:bg-purple-500/10' },
+            bill_cancel: { label: 'Bill Cancelled', color: 'text-slate-600 dark:text-slate-300 bg-slate-200 dark:bg-slate-500/15' },
             manual_adjustment: { label: 'Manual Adjust', color: 'text-slate-600 dark:text-d-muted bg-slate-100 dark:bg-white/5' },
         };
         return map[type] || { label: type, color: 'text-slate-600 dark:text-d-muted bg-slate-100 dark:bg-white/5' };
@@ -676,6 +677,7 @@ const Inventory = () => {
                                     <option value="supply_in">Supply In</option>
                                     <option value="bill_sold">Sold</option>
                                     <option value="bill_return">Customer Return</option>
+                                    <option value="bill_cancel">Bill Cancelled</option>
                                     <option value="supply_return">Supply Return</option>
                                     <option value="manual_adjustment">Manual Adjustment</option>
                                     <option value="supply_update_reverse">Supply Reversed</option>
