@@ -75,6 +75,12 @@ const Returns = () => {
     const [returnResult, setReturnResult] = useState(null);
     const [error, setError] = useState('');
 
+    // Full return (whole bill / remaining items in one request)
+    const [showFullReturn, setShowFullReturn] = useState(false);
+    const [fullReturnReason, setFullReturnReason] = useState('changed_mind');
+    const [fullReturnNote, setFullReturnNote] = useState('');
+    const [fullReturnError, setFullReturnError] = useState('');
+
     // Today's summary
     const [todaySummary, setTodaySummary] = useState({ totalReturns: 0, totalRefunded: 0 });
 
@@ -368,6 +374,27 @@ const Returns = () => {
     const totalRefund = returnItems.reduce((sum, item) => sum + (item.price * item.quantity), 0);
     const totalItems = returnItems.reduce((sum, item) => sum + item.quantity, 0);
 
+    // Full return preview — everything still returnable on the linked bill. The
+    // backend decides the exact items and amount when it processes the request,
+    // so the estimate is only shown as "≈" and the result uses the response.
+    const fullReturnLines = (linkedBill?.items || [])
+        .map((item) => ({
+            ...item,
+            remaining: item.remainingQty !== undefined ? item.remainingQty : item.qty - (item.returnedQty || 0),
+        }))
+        .filter((item) => item.remaining > 0);
+    const canFullReturn = !!linkedBill && linkedBill.returnStatus !== 'full' && fullReturnLines.length > 0;
+    const isPartiallyReturned = linkedBill?.returnStatus === 'partial'
+        || (linkedBill?.items || []).some((item) => (item.returnedQty || 0) > 0);
+    // Spread a bill-level discount over items by their share of the line totals.
+    const linesNetTotal = (linkedBill?.items || []).reduce((sum, item) => sum + (item.itemTotal ?? item.price * item.qty), 0);
+    const billDiscountFactor = linesNetTotal > 0 && linkedBill?.total != null ? linkedBill.total / linesNetTotal : 1;
+    const fullReturnEstimate = fullReturnLines.reduce((sum, item) => {
+        const lineTotal = item.itemTotal ?? item.price * item.qty;
+        return sum + (lineTotal / (item.qty || 1)) * item.remaining * billDiscountFactor;
+    }, 0);
+    const fullReturnQty = fullReturnLines.reduce((sum, item) => sum + item.remaining, 0);
+
     // Process return — two paths:
     //   1. Linked to an existing bill → POST /bill/:id/return (processReturn schema)
     //      Server auto-picks refund method (ledger_adjust for customer, cash for walk-in)
@@ -462,6 +489,69 @@ const Returns = () => {
         }
     };
 
+    const openFullReturn = () => {
+        setFullReturnReason('changed_mind');
+        setFullReturnNote('');
+        setFullReturnError('');
+        setShowFullReturn(true);
+    };
+
+    // Return everything still returnable on the linked bill in one request.
+    // Sends { fullReturn: true } — never the item list; the backend works out
+    // what's remaining at processing time and computes the exact refund.
+    const processFullReturn = async () => {
+        if (!linkedBill || processing) return;
+
+        const isCashRefund = !linkedBill.customer;
+        if (isCashRefund && cashBalance != null && fullReturnEstimate > cashBalance) {
+            setFullReturnError(`Insufficient cash. Available: ${formatCurrency(cashBalance)}`);
+            return;
+        }
+
+        setProcessing(true);
+        setFullReturnError('');
+        try {
+            const note = fullReturnNote.trim();
+            const response = await createReturn({
+                billId: linkedBill._id,
+                fullReturn: true,
+                reason: fullReturnReason,
+                ...(note ? { reasonNote: note } : {}),
+            });
+            const data = response.data;
+            const returnEntry = data.bill?.returns?.slice(-1)[0];
+            const returnedQty = returnEntry?.items?.reduce((sum, i) => sum + (i.qty ?? i.quantity ?? 0), 0);
+            setReturnResult({
+                returnNumber: data.returnNumber,
+                totalItems: returnedQty || fullReturnQty,
+                refundAmount: data.refundAmount,
+                cashRefundAmount: data.cashRefundAmount ?? data.refundAmount,
+                debtCancelled: data.debtCancelled ?? 0,
+                refundMethod: returnEntry?.refundMethod || (linkedBill.customer ? 'ledger_adjust' : 'cash'),
+            });
+            setShowFullReturn(false);
+            setShowSuccess(true);
+            loadTodaySummary();
+        } catch (err) {
+            console.error('Error processing full return:', err);
+            setFullReturnError(err.response?.data?.message || 'Failed to process return');
+        } finally {
+            setProcessing(false);
+        }
+    };
+
+    // "Return full bill" / "Return remaining items" — shown under a linked bill's items.
+    const renderFullReturnButton = () => canFullReturn && (
+        <button
+            onClick={openFullReturn}
+            disabled={processing}
+            className="mt-3 w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl text-sm font-semibold border border-d-red/40 text-d-red bg-[rgba(255,107,107,0.06)] hover:bg-[rgba(255,107,107,0.12)] transition-colors disabled:opacity-50"
+        >
+            <FiRotateCcw size={15} />
+            {isPartiallyReturned ? `Return remaining items (${fullReturnQty})` : `Return full bill (${fullReturnQty} items)`}
+        </button>
+    );
+
     // Reset form
     const resetForm = () => {
         setReturnItems([]);
@@ -473,6 +563,8 @@ const Returns = () => {
         setShowSuccess(false);
         setReturnResult(null);
         setError('');
+        setShowFullReturn(false);
+        setFullReturnError('');
         setSearchMode('customer');
         clearCustomer();
         if (barcodeInputRef.current) {
@@ -598,6 +690,7 @@ const Returns = () => {
                                                     );
                                                 })}
                                             </div>
+                                            {renderFullReturnButton()}
                                         </div>
                                     ) : customerBills.length === 0 ? (
                                         <p className="text-sm text-slate-500 dark:text-d-muted py-4 text-center">No completed bills found</p>
@@ -742,6 +835,7 @@ const Returns = () => {
                                             );
                                         })}
                                     </div>
+                                    {renderFullReturnButton()}
                                 </div>
                             )}
                         </div>}
@@ -991,6 +1085,103 @@ const Returns = () => {
                     </div>
                 </div>
             </div>
+
+            {/* Full Return Confirm Modal */}
+            {showFullReturn && linkedBill && (
+                <div
+                    className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4"
+                    onKeyDown={(e) => { if (e.key === 'Escape' && !processing) setShowFullReturn(false); }}
+                >
+                    <div className="bg-white dark:bg-d-card border border-slate-200 dark:border-d-border rounded-2xl w-full max-w-md animate-pop-in max-h-[90vh] overflow-y-auto">
+                        <div className="p-6">
+                            <h3 className="text-xl font-bold text-slate-800 dark:text-d-heading mb-1">
+                                {isPartiallyReturned ? 'Return remaining items' : 'Return full bill'}
+                            </h3>
+                            <p className="text-sm text-slate-500 dark:text-d-muted mb-4">
+                                Bill #{linkedBill.billNumber} · {linkedBill.customerName || 'Walk-in'}
+                            </p>
+
+                            <p className="text-xs font-semibold uppercase tracking-wide text-slate-400 dark:text-d-faint mb-2">
+                                Items to return
+                            </p>
+                            <div className="space-y-1.5 mb-4">
+                                {fullReturnLines.map((item) => (
+                                    <div key={item._id} className="flex items-center justify-between px-3 py-2 bg-slate-50 dark:bg-d-bg rounded-lg border border-slate-200 dark:border-d-border text-sm">
+                                        <span className="text-slate-700 dark:text-d-text truncate">{item.name}</span>
+                                        <span className="font-semibold text-slate-800 dark:text-d-heading shrink-0 ml-3">
+                                            × {item.remaining}
+                                            {item.remaining !== item.qty && (
+                                                <span className="font-normal text-xs text-slate-400 dark:text-d-faint ml-1">of {item.qty}</span>
+                                            )}
+                                        </span>
+                                    </div>
+                                ))}
+                            </div>
+
+                            <div className="grid grid-cols-1 gap-3 mb-4">
+                                <div>
+                                    <label className="block text-sm text-slate-500 dark:text-d-muted mb-1.5">Reason (applies to all items)</label>
+                                    <select
+                                        value={fullReturnReason}
+                                        onChange={(e) => setFullReturnReason(e.target.value)}
+                                        className="w-full px-3 py-2.5 bg-slate-50 dark:bg-d-bg border border-slate-200 dark:border-d-border rounded-xl text-sm text-slate-700 dark:text-d-text focus:outline-none focus:border-d-border-hover"
+                                    >
+                                        {RETURN_REASONS.map((r) => (
+                                            <option key={r.value} value={r.value}>{r.label}</option>
+                                        ))}
+                                    </select>
+                                </div>
+                                <div>
+                                    <label className="block text-sm text-slate-500 dark:text-d-muted mb-1.5">Note (optional)</label>
+                                    <input
+                                        type="text"
+                                        value={fullReturnNote}
+                                        onChange={(e) => setFullReturnNote(e.target.value)}
+                                        placeholder="Add a note..."
+                                        className="w-full px-3 py-2.5 bg-slate-50 dark:bg-d-bg border border-slate-200 dark:border-d-border rounded-xl text-sm text-slate-700 dark:text-d-text placeholder-d-faint focus:outline-none focus:border-d-border-hover"
+                                    />
+                                </div>
+                            </div>
+
+                            <div className="flex items-center justify-between px-4 py-3 rounded-xl bg-[rgba(255,107,107,0.06)] border border-[rgba(255,107,107,0.2)] mb-2">
+                                <span className="text-sm text-slate-600 dark:text-d-text">Estimated refund</span>
+                                <span className="font-bold text-d-red">≈ {formatCurrency(Math.round(fullReturnEstimate * 100) / 100)}</span>
+                            </div>
+                            <p className="text-xs text-slate-400 dark:text-d-faint mb-4">
+                                {linkedBill.customer
+                                    ? "Refund goes to the customer's account balance."
+                                    : 'Cash refund.'}{' '}
+                                The final amount is calculated when the return is processed.
+                            </p>
+
+                            {fullReturnError && (
+                                <div className="mb-4 p-3 bg-[rgba(255,107,107,0.1)] border border-[rgba(255,107,107,0.3)] rounded-xl text-d-red text-sm flex items-center gap-2">
+                                    <FiAlertCircle className="shrink-0" />
+                                    {fullReturnError}
+                                </div>
+                            )}
+
+                            <div className="flex gap-3">
+                                <button
+                                    onClick={() => setShowFullReturn(false)}
+                                    disabled={processing}
+                                    className="flex-1 py-3 border border-slate-200 dark:border-d-border text-slate-600 dark:text-d-muted rounded-xl font-medium hover:bg-d-glass transition-colors disabled:opacity-50"
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    onClick={processFullReturn}
+                                    disabled={processing}
+                                    className="flex-1 py-3 bg-gradient-to-r from-d-red to-[#e85555] text-white rounded-xl font-semibold hover:shadow-[0_4px_20px_rgba(255,107,107,0.4)] transition-all disabled:opacity-50 flex items-center justify-center gap-2"
+                                >
+                                    {processing ? <FiRefreshCw className="animate-spin" /> : <FiRotateCcw />}
+                                    {processing ? 'Processing...' : `Return ${fullReturnQty} item${fullReturnQty === 1 ? '' : 's'}`}
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
 
             {/* Success Modal */}
             {showSuccess && returnResult && (
