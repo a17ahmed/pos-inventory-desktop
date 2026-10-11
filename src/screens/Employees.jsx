@@ -43,7 +43,7 @@ const DAYS_OF_WEEK = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 's
 
 // Access control module definitions
 const ACCESS_MODULES = [
-    { key: 'pos', label: 'POS / Sales', actions: ['view', 'create', 'viewProfit'] },
+    { key: 'pos', label: 'POS / Sales', actions: ['view', 'create', 'viewProfit', 'saveCustomerRates', 'sellBeyondLimit'] },
     { key: 'returns', label: 'Returns', actions: ['view', 'create', 'standalone', 'cancel'] },
     { key: 'products', label: 'Products', actions: ['view', 'create', 'edit', 'delete', 'updateStock'] },
     { key: 'vendors', label: 'Vendors', actions: ['view', 'create', 'edit', 'delete', 'pay'] },
@@ -62,6 +62,7 @@ const ACTION_LABELS = {
     standalone: 'Standalone', updateStock: 'Update Stock', pay: 'Pay', recordPayment: 'Record Payment',
     processReturn: 'Process Return', approve: 'Approve', resetPassword: 'Reset Password',
     resume: 'Resume', cancel: 'Cancel', viewProfit: 'View Profit',
+    saveCustomerRates: 'Save Customer Rates', sellBeyondLimit: 'Sell Beyond Discount Limit',
 };
 
 const Employees = () => {

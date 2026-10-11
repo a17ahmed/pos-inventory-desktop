@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useBusiness } from '../context/BusinessContext';
-import { updateBusiness, updateAdmin, changeAdminPassword } from '../services/api/business';
+import { updateBusiness, updateAdmin, changeAdminPassword, updateBusinessSettings } from '../services/api/business';
 import { useTheme } from '../context/ThemeContext';
 import { buildReceiptHTML } from '../utils/receiptTemplate';
 import { printReceipt as printReceiptUtil, PRINTER_NAME_KEY, PAPER_WIDTH_KEY } from '../utils/printReceipt';
@@ -29,11 +29,12 @@ import {
     FiMoon,
     FiSun,
     FiDownload,
+    FiAlertTriangle,
 } from 'react-icons/fi';
 
 const Settings = () => {
     const navigate = useNavigate();
-    const { user, logout } = useAuth();
+    const { user, logout, isAdmin } = useAuth();
     const { business, config, refreshBusiness } = useBusiness();
     const { isDark, toggleTheme } = useTheme();
 
@@ -104,6 +105,27 @@ const Settings = () => {
     const handleCheckUpdate = () => {
         setUpdateLabel('Checking...');
         window.electronAPI?.checkForUpdates?.().catch(() => setUpdateLabel('Update check failed'));
+    };
+
+    // Business-wide: may a customer's special rate sell an item below cost?
+    // Off = server rejects below-cost lines even with a limit override.
+    const allowSellBelowCost = business?.settings?.allowSellBelowCost === true;
+    const [savingBelowCost, setSavingBelowCost] = useState(false);
+    const handleToggleSellBelowCost = async () => {
+        const next = !allowSellBelowCost;
+        if (next && !(await appConfirm(
+            'Cashiers with the "Sell beyond discount limit" permission will be able to sell items below cost price at a customer\'s special rate.',
+            { title: 'Allow selling below cost?', confirmText: 'Allow', danger: true }
+        ))) return;
+        setSavingBelowCost(true);
+        try {
+            await updateBusinessSettings({ ...(business?.settings || {}), allowSellBelowCost: next });
+            await refreshBusiness();
+        } catch (err) {
+            appAlert('Failed to save: ' + (err.response?.data?.message || err.message));
+        } finally {
+            setSavingBelowCost(false);
+        }
     };
 
     const handleSaveBusiness = async () => {
@@ -310,6 +332,32 @@ const Settings = () => {
                     onClick={() => setActiveModal('receipt')}
                     color="text-purple-500"
                 />
+                {isAdmin && (
+                    <SettingItem
+                        icon={FiAlertTriangle}
+                        label="Allow Selling Below Cost"
+                        value={allowSellBelowCost
+                            ? 'On — customer special rates may sell below cost'
+                            : 'Off — items can never be sold below cost price'}
+                        onClick={savingBelowCost ? undefined : handleToggleSellBelowCost}
+                        color="text-red-500"
+                        rightElement={
+                            <div
+                                className="relative inline-flex items-center cursor-pointer"
+                                onClick={(e) => e.stopPropagation()}
+                            >
+                                <input
+                                    type="checkbox"
+                                    className="sr-only peer"
+                                    checked={allowSellBelowCost}
+                                    disabled={savingBelowCost}
+                                    onChange={handleToggleSellBelowCost}
+                                />
+                                <div className="w-11 h-6 bg-slate-200 dark:bg-slate-600 peer-focus:ring-2 peer-focus:ring-primary-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-red-500 peer-disabled:opacity-50"></div>
+                            </div>
+                        }
+                    />
+                )}
             </Section>
 
             {/* App Settings Section */}

@@ -2,8 +2,24 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import html2pdf from 'html2pdf.js';
 import { useBusiness } from '../context/BusinessContext';
+import { useAuth } from '../context/AuthContext';
 import { todayLocalDate, toLocalDateStr } from '../utils/date';
-import { getCustomer, getCustomerLedger, collectFromCustomer } from '../services/api/customers';
+import {
+    getCustomer,
+    getCustomerLedger,
+    collectFromCustomer,
+    getCustomerRates,
+    replaceCustomerRates,
+} from '../services/api/customers';
+import { getProducts } from '../services/api/products';
+import SpecialRatesEditor from '../components/SpecialRatesEditor';
+import {
+    canSaveCustomerRates,
+    toDraftRates,
+    toRatesPayload,
+    validateDraftRates,
+    friendlyRateError,
+} from '../utils/specialRates';
 import { addBillPayment } from '../services/api/bills';
 import { appAlert, appConfirm } from '../components/AppDialog';
 import {
@@ -35,6 +51,61 @@ const CustomerLedger = () => {
     const { business } = useBusiness();
 
     const [customer, setCustomer] = useState(null);
+
+    // Special Rates tab
+    const { isAdmin, permissions } = useAuth();
+    const canSaveRates = canSaveCustomerRates(isAdmin, permissions);
+    const [pageTab, setPageTab] = useState('ledger'); // 'ledger' | 'rates'
+    const [ratesDraft, setRatesDraft] = useState([]);
+    const [ratesOriginal, setRatesOriginal] = useState(null); // JSON of loaded payload; null = not loaded
+    const [ratesLoaded, setRatesLoaded] = useState([]); // loaded draft, for "Discard changes"
+    const [rateProducts, setRateProducts] = useState([]);
+    const [ratesLoading, setRatesLoading] = useState(false);
+    const [savingRates, setSavingRates] = useState(false);
+    const rateProductsById = useMemo(() => {
+        const map = {};
+        rateProducts.forEach((p) => { map[p._id] = p; });
+        return map;
+    }, [rateProducts]);
+    const ratesDirty = ratesOriginal !== null && JSON.stringify(toRatesPayload(ratesDraft)) !== ratesOriginal;
+
+    const loadRates = useCallback(async () => {
+        setRatesLoading(true);
+        try {
+            const [ratesRes, productsRes] = await Promise.all([getCustomerRates(id), getProducts()]);
+            const draft = toDraftRates(ratesRes.data?.rates);
+            setRateProducts(productsRes.data || []);
+            setRatesDraft(draft);
+            setRatesLoaded(draft);
+            setRatesOriginal(JSON.stringify(toRatesPayload(draft)));
+        } catch (err) {
+            console.error('Error loading special rates:', err);
+            appAlert(err.response?.data?.message || 'Failed to load special rates');
+        } finally {
+            setRatesLoading(false);
+        }
+    }, [id]);
+
+    useEffect(() => {
+        if (pageTab === 'rates' && ratesOriginal === null) loadRates();
+    }, [pageTab, ratesOriginal, loadRates]);
+
+    const saveRates = async () => {
+        const rateError = validateDraftRates(ratesDraft, rateProductsById);
+        if (rateError) {
+            appAlert(rateError);
+            return;
+        }
+        setSavingRates(true);
+        try {
+            await replaceCustomerRates(id, toRatesPayload(ratesDraft));
+            await loadRates();
+        } catch (err) {
+            appAlert(friendlyRateError(err.response?.data?.message || 'Failed to save special rates', rateProductsById));
+        } finally {
+            setSavingRates(false);
+        }
+    };
     const [ledgerData, setLedgerData] = useState(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
@@ -654,6 +725,69 @@ const CustomerLedger = () => {
                     />
                 </div>
 
+                {/* Ledger | Special Rates */}
+                <div className="flex items-center gap-1 bg-white dark:bg-d-card rounded-xl p-1 border border-slate-100 dark:border-d-border mb-4 w-fit print:hidden">
+                    {[
+                        { id: 'ledger', label: 'Ledger' },
+                        { id: 'rates', label: 'Special Rates' },
+                    ].map((t) => (
+                        <button
+                            key={t.id}
+                            type="button"
+                            onClick={() => setPageTab(t.id)}
+                            className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+                                pageTab === t.id
+                                    ? 'bg-primary-50 dark:bg-[rgba(124,131,253,0.12)] text-primary-600 dark:text-d-accent'
+                                    : 'text-slate-500 dark:text-d-muted hover:text-slate-700 dark:hover:text-d-text'
+                            }`}
+                        >
+                            {t.label}
+                        </button>
+                    ))}
+                </div>
+
+                {pageTab === 'rates' && (
+                    <div className="bg-white dark:bg-d-card border border-slate-100 dark:border-d-border rounded-2xl p-6 mb-4 shadow-sm max-w-3xl print:hidden">
+                        {ratesLoading && ratesOriginal === null ? (
+                            <div className="py-8 text-center text-sm text-slate-400 dark:text-d-faint">Loading special rates…</div>
+                        ) : (
+                            <>
+                                {!canSaveRates && (
+                                    <p className="text-xs text-amber-600 dark:text-d-accent mb-3">You don't have permission to change customer rates.</p>
+                                )}
+                                <SpecialRatesEditor
+                                    value={ratesDraft}
+                                    onChange={setRatesDraft}
+                                    products={rateProducts}
+                                    readOnly={!canSaveRates}
+                                    allowSellBelowCost={business?.settings?.allowSellBelowCost === true}
+                                />
+                                {canSaveRates && (
+                                    <div className="flex items-center justify-end gap-3 pt-4 mt-4 border-t border-slate-100 dark:border-d-border">
+                                        <button
+                                            type="button"
+                                            disabled={!ratesDirty || savingRates}
+                                            onClick={() => setRatesDraft(ratesLoaded)}
+                                            className="px-4 py-2.5 text-slate-600 dark:text-d-text hover:bg-slate-100 dark:hover:bg-d-glass-hover rounded-xl font-medium transition-colors disabled:opacity-50"
+                                        >
+                                            Discard changes
+                                        </button>
+                                        <button
+                                            type="button"
+                                            disabled={!ratesDirty || savingRates}
+                                            onClick={saveRates}
+                                            className="px-5 py-2.5 bg-primary-500 dark:bg-d-accent text-white dark:text-d-card rounded-xl font-medium hover:bg-primary-600 dark:hover:bg-d-accent-s transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                                        >
+                                            {savingRates ? 'Saving...' : 'Save rates'}
+                                        </button>
+                                    </div>
+                                )}
+                            </>
+                        )}
+                    </div>
+                )}
+
+                {pageTab === 'ledger' && (<>
                 {/* Filters */}
                 <div className="bg-white dark:bg-d-card border border-slate-100 dark:border-d-border rounded-2xl p-4 mb-4 shadow-sm print:hidden">
                     <div className="flex flex-wrap items-center gap-3">
@@ -1065,6 +1199,7 @@ const CustomerLedger = () => {
                         </div>
                     )}
                 </div>
+                </>)}
             </div>
 
             {/* Record Payment Modal */}

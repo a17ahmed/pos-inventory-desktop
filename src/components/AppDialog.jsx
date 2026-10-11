@@ -16,6 +16,7 @@ import { FiAlertTriangle, FiInfo } from 'react-icons/fi';
  *   import { appAlert, appConfirm } from '../components/AppDialog';
  *   appAlert('Something happened');                 // fire-and-forget
  *   if (!(await appConfirm('Delete this item?'))) return;   // in an async fn
+ *   const v = await appChoose('Pick one', { choices: [{ label, value, danger }], defaultValue });
  */
 
 // ── module-level queue so any code can raise a dialog without a React hook ──
@@ -37,6 +38,14 @@ export const appAlert = (message, options = {}) =>
 /** Replacement for window.confirm(). Returns a Promise<boolean>. */
 export const appConfirm = (message, options = {}) =>
     request({ type: 'confirm', message, ...options });
+
+/**
+ * Several labelled choices. Returns a Promise<value of the clicked choice>.
+ * Enter, Escape and backdrop click all resolve `defaultValue` — so a barcode
+ * scanner's trailing Enter can never pick a risky option by accident.
+ */
+export const appChoose = (message, { choices = [], defaultValue, ...options } = {}) =>
+    request({ type: 'choice', message, choices, defaultValue, ...options });
 
 /**
  * Host component — render exactly once, near the app root, above other UI.
@@ -65,6 +74,13 @@ export default function AppDialogHost() {
     useEffect(() => {
         if (!current) return undefined;
         const onKey = (e) => {
+            if (current.type === 'choice') {
+                if (e.key === 'Enter' || e.key === 'Escape') {
+                    e.preventDefault();
+                    close(current.defaultValue);
+                }
+                return;
+            }
             if (e.key === 'Enter') {
                 e.preventDefault();
                 close(current.type === 'confirm' ? true : undefined);
@@ -80,6 +96,7 @@ export default function AppDialogHost() {
     if (!current) return null;
 
     const isConfirm = current.type === 'confirm';
+    const isChoice = current.type === 'choice';
     const isDanger = !!current.danger;
     const title =
         current.title || (isConfirm ? 'Please confirm' : 'Notice');
@@ -95,7 +112,7 @@ export default function AppDialogHost() {
             onMouseDown={(e) => {
                 // click on the backdrop dismisses (cancel for confirm)
                 if (e.target === e.currentTarget) {
-                    close(isConfirm ? false : undefined);
+                    close(isChoice ? current.defaultValue : isConfirm ? false : undefined);
                 }
             }}
         >
@@ -120,6 +137,26 @@ export default function AppDialogHost() {
                     </div>
                 </div>
 
+                {isChoice ? (
+                <div className="mt-6 flex flex-col gap-2">
+                    {current.choices.map((c) => (
+                        <button
+                            key={String(c.value)}
+                            type="button"
+                            onClick={() => close(c.value)}
+                            className={`w-full px-4 py-2.5 rounded-xl text-sm font-medium transition-colors ${
+                                c.danger
+                                    ? 'text-white bg-red-500 hover:bg-red-600 dark:bg-d-red dark:hover:bg-red-500'
+                                    : c.value === current.defaultValue
+                                        ? 'text-white bg-primary-600 hover:bg-primary-700 dark:bg-d-accent dark:hover:bg-d-accent-s dark:text-d-card'
+                                        : 'text-slate-700 dark:text-d-text bg-slate-100 dark:bg-d-glass hover:bg-slate-200 dark:hover:bg-d-glass-hover'
+                            }`}
+                        >
+                            {c.label}
+                        </button>
+                    ))}
+                </div>
+                ) : (
                 <div className="mt-6 flex justify-end gap-2">
                     {isConfirm && (
                         <button
@@ -144,6 +181,7 @@ export default function AppDialogHost() {
                         {confirmText}
                     </button>
                 </div>
+                )}
             </div>
         </div>
     );

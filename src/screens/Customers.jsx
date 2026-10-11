@@ -1,13 +1,25 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useBusiness } from '../context/BusinessContext';
+import { useAuth } from '../context/AuthContext';
 import {
     getCustomers,
     getCustomerSummary,
     createCustomer,
     updateCustomer,
     deleteCustomer,
+    getCustomerRates,
+    replaceCustomerRates,
 } from '../services/api/customers';
+import { getProducts } from '../services/api/products';
+import SpecialRatesEditor from '../components/SpecialRatesEditor';
+import {
+    canSaveCustomerRates,
+    toDraftRates,
+    toRatesPayload,
+    validateDraftRates,
+    friendlyRateError,
+} from '../utils/specialRates';
 import {
     FiPlus,
     FiSearch,
@@ -48,7 +60,9 @@ const defaultCustomerForm = () => ({
 
 const Customers = () => {
     const { business } = useBusiness();
+    const { isAdmin, permissions } = useAuth();
     const navigate = useNavigate();
+    const canSaveRates = canSaveCustomerRates(isAdmin, permissions);
 
     const [customers, setCustomers] = useState([]); // current page only
     const [pagination, setPagination] = useState({ page: 1, totalPages: 1, total: 0 });
@@ -63,6 +77,19 @@ const Customers = () => {
     const [editingCustomer, setEditingCustomer] = useState(null);
     const [form, setForm] = useState(defaultCustomerForm());
     const [submitting, setSubmitting] = useState(false);
+
+    // Special rates tab in the add/edit modal
+    const [modalTab, setModalTab] = useState('details'); // 'details' | 'rates'
+    const [ratesDraft, setRatesDraft] = useState([]);
+    const [ratesOriginal, setRatesOriginal] = useState('[]'); // JSON of the loaded payload, for dirty check
+    const [ratesLoading, setRatesLoading] = useState(false);
+    const [rateProducts, setRateProducts] = useState(null); // loaded on first modal open
+    const rateProductsById = React.useMemo(() => {
+        const map = {};
+        (rateProducts || []).forEach((p) => { map[p._id] = p; });
+        return map;
+    }, [rateProducts]);
+    const ratesDirty = JSON.stringify(toRatesPayload(ratesDraft)) !== ratesOriginal;
 
     const formatCurrency = (amount) =>
         `${business?.currency || 'Rs.'} ${(amount || 0).toLocaleString()}`;
@@ -132,7 +159,29 @@ const Customers = () => {
     // Modal handlers
     // =========================================================================
 
+    const loadModalRates = async (customer) => {
+        setModalTab('details');
+        setRatesDraft([]);
+        setRatesOriginal('[]');
+        if (!rateProducts) {
+            getProducts().then((res) => setRateProducts(res.data || [])).catch(() => setRateProducts([]));
+        }
+        if (!customer) return;
+        setRatesLoading(true);
+        try {
+            const res = await getCustomerRates(customer._id);
+            const draft = toDraftRates(res.data?.rates);
+            setRatesDraft(draft);
+            setRatesOriginal(JSON.stringify(toRatesPayload(draft)));
+        } catch (err) {
+            console.error('Error loading special rates:', err);
+        } finally {
+            setRatesLoading(false);
+        }
+    };
+
     const openModal = (customer = null) => {
+        loadModalRates(customer);
         if (customer) {
             setEditingCustomer(customer);
             setForm({
@@ -159,8 +208,18 @@ const Customers = () => {
     const handleSubmit = async (e) => {
         e.preventDefault();
         if (!form.name.trim() || !form.phone.trim()) {
+            setModalTab('details');
             appAlert('Name and phone are required');
             return;
+        }
+        const saveRates = canSaveRates && ratesDirty;
+        if (saveRates) {
+            const rateError = validateDraftRates(ratesDraft, rateProductsById);
+            if (rateError) {
+                setModalTab('rates');
+                appAlert(rateError);
+                return;
+            }
         }
         setSubmitting(true);
         try {
@@ -177,11 +236,35 @@ const Customers = () => {
                 payload.creditDays = Number(form.creditDays) || 0;
                 payload.creditLimit = Number(form.creditLimit) || 0;
                 await updateCustomer(editingCustomer._id, payload);
+                if (saveRates) {
+                    try {
+                        await replaceCustomerRates(editingCustomer._id, toRatesPayload(ratesDraft));
+                    } catch (err) {
+                        // Details are saved; keep the modal open on the rates tab to fix them.
+                        setModalTab('rates');
+                        appAlert('Customer saved, but special rates were not: '
+                            + friendlyRateError(err.response?.data?.message || err.message, rateProductsById));
+                        fetchCustomers(1);
+                        return;
+                    }
+                }
             } else {
                 if (Number(form.openingBalance) > 0) {
                     payload.openingBalance = Number(form.openingBalance);
                 }
-                await createCustomer(payload);
+                const sentRates = saveRates ? toRatesPayload(ratesDraft) : [];
+                if (sentRates.length > 0) payload.specialRates = sentRates;
+                const res = await createCustomer(payload);
+                // POST /customer returns the existing customer when the phone is already
+                // registered, and leaves that customer's rates untouched.
+                const saved = res.data?.customer || res.data;
+                if (sentRates.length > 0 && Array.isArray(saved?.specialRates)) {
+                    const savedIds = new Set(saved.specialRates.map((r) => String(r.product?._id ?? r.product)));
+                    if (!sentRates.every((r) => savedIds.has(r.product))) {
+                        appAlert(`A customer with this phone number already exists (${saved.name}). `
+                            + 'Their special rates were not changed — edit that customer to manage rates.');
+                    }
+                }
             }
 
             closeModal();
@@ -189,7 +272,7 @@ const Customers = () => {
             fetchSummary();
         } catch (err) {
             console.error('Error saving customer:', err);
-            appAlert(err.response?.data?.message || 'Failed to save customer');
+            appAlert(friendlyRateError(err.response?.data?.message || 'Failed to save customer', rateProductsById));
         } finally {
             setSubmitting(false);
         }
@@ -498,6 +581,47 @@ const Customers = () => {
                         </div>
 
                         <form onSubmit={handleSubmit} className="p-6 space-y-4">
+                            {/* Tabs */}
+                            <div className="flex items-center gap-1 bg-slate-50 dark:bg-d-bg rounded-xl p-1 border border-slate-200 dark:border-d-border">
+                                {[
+                                    { id: 'details', label: 'Details' },
+                                    { id: 'rates', label: `Special Rates${ratesDraft.length ? ` (${ratesDraft.length})` : ''}` },
+                                ].map((t) => (
+                                    <button
+                                        key={t.id}
+                                        type="button"
+                                        onClick={() => setModalTab(t.id)}
+                                        className={`flex-1 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+                                            modalTab === t.id
+                                                ? 'bg-white dark:bg-d-card text-slate-800 dark:text-d-heading shadow-sm'
+                                                : 'text-slate-500 dark:text-d-muted hover:text-slate-700 dark:hover:text-d-text'
+                                        }`}
+                                    >
+                                        {t.label}
+                                    </button>
+                                ))}
+                            </div>
+
+                            {modalTab === 'rates' && (
+                                ratesLoading || !rateProducts ? (
+                                    <div className="py-8 text-center text-sm text-slate-400 dark:text-d-faint">Loading special rates…</div>
+                                ) : (
+                                    <>
+                                        {!canSaveRates && (
+                                            <p className="text-xs text-amber-600 dark:text-d-accent">You don't have permission to change customer rates.</p>
+                                        )}
+                                        <SpecialRatesEditor
+                                            value={ratesDraft}
+                                            onChange={setRatesDraft}
+                                            products={rateProducts}
+                                            readOnly={!canSaveRates}
+                                            allowSellBelowCost={business?.settings?.allowSellBelowCost === true}
+                                        />
+                                    </>
+                                )
+                            )}
+
+                            {modalTab === 'details' && (<>
                             {/* Name */}
                             <div>
                                 <label className="block text-sm font-medium text-slate-700 dark:text-d-text mb-1.5">
@@ -638,6 +762,8 @@ const Customers = () => {
                                     />
                                 </div>
                             </div>
+
+                            </>)}
 
                             {/* Actions */}
                             <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-100 dark:border-d-border">

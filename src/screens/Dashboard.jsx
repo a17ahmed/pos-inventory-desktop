@@ -6,10 +6,18 @@ import { useAuth } from '../context/AuthContext';
 import { getProducts } from '../services/api/products';
 import { getReceiptStats, getTopProducts } from '../services/api/receipts';
 import { createBill } from '../services/api/bills';
-import { searchCustomers } from '../services/api/customers';
 import { getDashboardSummary } from '../services/api/dashboard';
 import { printReceipt as printReceiptUtil } from '../utils/printReceipt';
-import { appAlert, appConfirm } from '../components/AppDialog';
+import { appAlert, appConfirm, appChoose } from '../components/AppDialog';
+import { searchCustomers, saveCustomerRate } from '../services/api/customers';
+import {
+    buildRateMap,
+    getRateStatus,
+    getRateLine,
+    describeRateWarnings,
+    canSaveCustomerRates,
+    canSellBeyondLimit,
+} from '../utils/specialRates';
 import {
     FiTrendingUp,
     FiShoppingCart,
@@ -65,10 +73,14 @@ import {
 // ==================== EMPLOYEE DASHBOARD - PREMIUM REDESIGN ====================
 const EmployeeDashboard = () => {
     const navigate = useNavigate();
-    const { user, permissions } = useAuth();
-    const { business } = useBusiness();
+    const { user, permissions, isAdmin } = useAuth();
+    const { business, refreshBusiness } = useBusiness();
     // Admins bypass all permission checks (permissions is null for them).
     const canViewProfit = !permissions || permissions.pos?.viewProfit === true;
+    const canSaveRates = canSaveCustomerRates(isAdmin, permissions);
+    const canOverrideLimit = canSellBeyondLimit(isAdmin, permissions);
+    // Business setting: off = server rejects below-cost lines even with an override.
+    const allowSellBelowCost = business?.settings?.allowSellBelowCost === true;
 
     // Billing state
     const [billingActive, setBillingActive] = useState(true); // Always show billing view
@@ -131,6 +143,9 @@ const EmployeeDashboard = () => {
     useEffect(() => {
         loadData();
         loadSavedBills();
+        // Business settings (e.g. allowSellBelowCost) are cached from login; pull the
+        // current ones so a change made in Settings applies without re-login.
+        refreshBusiness?.().catch(() => {});
     }, []);
 
     // Debounced customer search
@@ -403,10 +418,10 @@ const EmployeeDashboard = () => {
                         }
                         const newItems = [...bill.items];
                         newItems[existingIndex] = { ...newItems[existingIndex], qty: currentQty + 1 };
-                        return { ...bill, items: newItems };
+                        return applyCustomerRates({ ...bill, items: newItems });
                     } else {
                         // Newest item goes on top so the last thing added is first.
-                        return {
+                        return applyCustomerRates({
                             ...bill,
                             items: [{
                                 _id: product._id,
@@ -423,7 +438,7 @@ const EmployeeDashboard = () => {
                                 stockQuantity: product.stockQuantity,
                                 category: product.category,
                             }, ...bill.items]
-                        };
+                        });
                     }
                 }
                 return bill;
@@ -432,7 +447,24 @@ const EmployeeDashboard = () => {
             return updated;
         });
 
-        showToast(`${emoji} ${product.name} added`);
+        const bill = bills.find(b => b.id === activeBillId);
+        const rate = bill?.customerRates?.[product._id];
+        const line = bill?.items.find(i => i._id === product._id);
+        const willApplyRate = rate && !(Number(bill.billDiscountAmount) > 0) && !line?.rateDismissed
+            && (!line || line.discountSource === 'customerRate' || !(Number(line.discountAmount) > 0));
+        // A rate beyond the limit isn't sold at the rate as-is — the limit dialog/toast
+        // explains what happens, so don't announce the rate price here.
+        const rateBeyondLimit = willApplyRate && getRateLine({
+            price: product.sellingPrice || product.price,
+            costPrice: product.costPrice,
+            maxDiscountPercent: product.maxDiscountPercent,
+            qty: (line?.qty || 0) + 1,
+        }, rate).beyondLimit;
+        if (willApplyRate && !rateBeyondLimit) {
+            showToast(`${product.name} added at ${bill.customerName}'s rate ${formatCurrency(rate.rate)}`, '🏷');
+        } else {
+            showToast(`${emoji} ${product.name} added`);
+        }
     };
 
     const updateQuantity = (itemId, delta) => {
@@ -451,7 +483,7 @@ const EmployeeDashboard = () => {
                         }
                         return item;
                     }).filter(Boolean);
-                    return { ...bill, items: newItems };
+                    return applyCustomerRates({ ...bill, items: newItems });
                 }
                 return bill;
             });
@@ -476,7 +508,7 @@ const EmployeeDashboard = () => {
                     }
                     return { ...item, qty };
                 });
-                return { ...bill, items: newItems };
+                return applyCustomerRates({ ...bill, items: newItems });
             });
             saveBills(updated, activeBillId);
             return updated;
@@ -555,10 +587,77 @@ const EmployeeDashboard = () => {
         return Math.max(0, profit * (pct / 100));
     };
 
+    // Keeps customer special-rate discounts in sync with the bill: applies the
+    // attached customer's rate to lines with no discount, recomputes rated lines
+    // for their current qty, and clears them when the customer is removed, a bill
+    // discount is active, or the cashier overrode the line (rateDismissed).
+    // A manual discount always wins over a rate.
+    // A rate beyond the product's discount limit is sold at the limit price unless
+    // the cashier chose the customer's rate (limitChoice 'rate' → limitOverride);
+    // until they choose, the line is marked limitPending and the POS asks.
+    // A below-cost rate can only be chosen when the business allows it.
+    const applyCustomerRates = (bill) => {
+        const rates = bill.customerRates || {};
+        const billDiscountActive = (Number(bill.billDiscountAmount) || 0) > 0;
+        const items = bill.items.map((item) => {
+            const isRated = item.discountSource === 'customerRate';
+            const base = { ...item, limitPending: false, limitOverride: false };
+            const r = rates[item._id];
+            const eligible = r && !billDiscountActive && !item.rateDismissed && Number(r.rate) < Number(item.price);
+            if (!eligible) {
+                return isRated ? { ...base, discountAmount: 0, discountSource: 'manual', customerRate: null } : base;
+            }
+            if (!isRated && (Number(item.discountAmount) || 0) > 0) return base;
+
+            const status = getRateStatus(item, r);
+            const line = getRateLine(item, r);
+            let discountAmount = line.fullDiscount;
+            let limitOverride = false;
+            let limitPending = false;
+            if (line.beyondLimit) {
+                // canOverrideLimit is re-checked here: held bills live in localStorage and
+                // may be finished by a different cashier than the one who chose 'rate'.
+                if (item.limitChoice === 'rate' && canOverrideLimit && (allowSellBelowCost || !status.belowCost)) {
+                    limitOverride = true;
+                } else {
+                    discountAmount = line.cap;
+                    limitPending = !item.limitChoice;
+                }
+            }
+            return {
+                ...base,
+                discountAmount,
+                discountSource: 'customerRate',
+                customerRate: r.rate,
+                ratePriceWhenSaved: r.priceWhenSaved ?? null,
+                limitOverride,
+                limitPending,
+            };
+        });
+        return { ...bill, items };
+    };
+
+    // Per-bill decisions about a customer's rates; reset when the customer changes.
+    const resetRateFlags = (item) => ({ ...item, rateDismissed: false, limitChoice: undefined, priceChangeAck: false });
+
+    // Update one line on a specific bill (the bill may no longer be active when an
+    // async prompt resolves).
+    const updateBillLine = (billId, itemId, patch, billPatch = {}) => {
+        setBills((prev) => {
+            const updated = prev.map((b) => (b.id !== billId ? b : applyCustomerRates({
+                ...b,
+                ...billPatch,
+                items: b.items.map((i) => (i._id === itemId ? { ...i, ...patch } : i)),
+            })));
+            saveBills(updated);
+            return updated;
+        });
+    };
+
     // ── Mutators for new POS features ────────────────────────────
     const updateActiveBill = (updater) => {
         setBills((prev) => {
-            const updated = prev.map((b) => (b.id === activeBillId ? updater(b) : b));
+            const updated = prev.map((b) => (b.id === activeBillId ? applyCustomerRates(updater(b)) : b));
             saveBills(updated, activeBillId);
             return updated;
         });
@@ -572,7 +671,17 @@ const EmployeeDashboard = () => {
             const amt = Math.min(requested, cap);
             if (amt < requested) showToast(`Discount capped at ${formatCurrency(cap)} for this item`);
             // Enforce: clearing bill-level discount when any item has a discount.
-            const newItems = bill.items.map((i) => (i._id === itemId ? { ...i, discountAmount: amt } : i));
+            // Typing on a line makes it a manual discount; don't let the customer's
+            // rate re-apply to it for the rest of this bill.
+            const newItems = bill.items.map((i) => (i._id === itemId
+                ? {
+                    ...i,
+                    discountAmount: amt,
+                    discountSource: 'manual',
+                    customerRate: null,
+                    rateDismissed: !!bill.customerRates?.[i._id] || i.rateDismissed,
+                }
+                : i));
             const anyItemHasDiscount = newItems.some((i) => (Number(i.discountAmount) || 0) > 0);
             return {
                 ...bill,
@@ -592,7 +701,7 @@ const EmployeeDashboard = () => {
             // Enforce: clear all per-item discounts if setting a bill discount.
             const clearedItems =
                 amt > 0
-                    ? bill.items.map((i) => ({ ...i, discountAmount: 0 }))
+                    ? bill.items.map((i) => ({ ...i, discountAmount: 0, discountSource: 'manual', customerRate: null }))
                     : bill.items;
             return {
                 ...bill,
@@ -604,6 +713,18 @@ const EmployeeDashboard = () => {
     };
 
     const attachCustomer = (customer) => {
+        // A deactivated product can keep its rate on the customer until the rates
+        // list is next loaded — only use rates for products the POS has loaded.
+        const knownProducts = Object.keys(productsCache).length > 0;
+        const customerRates = buildRateMap((customer?.specialRates || [])
+            .filter((r) => !knownProducts || productsCache[String(r.product?._id ?? r.product)]));
+        const bill = bills.find(b => b.id === activeBillId);
+        const appliedCount = bill ? applyCustomerRates({
+            ...bill,
+            customerRates,
+            items: bill.items.map(resetRateFlags),
+        }).items.filter((i) => i.discountSource === 'customerRate').length : 0;
+
         updateActiveBill((bill) => ({
             ...bill,
             customer: customer?._id || null,
@@ -611,7 +732,13 @@ const EmployeeDashboard = () => {
             customerPhone: customer?.phone || '',
             customerAddress: customer?.address || '',
             customerBalance: customer?.balance || 0,
+            customerRates,
+            // Decisions about the previous customer's rates don't carry over.
+            items: bill.items.map(resetRateFlags),
         }));
+        if (appliedCount > 0) {
+            showToast(`${appliedCount} special rate${appliedCount > 1 ? 's' : ''} applied for ${customer.name}`, '🏷');
+        }
         setShowCustomerPicker(false);
         setCustomerQuery('');
         setCustomerResults([]);
@@ -624,8 +751,159 @@ const EmployeeDashboard = () => {
             customerName: '',
             customerPhone: '',
             customerAddress: '',
+            customerRates: {},
+            items: bill.items.map(resetRateFlags),
         }));
     };
+
+    // Save a rate to the attached customer's profile, then refresh the bill's rate map.
+    // Returns true on success.
+    const saveRateForLine = async (bill, item, rate, linePatch = {}) => {
+        if (!navigator.onLine) {
+            showToast("Can't save rate while offline", '⚠');
+            return false;
+        }
+        try {
+            const note = bill.customerRates?.[item._id]?.note || '';
+            const res = await saveCustomerRate(bill.customer, item._id, { rate, note });
+            const warn = describeRateWarnings(res.data?.warnings);
+            showToast(warn ? `Rate saved — ${warn}` : `Saved ${formatCurrency(rate)} as ${bill.customerName}'s rate`, '🏷');
+            updateBillLine(bill.id, item._id, { limitChoice: undefined, priceChangeAck: false, ...linePatch }, {
+                customerRates: buildRateMap(res.data?.specialRates),
+            });
+            return true;
+        } catch (err) {
+            showToast(err.response?.data?.message || 'Failed to save rate', '⚠');
+            return false;
+        }
+    };
+
+    // ⚠ price changed → Keep rate. With permission + online, re-save the same rate
+    // so it's confirmed at the new price and the warning goes away for good;
+    // otherwise just hide the warning for this bill.
+    const keepRateAtNewPrice = async (bill, item) => {
+        if (canSaveRates && navigator.onLine) {
+            await saveRateForLine(bill, item, item.customerRate);
+        } else {
+            updateBillLine(bill.id, item._id, { priceChangeAck: true });
+        }
+    };
+
+    // After the cashier commits a manual line discount (Enter / blur), offer to save
+    // the resulting unit price as the customer's rate. Asked once per value per line.
+    const ratePromptOpen = useRef(false);
+    const offerSaveRate = async (itemId) => {
+        const bill = bills.find((b) => b.id === activeBillId);
+        const item = bill?.items.find((i) => i._id === itemId);
+        if (!bill?.customer || !item || !canSaveRates || ratePromptOpen.current) return;
+        if (item.discountSource === 'customerRate' || !(Number(item.discountAmount) > 0)) return;
+
+        const unitPrice = Math.round((item.price - item.discountAmount / (item.qty || 1)) * 100) / 100;
+        const saved = bill.customerRates?.[item._id];
+        if (saved && Number(saved.rate) === unitPrice) return;
+        if (item.ratePromptDeclined === unitPrice) return;
+        if (!navigator.onLine) {
+            showToast("Can't save rate while offline", '⚠');
+            return;
+        }
+
+        const name = bill.customerName;
+        ratePromptOpen.current = true;
+        const choice = await appChoose(
+            saved
+                ? `${name}'s saved rate for ${item.name} is ${formatCurrency(saved.rate)}.\nReplace it with ${formatCurrency(unitPrice)}?`
+                : `Save ${formatCurrency(unitPrice)} as ${name}'s rate for ${item.name}?\n\nNext time ${name} buys it, this price is applied automatically.`,
+            {
+                title: 'Save customer rate',
+                defaultValue: 'no',
+                choices: [
+                    { label: 'Not now', value: 'no' },
+                    { label: `Save ${formatCurrency(unitPrice)} for ${name}`, value: 'yes' },
+                ],
+            }
+        );
+        ratePromptOpen.current = false;
+
+        if (choice !== 'yes') {
+            updateBillLine(bill.id, item._id, { ratePromptDeclined: unitPrice });
+            return;
+        }
+        // Hand the line back to the rate so it shows the badge; same amount as before.
+        await saveRateForLine(bill, item, unitPrice, { rateDismissed: false, discountAmount: 0, discountSource: 'manual' });
+    };
+
+    // Inline "Update rate" input on a price-changed line.
+    const [rateEdit, setRateEdit] = useState({ itemId: null, value: '' });
+    const submitRateEdit = async (bill, item) => {
+        const rate = Number(rateEdit.value);
+        if (rateEdit.value === '' || !(rate >= 0) || rate >= item.price) {
+            showToast(`Rate must be lower than ${formatCurrency(item.price)}`, '⚠');
+            return;
+        }
+        if (await saveRateForLine(bill, item, rate)) setRateEdit({ itemId: null, value: '' });
+    };
+
+    // Ask once per line when a customer's rate is beyond the product's discount
+    // limit. Without the sellBeyondLimit permission the limit price is used.
+    const limitPromptOpen = useRef(false);
+    const [limitPromptTick, setLimitPromptTick] = useState(0); // re-check after a prompt closes
+    const pendingLimitLine = bills.find((b) => b.id === activeBillId)?.items.find((i) => i.limitPending);
+    useEffect(() => {
+        const bill = bills.find((b) => b.id === activeBillId);
+        const item = bill?.items.find((i) => i.limitPending);
+        const rate = item && bill.customerRates?.[item._id];
+        if (!item || !rate || limitPromptOpen.current) return;
+
+        const status = getRateStatus(item, rate);
+        const name = bill.customerName;
+        const belowCostBlocked = status.belowCost && !allowSellBelowCost;
+        if (!canOverrideLimit && !belowCostBlocked) {
+            updateBillLine(bill.id, item._id, { limitChoice: 'limit' });
+            showToast(`${name}'s rate for ${item.name} is beyond the limit — selling at ${formatCurrency(status.limitPrice)}`, '⚠');
+            return;
+        }
+
+        limitPromptOpen.current = true;
+        let title;
+        let message;
+        let choices;
+        if (belowCostBlocked) {
+            // The server rejects below-cost lines while the setting is off, so the
+            // customer's rate isn't offered at all.
+            title = 'Rate below cost';
+            message = `${name}'s rate for ${item.name} is ${formatCurrency(rate.rate)}, below the cost price (${formatCurrency(item.costPrice)}).\n`
+                + 'Selling below cost is turned off in Settings.\n\n'
+                + `Lowest price the discount limit allows: ${formatCurrency(status.limitPrice)}.`;
+            choices = [
+                { label: `Sell at ${formatCurrency(status.limitPrice)} (limit)`, value: 'limit' },
+                { label: `Remove ${name}'s rate for this bill`, value: 'remove' },
+            ];
+        } else if (status.belowCost) {
+            title = 'Selling below cost';
+            message = `${name}'s rate for ${item.name} is ${formatCurrency(rate.rate)}, below the cost price (${formatCurrency(item.costPrice)}).\n`
+                + `You will lose ${formatCurrency(status.lossPerUnit)} on each unit.\n\n`
+                + `Lowest price the discount limit allows: ${formatCurrency(status.limitPrice)}.`;
+            choices = [
+                { label: `Sell at ${formatCurrency(status.limitPrice)} (limit)`, value: 'limit' },
+                { label: `Sell at ${formatCurrency(rate.rate)} (${name}'s rate)`, value: 'rate', danger: true },
+            ];
+        } else {
+            title = 'Rate beyond discount limit';
+            message = `${name}'s rate for ${item.name} is ${formatCurrency(rate.rate)}, beyond the product's discount limit.\n\n`
+                + `Lowest price the limit allows: ${formatCurrency(status.limitPrice)}.`;
+            choices = [
+                { label: `Sell at ${formatCurrency(status.limitPrice)} (limit)`, value: 'limit' },
+                { label: `Sell at ${formatCurrency(rate.rate)} (${name}'s rate)`, value: 'rate' },
+            ];
+        }
+        appChoose(message, { title, danger: status.belowCost, defaultValue: 'limit', choices }).then((choice) => {
+            limitPromptOpen.current = false;
+            updateBillLine(bill.id, item._id, choice === 'remove'
+                ? { rateDismissed: true, limitChoice: undefined }
+                : { limitChoice: choice });
+            setLimitPromptTick((t) => t + 1);
+        });
+    }, [pendingLimitLine?._id, activeBillId, limitPromptTick]);
 
     const handleCheckout = async (confirmedWalkIn = false) => {
         const bill = bills.find(b => b.id === activeBillId);
@@ -687,6 +965,9 @@ const EmployeeDashboard = () => {
                     costPrice: Number(item.costPrice) || 0,
                     gst: item.gst || 0,
                     discountAmount: Number(item.discountAmount) || 0,
+                    discountSource: item.discountSource === 'customerRate' ? 'customerRate' : 'manual',
+                    customerRate: item.discountSource === 'customerRate' ? item.customerRate : null,
+                    limitOverride: !!item.limitOverride,
                 })),
                 status: 'completed',
                 customer: bill.customer || null,
@@ -1166,6 +1447,13 @@ const EmployeeDashboard = () => {
                                     const expanded = expandedItemId === item._id;
                                     const profitInfo = getItemProfit(activeBill, item);
                                     const hasItemDiscount = (Number(item.discountAmount) || 0) > 0;
+                                    const isRated = item.discountSource === 'customerRate';
+                                    // ⚠ product price changed since the customer's rate was saved
+                                    const ratePriceChanged = isRated && !item.priceChangeAck && item.ratePriceWhenSaved != null
+                                        && Number(item.ratePriceWhenSaved) !== Number(item.price);
+                                    // Sold at the limit price instead of the (lower) customer rate
+                                    const rateCapped = isRated && !item.limitOverride
+                                        && Math.round((item.price - item.discountAmount / (item.qty || 1)) * 100) / 100 > Number(item.customerRate);
                                     const hasBillDiscount = (Number(activeBill.billDiscountAmount) || 0) > 0;
                                     const discountCap = getItemDiscountCap(item);
                                     return (
@@ -1184,6 +1472,23 @@ const EmployeeDashboard = () => {
                                                     <h4 className="font-medium text-[14px] text-slate-800 dark:text-d-text truncate">{item.name}</h4>
                                                     <p className="text-[11px] text-slate-500 dark:text-d-muted tracking-wide">
                                                         {item._id?.slice(-4)} · {formatCurrency(item.price)} each
+                                                        {isRated && (
+                                                            <span className="ml-2 px-1.5 py-0.5 rounded bg-violet-100 dark:bg-[rgba(167,139,250,0.15)] text-violet-600 dark:text-[#a78bfa]">
+                                                                🏷 {activeBill.customerName}'s rate: {formatCurrency(item.customerRate)}
+                                                                {rateCapped && ' · limited'}
+                                                                {item.limitOverride && ' · past limit'}
+                                                            </span>
+                                                        )}
+                                                        {ratePriceChanged && (
+                                                            <button
+                                                                type="button"
+                                                                onClick={(e) => { e.stopPropagation(); setExpandedItemId(item._id); }}
+                                                                title={`Price changed ${formatCurrency(item.ratePriceWhenSaved)} → ${formatCurrency(item.price)} since this rate was saved`}
+                                                                className="ml-1 inline-flex align-middle text-amber-500 dark:text-d-accent hover:text-amber-600"
+                                                            >
+                                                                <FiAlertTriangle size={13} />
+                                                            </button>
+                                                        )}
                                                         {hasItemDiscount && (
                                                             <span className="ml-2 text-emerald-500 dark:text-d-green">
                                                                 − {formatCurrency(item.discountAmount)} off
@@ -1265,6 +1570,16 @@ const EmployeeDashboard = () => {
                                                             step="0.01"
                                                             value={item.discountAmount || ''}
                                                             onChange={(e) => setItemDiscount(item._id, e.target.value)}
+                                                            onBlur={() => offerSaveRate(item._id)}
+                                                            onKeyDown={(e) => {
+                                                                if (e.key !== 'Enter') return;
+                                                                // Blur after this keydown finishes: blurring now opens the
+                                                                // save prompt while the Enter is still dispatching, and the
+                                                                // dialog's own Enter handler closes it as "Not now".
+                                                                e.preventDefault();
+                                                                const el = e.currentTarget;
+                                                                setTimeout(() => el.blur(), 0);
+                                                            }}
                                                             disabled={hasBillDiscount}
                                                             placeholder="0"
                                                             className="flex-1 px-3 py-2 bg-slate-50 dark:bg-d-bg border border-slate-200 dark:border-d-border rounded-lg text-sm text-slate-800 dark:text-d-text placeholder-slate-400 dark:placeholder-d-faint focus:outline-none focus:border-amber-300 dark:focus:border-d-border-hover disabled:opacity-50 disabled:cursor-not-allowed"
@@ -1275,6 +1590,80 @@ const EmployeeDashboard = () => {
                                                             </span>
                                                         )}
                                                     </div>
+                                                    {isRated && (
+                                                        <p className="text-[10px] text-violet-500 dark:text-[#a78bfa] mt-1">
+                                                            From {activeBill.customerName}'s special rate — editing makes it a manual discount for this bill
+                                                            {(rateCapped || item.limitOverride) && (
+                                                                <>
+                                                                    {' · '}
+                                                                    {rateCapped ? 'selling at the limit price' : 'selling past the discount limit'}
+                                                                    {canOverrideLimit && (
+                                                                        <button
+                                                                            type="button"
+                                                                            onClick={() => updateBillLine(activeBill.id, item._id, { limitChoice: undefined })}
+                                                                            className="ml-1 underline hover:text-violet-700"
+                                                                        >
+                                                                            change
+                                                                        </button>
+                                                                    )}
+                                                                </>
+                                                            )}
+                                                        </p>
+                                                    )}
+                                                    {ratePriceChanged && (
+                                                        <div className="mt-3 p-3 rounded-xl border border-amber-200 dark:border-[rgba(255,210,100,0.25)] bg-amber-50 dark:bg-[rgba(255,210,100,0.06)]">
+                                                            <div className="flex items-center gap-2 text-[12px] text-amber-700 dark:text-d-accent">
+                                                                <FiAlertTriangle size={13} />
+                                                                <span>
+                                                                    Price changed {formatCurrency(item.ratePriceWhenSaved)} → {formatCurrency(item.price)} since {activeBill.customerName}'s rate ({formatCurrency(item.customerRate)}) was saved
+                                                                </span>
+                                                            </div>
+                                                            {rateEdit.itemId === item._id ? (
+                                                                <div className="flex items-center gap-2 mt-2">
+                                                                    <input
+                                                                        type="number"
+                                                                        min="0"
+                                                                        step="0.01"
+                                                                        autoFocus
+                                                                        value={rateEdit.value}
+                                                                        onChange={(e) => setRateEdit({ itemId: item._id, value: e.target.value })}
+                                                                        onKeyDown={(e) => { if (e.key === 'Enter') submitRateEdit(activeBill, item); }}
+                                                                        placeholder="New rate"
+                                                                        className="w-28 px-2 py-1.5 bg-white dark:bg-d-bg border border-slate-200 dark:border-d-border rounded-lg text-sm text-slate-800 dark:text-d-text focus:outline-none focus:border-amber-300"
+                                                                    />
+                                                                    <button type="button" onClick={() => submitRateEdit(activeBill, item)} className="px-3 py-1.5 rounded-lg text-[12px] font-medium text-white bg-amber-500 hover:bg-amber-600">Save rate</button>
+                                                                    <button type="button" onClick={() => setRateEdit({ itemId: null, value: '' })} className="px-3 py-1.5 rounded-lg text-[12px] text-slate-600 dark:text-d-muted hover:bg-slate-100 dark:hover:bg-d-glass">Cancel</button>
+                                                                </div>
+                                                            ) : (
+                                                                <div className="flex flex-wrap gap-2 mt-2">
+                                                                    <button
+                                                                        type="button"
+                                                                        onClick={() => keepRateAtNewPrice(activeBill, item)}
+                                                                        title={canSaveRates ? 'Confirm this rate at the new price' : 'Hide this warning for this bill'}
+                                                                        className="px-3 py-1.5 rounded-lg text-[12px] font-medium text-white bg-amber-500 hover:bg-amber-600"
+                                                                    >
+                                                                        Keep {formatCurrency(item.customerRate)}
+                                                                    </button>
+                                                                    <button
+                                                                        type="button"
+                                                                        disabled={!canSaveRates}
+                                                                        onClick={() => setRateEdit({ itemId: item._id, value: String(item.customerRate) })}
+                                                                        title={canSaveRates ? '' : "You don't have permission to change customer rates"}
+                                                                        className="px-3 py-1.5 rounded-lg text-[12px] font-medium text-slate-700 dark:text-d-text bg-white dark:bg-d-glass border border-slate-200 dark:border-d-border hover:border-amber-300 disabled:opacity-50 disabled:cursor-not-allowed"
+                                                                    >
+                                                                        Update rate
+                                                                    </button>
+                                                                    <button
+                                                                        type="button"
+                                                                        onClick={() => updateBillLine(activeBill.id, item._id, { rateDismissed: true })}
+                                                                        className="px-3 py-1.5 rounded-lg text-[12px] font-medium text-red-500 dark:text-d-red hover:bg-red-50 dark:hover:bg-[rgba(255,107,107,0.08)]"
+                                                                    >
+                                                                        Remove for this bill
+                                                                    </button>
+                                                                </div>
+                                                            )}
+                                                        </div>
+                                                    )}
                                                     {!hasBillDiscount && (
                                                         <p className="text-[10px] text-slate-400 dark:text-d-faint mt-1">
                                                             Max discount: {formatCurrency(discountCap)}
@@ -1408,7 +1797,9 @@ const EmployeeDashboard = () => {
 
                     {activeTotal.itemDiscounts > 0 && (
                         <div className="text-[10px] text-slate-400 dark:text-d-faint italic">
-                            Bill discount disabled — clear item discounts to use it
+                            {activeBill?.items.some((i) => i.discountSource === 'customerRate')
+                                ? 'Bill discount disabled — customer special rates are applied'
+                                : 'Bill discount disabled — clear item discounts to use it'}
                         </div>
                     )}
 

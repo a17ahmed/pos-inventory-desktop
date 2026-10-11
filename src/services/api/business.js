@@ -17,3 +17,8 @@ export const updateAdmin = (id, data) =>
 
 export const changeAdminPassword = (data) =>
     api.post('/admin/change-password', data);
+
+// Replaces the WHOLE settings object — always send the existing settings merged
+// with the change: updateBusinessSettings({ ...business.settings, key: value }).
+export const updateBusinessSettings = (settings) =>
+    api.put('/admin/business/settings', { settings });
