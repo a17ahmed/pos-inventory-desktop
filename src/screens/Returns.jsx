@@ -158,6 +158,22 @@ const Returns = () => {
         }
     };
 
+    // Where a customer return's credit went: applied to unpaid bills (the backend
+    // moves it automatically, oldest first) or kept on the account. Balance is
+    // read best-effort — cashiers without customers.view just see the moves.
+    const describeCredit = async (data, bill) => {
+        const moves = data?.creditSettlement || [];
+        if (!bill?.customer || moves.length > 0) return { creditMoves: moves, keptCredit: 0 };
+        try {
+            const res = await getCustomer(bill.customer?._id || bill.customer);
+            const balance = Number(res.data?.balance) || 0;
+            const refund = Number(data?.refundAmount) || 0;
+            return { creditMoves: [], keptCredit: balance < 0 ? Math.min(refund, -balance) : 0 };
+        } catch {
+            return { creditMoves: [], keptCredit: 0 };
+        }
+    };
+
     const formatCurrency = (amount) => {
         return `${business?.currency || 'Rs.'} ${(amount || 0).toLocaleString()}`;
     };
@@ -467,6 +483,7 @@ const Returns = () => {
                     cashRefundAmount: data.cashRefundAmount ?? data.refundAmount,
                     debtCancelled: data.debtCancelled ?? 0,
                     refundMethod: returnEntry?.refundMethod || 'ledger_adjust',
+                    ...(await describeCredit(data, linkedBill)),
                 });
             } else {
                 // standaloneRefund → { refundBill }
@@ -528,6 +545,7 @@ const Returns = () => {
                 cashRefundAmount: data.cashRefundAmount ?? data.refundAmount,
                 debtCancelled: data.debtCancelled ?? 0,
                 refundMethod: returnEntry?.refundMethod || (linkedBill.customer ? 'ledger_adjust' : 'cash'),
+                ...(await describeCredit(data, linkedBill)),
             });
             setShowFullReturn(false);
             setShowSuccess(true);
@@ -1220,7 +1238,9 @@ const Returns = () => {
                                     </>
                                 ) : (
                                     <div className="flex justify-between py-2 border-b border-slate-200 dark:border-d-border">
-                                        <span className="text-slate-500 dark:text-d-muted">Cash to Refund</span>
+                                        <span className="text-slate-500 dark:text-d-muted">
+                                            {returnResult.refundMethod === 'ledger_adjust' ? 'Credited to account' : 'Cash to Refund'}
+                                        </span>
                                         <span className="font-semibold text-d-red">{formatCurrency(returnResult.cashRefundAmount ?? returnResult.refundAmount)}</span>
                                     </div>
                                 )}
@@ -1228,6 +1248,20 @@ const Returns = () => {
                                     <span className="text-slate-500 dark:text-d-muted">Refund Method</span>
                                     <span className="font-semibold text-slate-700 dark:text-d-text uppercase">{(returnResult.refundMethod || refundMethod).replace('_', ' ')}</span>
                                 </div>
+                                {returnResult.creditMoves?.length > 0 && (
+                                    <div className="pt-2 mt-1 border-t border-slate-200 dark:border-d-border space-y-1">
+                                        {returnResult.creditMoves.map((m, i) => (
+                                            <p key={i} className="text-sm text-emerald-600 dark:text-d-green">
+                                                {formatCurrency(m.amount)} credit applied to Bill #{m.toNumber}
+                                            </p>
+                                        ))}
+                                    </div>
+                                )}
+                                {!returnResult.creditMoves?.length && returnResult.keptCredit > 0 && (
+                                    <p className="pt-2 mt-1 border-t border-slate-200 dark:border-d-border text-sm text-emerald-600 dark:text-d-green">
+                                        {formatCurrency(returnResult.keptCredit)} kept as credit for the customer
+                                    </p>
+                                )}
                             </div>
 
                             <button

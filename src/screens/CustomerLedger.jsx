@@ -248,7 +248,10 @@ const CustomerLedger = () => {
         let entries = ledgerData.ledger;
 
         if (typeFilter !== 'all') {
-            entries = entries.filter((e) => e.type === typeFilter);
+            // A store-credit payment always comes with its CREDIT MOVED row; keep
+            // the pair together under Payments.
+            entries = entries.filter((e) => e.type === typeFilter
+                || (typeFilter === 'payment' && e.type === 'credit_transfer'));
         }
 
         if (searchQuery.trim()) {
@@ -269,6 +272,15 @@ const CustomerLedger = () => {
         () => filteredEntries.filter((e) => e.type !== 'cancelled'),
         [filteredEntries]
     );
+    // Totals use real money only: a credit move (CREDIT MOVED + its store-credit
+    // payment) nets to zero and is reported separately.
+    const moneyEntries = useMemo(
+        () => statementEntries.filter((e) => e.type !== 'credit_transfer' && !e.fromCredit),
+        [statementEntries]
+    );
+    const creditMovedTotal = statementEntries
+        .filter((e) => e.type === 'credit_transfer')
+        .reduce((sum, e) => sum + (e.amount || e.debit || 0), 0);
     const cancelledCount = ledgerData?.summary?.cancelledCount
         ?? (ledgerData?.ledger || []).filter((e) => e.type === 'cancelled').length;
 
@@ -289,8 +301,10 @@ const CustomerLedger = () => {
                 });
             }
             const entry = billMap.get(key);
-            if (e.type === 'bill' || e.type === 'opening_balance') entry.total += e.debit || 0;
-            else entry.credited += e.credit || 0;
+            // Due per bill = Σ debit − Σ credit. A credit move debits the source
+            // bill (back to 0) and credits the bill it paid, so both stay right.
+            entry.total += e.debit || 0;
+            entry.credited += e.credit || 0;
         }
         return Array.from(billMap.values())
             .map((b) => ({ ...b, due: b.total - b.credited }))
@@ -308,9 +322,11 @@ const CustomerLedger = () => {
 
     const openPaymentModal = () => {
         setPaymentMode('fifo');
+        // Amount starts empty on purpose — staff kept saving the pre-filled total
+        // outstanding instead of what the customer actually paid.
         setPaymentForm({
             billId: outstandingBills[0]?.billId || '',
-            amount: String(totalOutstanding || ''),
+            amount: '',
             method: 'cash',
             note: '',
         });
@@ -325,26 +341,37 @@ const CustomerLedger = () => {
             return;
         }
 
+        if (paymentMode === 'fifo' && amount > totalOutstanding + 0.01) {
+            appAlert(`Amount exceeds total outstanding (${formatCurrency(totalOutstanding)})`);
+            return;
+        }
+        if (paymentMode === 'specific' && !paymentForm.billId) {
+            appAlert('Select a bill');
+            return;
+        }
+
+        // Confirm the exact amount before saving.
+        const methodLabel = { cash: 'cash', card: 'card', online: 'online' }[paymentForm.method] || paymentForm.method;
+        const target = paymentMode === 'fifo'
+            ? 'applied to the oldest unpaid bills first'
+            : `on Bill #${outstandingBills.find((b) => String(b.billId) === String(paymentForm.billId))?.billNumber ?? ''}`;
+        const ok = await appConfirm(
+            `Record ${formatCurrency(amount)} (${methodLabel}) from ${customer?.name || 'this customer'}, ${target}?`,
+            { title: 'Confirm payment', confirmText: `Record ${formatCurrency(amount)}` }
+        );
+        if (!ok) return;
+
         setSubmittingPayment(true);
         try {
+            let res;
             if (paymentMode === 'fifo') {
-                if (amount > totalOutstanding + 0.01) {
-                    appAlert(`Amount exceeds total outstanding (${formatCurrency(totalOutstanding)})`);
-                    setSubmittingPayment(false);
-                    return;
-                }
-                await collectFromCustomer(id, {
+                res = await collectFromCustomer(id, {
                     amount,
                     method: paymentForm.method,
                     note: paymentForm.note,
                 });
             } else {
-                if (!paymentForm.billId) {
-                    appAlert('Select a bill');
-                    setSubmittingPayment(false);
-                    return;
-                }
-                await addBillPayment(paymentForm.billId, {
+                res = await addBillPayment(paymentForm.billId, {
                     amount,
                     method: paymentForm.method,
                     note: paymentForm.note,
@@ -352,6 +379,14 @@ const CustomerLedger = () => {
             }
             setShowPaymentModal(false);
             fetchLedger();
+            // Store credit is applied to unpaid bills before the payment — say so.
+            const moves = res?.data?.creditSettlement || [];
+            if (moves.length > 0) {
+                appAlert(
+                    moves.map((m) => `Credit ${formatCurrency(m.amount)} from Bill #${m.fromNumber} was applied to Bill #${m.toNumber} first.`).join('\n'),
+                    { title: 'Store credit applied' }
+                );
+            }
         } catch (err) {
             console.error('Payment error:', err);
             appAlert(err.response?.data?.message || 'Failed to record payment');
@@ -375,14 +410,17 @@ const CustomerLedger = () => {
 
         const entryRows = statementEntries.map((e) => {
             const d = new Date(e.date);
-            const typeLabel = e.type === 'bill' ? 'BILL' : e.type === 'payment' ? 'PAID' : e.type === 'return' ? 'RETURN' : e.type === 'opening_balance' ? 'OPENING' : e.type?.toUpperCase() || '';
+            const typeLabel = e.type === 'bill' ? 'BILL' : e.type === 'payment' ? 'PAID' : e.type === 'return' ? 'RETURN' : e.type === 'opening_balance' ? 'OPENING' : e.type === 'credit_transfer' ? 'CREDIT MOVED' : e.type?.toUpperCase() || '';
+            const methodText = e.method === 'store_credit'
+                ? `STORE CREDIT${e.fromBillNumber ? ' (from Bill #' + e.fromBillNumber + ')' : ''}`
+                : e.method?.toUpperCase();
             const typeColor = e.type === 'bill' ? '#f59e0b' : e.type === 'payment' ? '#10b981' : e.type === 'return' ? '#3b82f6' : '#64748b';
             return `<tr>
                 <td style="padding:6px 8px;font-size:11px;border-bottom:1px solid #e2e8f0;">${d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}</td>
                 <td style="padding:6px 8px;font-size:11px;border-bottom:1px solid #e2e8f0;">${e.billNumber ? '#' + e.billNumber : '—'}</td>
                 <td style="padding:6px 8px;font-size:11px;border-bottom:1px solid #e2e8f0;"><span style="color:${typeColor};font-size:10px;font-weight:700;margin-right:6px;">${typeLabel}</span>${e.description}</td>
-                <td style="padding:6px 8px;font-size:11px;border-bottom:1px solid #e2e8f0;">${[e.method?.toUpperCase(), e.receivedBy].filter(Boolean).join(' / ') || '—'}</td>
-                <td style="padding:6px 8px;font-size:11px;border-bottom:1px solid #e2e8f0;text-align:right;color:#ef4444;font-weight:600;">${e.debit ? currency + ' ' + fmt(e.debit) : '—'}</td>
+                <td style="padding:6px 8px;font-size:11px;border-bottom:1px solid #e2e8f0;">${[methodText, e.receivedBy].filter(Boolean).join(' / ') || '—'}</td>
+                <td style="padding:6px 8px;font-size:11px;border-bottom:1px solid #e2e8f0;text-align:right;color:${e.type === 'credit_transfer' ? '#64748b' : '#ef4444'};font-weight:600;">${e.debit ? currency + ' ' + fmt(e.debit) : '—'}</td>
                 <td style="padding:6px 8px;font-size:11px;border-bottom:1px solid #e2e8f0;text-align:right;color:#10b981;font-weight:600;">${e.credit ? currency + ' ' + fmt(e.credit) : '—'}</td>
                 <td style="padding:6px 8px;font-size:11px;border-bottom:1px solid #e2e8f0;text-align:right;font-weight:700;">${currency} ${fmt(e.balance)}</td>
             </tr>`;
@@ -729,7 +767,7 @@ const CustomerLedger = () => {
                                     ? 'Amount Due'
                                     : 'Current Balance'
                         }
-                        value={formatCurrency(summary.currentBalance || 0)}
+                        value={formatCurrency(Math.abs(summary.currentBalance || 0))}
                         tone={(summary.currentBalance || 0) > 0 ? 'red' : 'emerald'}
                         highlight
                     />
@@ -956,13 +994,18 @@ const CustomerLedger = () => {
                                                     </td>
                                                     <td className="py-3 px-4 whitespace-nowrap text-xs">
                                                         {entry.method && (
-                                                            <div className="uppercase text-slate-600 dark:text-d-text font-medium">{entry.method}</div>
+                                                            <div className="uppercase text-slate-600 dark:text-d-text font-medium">
+                                                                {entry.method === 'store_credit' ? 'Store credit' : entry.method}
+                                                            </div>
+                                                        )}
+                                                        {entry.method === 'store_credit' && entry.fromBillNumber && (
+                                                            <div className="text-slate-400 dark:text-d-faint">from Bill #{entry.fromBillNumber}</div>
                                                         )}
                                                         {entry.receivedBy && (
                                                             <div className="text-slate-400 dark:text-d-faint">{entry.receivedBy}</div>
                                                         )}
                                                     </td>
-                                                    <td className="py-3 px-4 text-right font-medium text-red-600 dark:text-d-red whitespace-nowrap">
+                                                    <td className={`py-3 px-4 text-right font-medium whitespace-nowrap ${entry.type === 'credit_transfer' ? 'text-slate-500 dark:text-d-muted' : 'text-red-600 dark:text-d-red'}`}>
                                                         {entry.debit > 0 ? formatCurrency(entry.debit) : '—'}
                                                     </td>
                                                     <td className="py-3 px-4 text-right whitespace-nowrap">
@@ -972,7 +1015,7 @@ const CustomerLedger = () => {
                                                                     <span className="font-medium text-emerald-600 dark:text-d-green">{formatCurrency(entry.storeCredit)}</span>
                                                                 )}
                                                                 {entry.debtWriteOff > 0 && (
-                                                                    <span className="text-xs text-slate-400 dark:text-d-faint">{formatCurrency(entry.debtWriteOff)} cancelled</span>
+                                                                    <span className="text-xs text-slate-400 dark:text-d-faint">{formatCurrency(entry.debtWriteOff)} unpaid amount reduced</span>
                                                                 )}
                                                             </div>
                                                         ) : (
@@ -982,7 +1025,7 @@ const CustomerLedger = () => {
                                                         )}
                                                     </td>
                                                     <td className={`py-3 px-4 text-right font-bold whitespace-nowrap ${(entry.balance || 0) < 0 ? 'text-emerald-600 dark:text-d-green' : 'text-slate-800 dark:text-d-heading'}`}>
-                                                        {(entry.balance || 0) < 0 ? 'Cr ' : ''}{formatCurrency(entry.balance || 0)}
+                                                        {(entry.balance || 0) < 0 ? 'Cr ' : ''}{formatCurrency(Math.abs(entry.balance || 0))}
                                                     </td>
                                                 </tr>
                                                 {isExpanded && hasDetails && (
@@ -1171,7 +1214,7 @@ const CustomerLedger = () => {
                                                                             </div>
                                                                             <div className="border-t border-dashed border-slate-200 dark:border-d-border my-1" />
                                                                             <div className="flex justify-between text-slate-400 dark:text-d-faint text-xs">
-                                                                                <span>Outstanding cancelled</span>
+                                                                                <span>Unpaid amount reduced</span>
                                                                                 <span className="tabular-nums">{formatCurrency(entry.debtWriteOff)}</span>
                                                                             </div>
                                                                             <div className="flex justify-between font-semibold text-emerald-600 dark:text-d-green">
@@ -1202,23 +1245,28 @@ const CustomerLedger = () => {
                                     <tr>
                                         <td colSpan={5} className="py-3 px-4 text-right font-semibold text-slate-600 dark:text-d-muted">Totals</td>
                                         <td className="py-3 px-4 text-right font-bold text-red-600 dark:text-d-red">
-                                            {formatCurrency(statementEntries.reduce((s, e) => s + (e.debit || 0), 0))}
+                                            {formatCurrency(moneyEntries.reduce((s, e) => s + (e.debit || 0), 0))}
                                         </td>
                                         <td className="py-3 px-4 text-right">
                                             <div className="font-bold text-emerald-600 dark:text-d-green">
-                                                {formatCurrency(statementEntries.reduce((s, e) => s + (e.credit || 0), 0))}
+                                                {formatCurrency(moneyEntries.reduce((s, e) => s + (e.credit || 0), 0))}
                                             </div>
+                                            {creditMovedTotal > 0 && (
+                                                <div className="text-[10px] text-slate-400 dark:text-d-faint mt-0.5">
+                                                    {formatCurrency(creditMovedTotal)} store credit moved between bills (not included)
+                                                </div>
+                                            )}
                                             {(() => {
                                                 const totalDebtCancelled = statementEntries.reduce((s, e) => s + (e.debtWriteOff || 0), 0);
                                                 return totalDebtCancelled > 0 ? (
                                                     <div className="text-[10px] text-slate-400 dark:text-d-faint mt-0.5">
-                                                        incl. {formatCurrency(totalDebtCancelled)} cancelled
+                                                        incl. {formatCurrency(totalDebtCancelled)} unpaid amount reduced by returns
                                                     </div>
                                                 ) : null;
                                             })()}
                                         </td>
                                         <td className={`py-3 px-4 text-right font-bold ${(summary.currentBalance || 0) < 0 ? 'text-emerald-600 dark:text-d-green' : 'text-slate-800 dark:text-d-heading'}`}>
-                                            {(summary.currentBalance || 0) < 0 ? 'Credit: ' : ''}{formatCurrency(summary.currentBalance || 0)}
+                                            {(summary.currentBalance || 0) < 0 ? 'Credit: ' : ''}{formatCurrency(Math.abs(summary.currentBalance || 0))}
                                         </td>
                                     </tr>
                                 </tfoot>
@@ -1283,7 +1331,6 @@ const CustomerLedger = () => {
                                         type="button"
                                         onClick={() => {
                                             setPaymentMode('fifo');
-                                            setPaymentForm((p) => ({ ...p, amount: String(totalOutstanding || '') }));
                                         }}
                                         className={`py-2 rounded-lg text-xs font-semibold transition-all ${
                                             paymentMode === 'fifo'
@@ -1301,7 +1348,6 @@ const CustomerLedger = () => {
                                             setPaymentForm((p) => ({
                                                 ...p,
                                                 billId: first?.billId || '',
-                                                amount: first ? String(first.due) : '',
                                             }));
                                         }}
                                         className={`py-2 rounded-lg text-xs font-semibold transition-all ${
@@ -1423,12 +1469,12 @@ const CustomerLedger = () => {
                                     <label className="block text-[11px] font-semibold text-slate-500 dark:text-d-muted mb-2 uppercase tracking-wide">
                                         Payment Method
                                     </label>
-                                    <div className="grid grid-cols-4 gap-2">
+                                    {/* No "Credit" here — store credit is applied to unpaid bills automatically. */}
+                                    <div className="grid grid-cols-3 gap-2">
                                         {[
                                             { id: 'cash', label: 'Cash' },
                                             { id: 'card', label: 'Card' },
                                             { id: 'online', label: 'Online' },
-                                            { id: 'store_credit', label: 'Credit' },
                                         ].map((m) => (
                                             <button
                                                 key={m.id}
@@ -1684,6 +1730,7 @@ const TypeBadge = ({ type }) => {
         payment: { label: 'PAID', cls: 'bg-emerald-50 dark:bg-[rgba(52,232,161,0.1)] text-emerald-600 dark:text-d-green' },
         return: { label: 'RETURN', cls: 'bg-amber-50 dark:bg-[rgba(255,185,50,0.1)] text-amber-600 dark:text-d-accent' },
         cancelled: { label: 'CANCELLED', cls: 'bg-slate-200 dark:bg-white/10 text-slate-600 dark:text-d-muted' },
+        credit_transfer: { label: 'CREDIT MOVED', cls: 'bg-slate-100 dark:bg-white/10 text-slate-600 dark:text-d-muted' },
     };
     const c = config[type] || { label: type, cls: 'bg-slate-100 text-slate-600' };
     return (

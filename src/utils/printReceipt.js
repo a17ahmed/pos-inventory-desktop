@@ -31,6 +31,7 @@ export const printReceipt = (opts) => {
         change = 0,
         totalRefunded = 0,
         netAmount = total,
+        creditPayments = [],
     } = opts;
 
     // Electron app — send structured data for direct ESC/POS printing
@@ -71,6 +72,7 @@ export const printReceipt = (opts) => {
                 subtotal, tax, itemDiscounts, billDiscount, total,
                 paymentMethod, amountPaid, cashGiven, change, currency,
                 totalRefunded, netAmount,
+                creditPayments,
                 receiptFooter, receiptNote,
             },
         })

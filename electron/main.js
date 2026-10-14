@@ -641,6 +641,7 @@ ipcMain.handle('print-receipt', async (event, { receiptData, printerName, paperW
             items, subtotal, tax, itemDiscounts, billDiscount, total,
             paymentMethod, amountPaid, cashGiven, change, currency,
             totalRefunded, netAmount,
+            creditPayments = [],
             receiptFooter, receiptNote
         } = receiptData;
 
@@ -836,6 +837,10 @@ ipcMain.handle('print-receipt', async (event, { receiptData, printerName, paperW
         printer.setTextNormal();
         printer.bold(false);
         printer.leftRight('Payment:', paymentLabel);
+        // Store credit from a returned bill, applied to this one by the backend.
+        (creditPayments || []).forEach((c) => {
+            printer.leftRight('Paid by credit (Bill #' + c.fromBillNumber + '):', money(c.amount));
+        });
         if (paymentMethod === 'cash' && !isPartial && cashGiven > 0) {
             printer.leftRight('Tendered:', money(cashGiven));
             printer.leftRight('Change:', money(change));

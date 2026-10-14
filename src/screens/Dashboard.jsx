@@ -10,6 +10,7 @@ import { getDashboardSummary } from '../services/api/dashboard';
 import { printReceipt as printReceiptUtil } from '../utils/printReceipt';
 import { appAlert, appConfirm, appChoose } from '../components/AppDialog';
 import { searchCustomers, saveCustomerRate } from '../services/api/customers';
+import { getCreditPayments } from '../utils/billCredit';
 import {
     buildRateMap,
     getRateStatus,
@@ -1015,6 +1016,8 @@ const EmployeeDashboard = () => {
                 paymentMethod,
                 amountPaid,
                 customerBalanceBefore: response.data?.customerBalanceBefore ?? bill.customerBalance ?? 0,
+                // Spare store credit the backend applied to this new bill.
+                creditPayments: getCreditPayments(response.data?.bill || response.data),
                 bill: { ...bill, items: orderedItems },
             };
             setSuccessData(sData);
@@ -1068,6 +1071,7 @@ const EmployeeDashboard = () => {
             amountPaid: billData.amountPaid ?? 0,
             cashGiven: billData.cashGiven || 0,
             change: billData.change || 0,
+            creditPayments: billData.creditPayments || [],
         });
     };
 
@@ -2076,6 +2080,12 @@ const EmployeeDashboard = () => {
                                     <span className="text-slate-500 dark:text-d-muted">Total</span>
                                     <span className="font-medium text-slate-800 dark:text-d-text">{formatCurrency(successData.total)}</span>
                                 </div>
+                                {(successData.creditPayments || []).map((c, i) => (
+                                    <div key={i} className="flex justify-between text-sm text-emerald-600 dark:text-d-green">
+                                        <span>Paid by credit (from Bill #{c.fromBillNumber})</span>
+                                        <span>{formatCurrency(c.amount)}</span>
+                                    </div>
+                                ))}
                                 {successData.paymentMethod === 'cash' && successData.change > 0 && (
                                     <div className="flex justify-between text-sm pt-2 border-t border-slate-200 dark:border-[rgba(255,255,255,0.05)] text-emerald-600 dark:text-d-green font-medium">
                                         <span>Change</span>

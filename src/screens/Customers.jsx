@@ -449,7 +449,8 @@ const Customers = () => {
                             </thead>
                             <tbody>
                                 {filteredCustomers.map((customer) => {
-                                    const balance = customer.balance || 0;
+                                    // Round to paisa so float noise like -0.0000001 shows as 0, not "Cr -0".
+                                    const balance = Math.round((customer.balance || 0) * 100) / 100;
                                     return (
                                         <tr
                                             key={customer._id}
@@ -488,8 +489,11 @@ const Customers = () => {
                                                                 : 'text-slate-500 dark:text-d-muted'
                                                     }
                                                 >
-                                                    {balance < 0 ? 'Cr ' : ''}{formatCurrency(balance)}
+                                                    {balance < 0 ? formatCurrency(-balance) : formatCurrency(balance)}
                                                 </span>
+                                                {balance < 0 && (
+                                                    <div className="text-[11px] font-normal text-emerald-600 dark:text-d-green">Available credit</div>
+                                                )}
                                             </td>
                                             <td className="py-4 px-6 text-right">
                                                 <span className="px-2 py-1 bg-slate-100 dark:bg-d-glass text-slate-600 dark:text-d-muted rounded-full text-xs font-medium">

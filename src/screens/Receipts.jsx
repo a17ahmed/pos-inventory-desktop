@@ -4,6 +4,7 @@ import { useAuth } from '../context/AuthContext';
 import { getReceipts, getReceiptStats } from '../services/api/receipts';
 import { cancelBill } from '../services/api/bills';
 import { getCancelState, estimateCashReversal, isCancelledBill, isCancelledHold } from '../utils/billCancel';
+import { getCreditPayments, getPrimaryPaymentMethod, formatPaymentMethod } from '../utils/billCredit';
 import { printReceipt } from '../utils/printReceipt';
 import { downloadReceipt } from '../utils/downloadReceipt';
 import {
@@ -286,7 +287,7 @@ const Receipts = () => {
         // Use paymentStatus from bill data — if unpaid, it's credit
         const paymentMethod = receipt.paymentStatus === 'unpaid'
             ? 'credit'
-            : (receipt.payments?.[0]?.method || 'cash');
+            : getPrimaryPaymentMethod(receipt);
 
         // Frozen at bill creation time — always reflects the customer's balance
         // as of this sale, unaffected by payments made afterward
@@ -315,6 +316,7 @@ const Receipts = () => {
             change: receipt.change || 0,
             totalRefunded: receipt.totalRefunded || 0,
             netAmount: receipt.netAmount ?? ((receipt.total || 0) - (receipt.totalRefunded || 0)),
+            creditPayments: getCreditPayments(receipt),
         };
     };
 
@@ -739,7 +741,7 @@ const Receipts = () => {
                 const hasDiscount = (r.totalDiscount || 0) > 0;
                 const hasReturns = r.returns && r.returns.length > 0;
                 const hasPayments = r.payments && r.payments.length > 0;
-                const paymentMethod = hasPayments ? r.payments[0]?.method : (r.paymentMethod || 'cash');
+                const paymentMethod = hasPayments ? getPrimaryPaymentMethod(r) : (r.paymentMethod || 'cash');
 
                 return (
                 <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
@@ -932,9 +934,12 @@ const Receipts = () => {
                                         r.payments.map((p, i) => (
                                             <div key={i} className="flex items-center justify-between text-sm">
                                                 <div className="flex items-center gap-2">
-                                                    <span className="capitalize font-medium text-slate-700 dark:text-d-text">{p.method}</span>
+                                                    <span className={`font-medium text-slate-700 dark:text-d-text ${p.creditFrom || p.method === 'store_credit' ? '' : 'capitalize'}`}>
+                                                        {p.creditFrom || p.method === 'store_credit' ? `Paid by credit (from Bill #${p.creditFromBillNumber ?? ''})` : formatPaymentMethod(p)}
+                                                    </span>
                                                     {p.reference && <span className="text-xs text-slate-400 dark:text-d-faint font-mono">Ref: {p.reference}</span>}
-                                                    {p.note && <span className="text-xs text-slate-400 dark:text-d-faint">({p.note})</span>}
+                                                    {/* A store-credit payment's note just repeats "Credit from Bill #X". */}
+                                                    {p.note && !(p.creditFrom || p.method === 'store_credit') && <span className="text-xs text-slate-400 dark:text-d-faint">({p.note})</span>}
                                                 </div>
                                                 <span className="font-semibold text-slate-800 dark:text-d-text">{formatCurrency(p.amount)}</span>
                                             </div>

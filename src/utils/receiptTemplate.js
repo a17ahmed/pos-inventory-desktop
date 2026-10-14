@@ -40,6 +40,7 @@ export const buildReceiptHTML = ({
     change = 0,
     totalRefunded = 0,
     netAmount = total,
+    creditPayments = [], // [{ fromBillNumber, amount }] store credit applied to this bill
 }) => {
     const storeName = store.name || 'Store';
     const storePhone = store.phone || '';
@@ -172,6 +173,7 @@ export const buildReceiptHTML = ({
                 <tr><td style="font-size:10px;padding:2px 0;">Paid Now:</td><td style="text-align:right;font-size:10px;padding:2px 0;">${currency} ${fmt(amountPaid)}</td></tr>
                 <tr><td style="font-size:10px;padding:2px 0;">Credited:</td><td style="text-align:right;font-size:10px;padding:2px 0;">${currency} ${fmt(billDue)}</td></tr>
             ` : ''}
+            ${creditPayments.map((c) => `<tr><td style="font-size:10px;padding:2px 0;">Paid by credit (from Bill #${c.fromBillNumber}):</td><td style="text-align:right;font-size:10px;padding:2px 0;white-space:nowrap;">${currency} ${fmt(c.amount)}</td></tr>`).join('')}
             ${paymentMethod === 'cash' && cashGiven > 0 ? `
                 <tr><td style="font-size:10px;padding:2px 0;">Cash:</td><td style="text-align:right;font-size:10px;padding:2px 0;">${currency} ${fmt(cashGiven)}</td></tr>
                 <tr><td style="font-size:10px;padding:2px 0;">Change:</td><td style="text-align:right;font-size:10px;padding:2px 0;">${currency} ${fmt(change)}</td></tr>
