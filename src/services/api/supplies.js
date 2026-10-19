@@ -17,3 +17,7 @@ export const deleteSupply = (id) =>
 
 export const paySupply = (id, data) =>
     api.patch(`/supply/${id}/pay`, data);
+
+// Send items back to the vendor: { items: [{ product, quantity, reason }], note }
+export const returnSupply = (id, data) =>
+    api.post(`/supply/${id}/return`, data);

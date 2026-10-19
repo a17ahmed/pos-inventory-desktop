@@ -77,7 +77,8 @@ const ProductFormModal = ({ show, onClose, editingProduct = null, categories = [
                 sellingPrice,
                 costPrice,
                 maxDiscountPercent,
-                category: formData.category,
+                // Optional — the server rejects an empty string, so leave it out when blank
+                ...(formData.category.trim() ? { category: formData.category.trim() } : {}),
                 sku: formData.sku,
                 barcode: formData.barcode,
                 description: formData.description,

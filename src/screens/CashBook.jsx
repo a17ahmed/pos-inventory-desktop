@@ -27,6 +27,7 @@ const TYPE_LABELS = {
     customer_refund: 'Customer Refund',
     sale_cancel: 'Bill Cancelled',
     expense: 'Expense',
+    expense_reversal: 'Expense reversed',
 };
 
 const TYPE_COLORS = {
@@ -38,6 +39,7 @@ const TYPE_COLORS = {
     customer_refund: 'bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-400',
     sale_cancel: 'bg-slate-200 text-slate-700 dark:bg-slate-700/40 dark:text-slate-300',
     expense: 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400',
+    expense_reversal: 'bg-teal-100 text-teal-700 dark:bg-teal-900/30 dark:text-teal-400',
 };
 
 const CashBook = () => {
@@ -341,7 +343,7 @@ const CashBook = () => {
                             <span className="text-slate-500 dark:text-d-muted text-sm">Today Net</span>
                         </div>
                         <p className={`text-xl font-bold font-display ${(todayIn - todayOut) >= 0 ? 'text-d-green' : 'text-d-red'}`}>
-                            {(todayIn - todayOut) >= 0 ? '+' : '-'}{formatCurrency(todayIn - todayOut)}
+                            {(todayIn - todayOut) >= 0 ? '+' : '-'}{formatCurrency(Math.abs(todayIn - todayOut))}
                         </p>
                     </div>
                 </div>
@@ -395,6 +397,7 @@ const CashBook = () => {
                         <option value="customer_refund">Customer Refunds</option>
                         <option value="sale_cancel">Bills Cancelled</option>
                         <option value="expense">Expenses</option>
+                        <option value="expense_reversal">Expenses Reversed</option>
                     </select>
 
                     <div className="flex items-center gap-2">
