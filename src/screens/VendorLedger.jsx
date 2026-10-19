@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { useBusiness } from '../context/BusinessContext';
 import { todayLocalDate, toLocalDateStr } from '../utils/date';
 import { getVendor, getVendorLedger, payVendor } from '../services/api/vendors';
-import { paySupply } from '../services/api/supplies';
+import { paySupply, getSupplies } from '../services/api/supplies';
 import { getCashBalance } from '../services/api/cashbook';
 import html2pdf from 'html2pdf.js';
 import {
@@ -27,6 +27,16 @@ import {
     FiFileText,
     FiPackage,
 } from 'react-icons/fi';
+
+// Method text for a ledger payment. Vendor credit is credit moved from another
+// supply (after a return), not money paid.
+const methodLabel = (e) =>
+    e.method === 'vendor_credit' || e.fromCredit
+        ? `Vendor credit (from Supply #${e.creditFromSupplyNumber ?? '?'})`
+        : e.method === 'bank_transfer' ? 'Bank' : e.method;
+
+const creditMovesText = (moves = [], fmt) =>
+    moves.map((m) => `${fmt(m.amount)} credit used on Supply #${m.toNumber}`).join(' · ');
 
 const VendorLedger = () => {
     const { id } = useParams();
@@ -69,11 +79,20 @@ const VendorLedger = () => {
     const [submittingPayment, setSubmittingPayment] = useState(false);
     const [cashInHand, setCashInHand] = useState(null);
     const [paymentError, setPaymentError] = useState('');
+    const [pendingSupplies, setPendingSupplies] = useState([]); // [{ supplyId, supplyNumber, due }]
+    const [toast, setToast] = useState('');
 
     const currency = business?.currency || 'Rs.';
     const formatCurrency = (amount) => {
         const v = amount || 0;
         return `${v < 0 ? '-' : ''}${currency} ${Math.abs(v).toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
+    };
+    // Running balance: negative = the vendor owes us (credit)
+    const formatBalance = (v) => ((v || 0) < -0.005 ? `Cr ${formatCurrency(-v)}` : formatCurrency(v));
+
+    const showToast = (message) => {
+        setToast(message);
+        setTimeout(() => setToast(''), 4000);
     };
 
     // =========================================================================
@@ -179,7 +198,9 @@ const VendorLedger = () => {
         let entries = ledgerData.ledger;
 
         if (typeFilter !== 'all') {
-            entries = entries.filter((e) => e.type === typeFilter);
+            entries = entries.filter((e) =>
+                typeFilter === 'payment' ? e.type === 'payment' || e.type === 'credit_transfer' : e.type === typeFilter
+            );
         }
 
         if (searchQuery.trim()) {
@@ -195,44 +216,44 @@ const VendorLedger = () => {
         return entries;
     }, [ledgerData, typeFilter, searchQuery]);
 
-    // Outstanding supplies (for payment modal dropdown)
-    const outstandingSupplies = useMemo(() => {
-        if (!ledgerData?.ledger) return [];
-        const supplyMap = new Map();
-        for (const e of ledgerData.ledger) {
-            if (!e.supplyId) continue;
-            const key = String(e.supplyId);
-            if (!supplyMap.has(key)) {
-                supplyMap.set(key, {
-                    supplyId: e.supplyId,
-                    supplyNumber: e.supplyNumber,
-                    total: 0,
-                    credited: 0,
-                });
-            }
-            const entry = supplyMap.get(key);
-            if (e.type === 'supply' || e.type === 'opening_balance') entry.total += e.debit || 0;
-            else entry.credited += e.credit || 0;
-        }
-        return Array.from(supplyMap.values())
-            .map((s) => ({ ...s, due: s.total - s.credited }))
-            .filter((s) => s.due > 0);
-    }, [ledgerData]);
+    // What we owe this vendor, all-time (ignores the date filter). Vendor credit
+    // is already netted off on the server, so this is the most we can pay.
+    const summaryAll = ledgerData?.summary || {};
+    const amountDue = summaryAll.amountDue ?? Math.max(0, summaryAll.currentBalance || 0);
 
-    // =========================================================================
-    // Handlers
-    // =========================================================================
-
+    // Unpaid supplies for the payment modal, oldest bill first — loaded from the
+    // server (remainingAmount) so returns, credit and date filters can't skew it.
+    const outstandingSupplies = pendingSupplies;
     const totalOutstanding = useMemo(
-        () => outstandingSupplies.reduce((sum, s) => sum + s.due, 0),
+        () => Math.round(outstandingSupplies.reduce((sum, s) => sum + s.due, 0) * 100) / 100,
         [outstandingSupplies]
     );
 
+    const loadPendingSupplies = async () => {
+        const list = [];
+        for (const status of ['unpaid', 'partial']) {
+            const res = await getSupplies({ vendor: id, paymentStatus: status, limit: 100 });
+            list.push(...(res.data?.supplies || []));
+        }
+        return list
+            .filter((s) => (s.remainingAmount || 0) > 0.005)
+            .sort((a, b) => new Date(a.billDate || a.createdAt) - new Date(b.billDate || b.createdAt) || a.supplyNumber - b.supplyNumber)
+            .map((s) => ({ supplyId: s._id, supplyNumber: s.supplyNumber, due: s.remainingAmount }));
+    };
+
     const openPaymentModal = async () => {
+        let pending = [];
+        try {
+            pending = await loadPendingSupplies();
+        } catch (err) {
+            console.error('Error loading pending supplies:', err);
+        }
+        const due = Math.min(amountDue, pending.reduce((sum, s) => sum + s.due, 0));
+        setPendingSupplies(pending);
         setPaymentMode('fifo');
         setPaymentForm({
-            supplyId: outstandingSupplies[0]?.supplyId || '',
-            amount: String(totalOutstanding || ''),
+            supplyId: pending[0]?.supplyId || '',
+            amount: due > 0 ? String(Math.round(due * 100) / 100) : '',
             method: 'cash',
             note: '',
             reference: '',
@@ -264,17 +285,21 @@ const VendorLedger = () => {
         setSubmittingPayment(true);
         try {
             if (paymentMode === 'fifo') {
-                if (amount > totalOutstanding + 0.01) {
-                    setPaymentError(`Amount exceeds total outstanding (${formatCurrency(totalOutstanding)})`);
+                const maxPay = Math.min(amountDue, totalOutstanding);
+                if (amount > maxPay + 0.01) {
+                    setPaymentError(`Amount exceeds total outstanding (${formatCurrency(maxPay)})`);
                     setSubmittingPayment(false);
                     return;
                 }
-                await payVendor(id, {
+                const res = await payVendor(id, {
                     amount,
                     method: paymentForm.method,
                     note: paymentForm.note,
                     reference: paymentForm.reference,
                 });
+                // Vendor credit (from returns) is used before the cash
+                const moves = res.data?.creditApplied || [];
+                if (moves.length > 0) showToast(`Vendor credit used first: ${creditMovesText(moves, formatCurrency)}`);
             } else {
                 if (!paymentForm.supplyId) {
                     setPaymentError('Select a supply');
@@ -310,16 +335,16 @@ const VendorLedger = () => {
 
         const entryRows = filteredEntries.map((e) => {
             const d = new Date(e.date);
-            const typeLabel = e.type === 'supply' ? 'SUPPLY' : e.type === 'payment' ? 'PAID' : e.type === 'return' ? 'RETURN' : e.type === 'opening_balance' ? 'OPENING' : e.type?.toUpperCase() || '';
+            const typeLabel = e.type === 'supply' ? 'SUPPLY' : e.type === 'payment' ? 'PAID' : e.type === 'return' ? 'RETURN' : e.type === 'opening_balance' ? 'OPENING' : e.type === 'credit_transfer' ? 'CREDIT MOVED' : e.type?.toUpperCase() || '';
             const typeColor = e.type === 'supply' ? '#f59e0b' : e.type === 'payment' ? '#10b981' : e.type === 'return' ? '#3b82f6' : '#64748b';
             return `<tr>
                 <td style="padding:6px 8px;font-size:11px;border-bottom:1px solid #e2e8f0;">${d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}</td>
                 <td style="padding:6px 8px;font-size:11px;border-bottom:1px solid #e2e8f0;">${e.supplyNumber ? '#' + e.supplyNumber : '—'}</td>
                 <td style="padding:6px 8px;font-size:11px;border-bottom:1px solid #e2e8f0;"><span style="color:${typeColor};font-size:10px;font-weight:700;margin-right:6px;">${typeLabel}</span>${e.description}</td>
-                <td style="padding:6px 8px;font-size:11px;border-bottom:1px solid #e2e8f0;">${[e.method?.toUpperCase(), e.paidBy].filter(Boolean).join(' / ') || '—'}</td>
+                <td style="padding:6px 8px;font-size:11px;border-bottom:1px solid #e2e8f0;">${[e.method ? methodLabel(e).toUpperCase() : '', e.paidBy].filter(Boolean).join(' / ') || '—'}</td>
                 <td style="padding:6px 8px;font-size:11px;border-bottom:1px solid #e2e8f0;text-align:right;color:#ef4444;font-weight:600;">${e.debit ? currency + ' ' + fmt(e.debit) : '—'}</td>
                 <td style="padding:6px 8px;font-size:11px;border-bottom:1px solid #e2e8f0;text-align:right;color:#10b981;font-weight:600;">${e.credit ? currency + ' ' + fmt(e.credit) : '—'}</td>
-                <td style="padding:6px 8px;font-size:11px;border-bottom:1px solid #e2e8f0;text-align:right;font-weight:700;">${currency} ${fmt(e.balance)}</td>
+                <td style="padding:6px 8px;font-size:11px;border-bottom:1px solid #e2e8f0;text-align:right;font-weight:700;">${(e.balance || 0) < -0.005 ? 'Cr ' : ''}${currency} ${fmt(Math.abs(e.balance || 0))}</td>
             </tr>`;
         }).join('');
 
@@ -407,8 +432,9 @@ const VendorLedger = () => {
                     <div style="font-size:16px;font-weight:700;margin-top:2px;">${currency} ${fmt(summary.totalReturns)}</div>
                 </div>
                 <div style="flex:1;background:#fff5f5;border:1px solid #fecaca;border-radius:8px;padding:10px 14px;">
-                    <div style="font-size:10px;color:#ef4444;text-transform:uppercase;font-weight:600;">Balance Due</div>
-                    <div style="font-size:16px;font-weight:700;margin-top:2px;color:#ef4444;">${currency} ${fmt(summary.currentBalance)}</div>
+                    <div style="font-size:10px;color:#ef4444;text-transform:uppercase;font-weight:600;">Amount Due (all time)</div>
+                    <div style="font-size:16px;font-weight:700;margin-top:2px;color:#ef4444;">${currency} ${fmt(summary.amountDue ?? summary.currentBalance)}</div>
+                    ${summary.vendorCredit > 0 ? `<div style="font-size:10px;color:#10b981;margin-top:2px;">Vendor owes you ${currency} ${fmt(summary.vendorCredit)}</div>` : ''}
                 </div>
             </div>
 
@@ -559,7 +585,7 @@ const VendorLedger = () => {
                         </button>
                         <button
                             onClick={openPaymentModal}
-                            disabled={outstandingSupplies.length === 0}
+                            disabled={amountDue <= 0}
                             className="flex items-center gap-2 px-4 py-2.5 bg-emerald-500 dark:bg-d-green text-white dark:text-d-card rounded-xl text-sm font-semibold hover:bg-emerald-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                         >
                             <FiPlus size={15} />
@@ -635,13 +661,25 @@ const VendorLedger = () => {
                         value={summary.supplyCount || 0}
                         tone="slate"
                     />
-                    <SummaryCard
-                        icon={<FiAlertCircle />}
-                        label={(summary.currentBalance || 0) > 0 ? 'Balance Due' : 'Current Balance'}
-                        value={formatCurrency(summary.currentBalance || 0)}
-                        tone={(summary.currentBalance || 0) > 0 ? 'red' : 'emerald'}
-                        highlight
-                    />
+                    {(summary.vendorCredit || 0) > 0 && amountDue <= 0 ? (
+                        <SummaryCard
+                            icon={<FiAlertCircle />}
+                            label="Vendor Credit"
+                            value={formatCurrency(summary.vendorCredit)}
+                            tone="emerald"
+                            hint="Vendor owes you"
+                            highlight
+                        />
+                    ) : (
+                        <SummaryCard
+                            icon={<FiAlertCircle />}
+                            label={amountDue > 0 ? 'Amount Due' : 'Current Balance'}
+                            value={formatCurrency(amountDue)}
+                            tone={amountDue > 0 ? 'red' : 'emerald'}
+                            hint={(summary.vendorCredit || 0) > 0 ? `Vendor owes you ${formatCurrency(summary.vendorCredit)}` : undefined}
+                            highlight
+                        />
+                    )}
                 </div>
 
                 {/* Filters */}
@@ -780,25 +818,32 @@ const VendorLedger = () => {
                                                     <td className="py-3 px-4">
                                                         <div className="flex items-center gap-2">
                                                             <TypeBadge type={entry.type} />
-                                                            <span className="text-slate-700 dark:text-d-text">{entry.description}</span>
+                                                            <span className={entry.fromCredit ? 'italic text-slate-500 dark:text-d-muted' : 'text-slate-700 dark:text-d-text'}>
+                                                                {entry.description}
+                                                            </span>
                                                         </div>
                                                     </td>
                                                     <td className="py-3 px-4 whitespace-nowrap text-xs">
                                                         {entry.method && (
-                                                            <div className="uppercase text-slate-600 dark:text-d-text font-medium">{entry.method}</div>
+                                                            <div className={entry.fromCredit || entry.method === 'vendor_credit'
+                                                                ? 'italic text-slate-500 dark:text-d-muted'
+                                                                : 'uppercase text-slate-600 dark:text-d-text font-medium'}
+                                                            >
+                                                                {methodLabel(entry)}
+                                                            </div>
                                                         )}
                                                         {entry.paidBy && (
                                                             <div className="text-slate-400 dark:text-d-faint">{entry.paidBy}</div>
                                                         )}
                                                     </td>
-                                                    <td className="py-3 px-4 text-right font-medium text-red-600 dark:text-d-red whitespace-nowrap">
+                                                    <td className={`py-3 px-4 text-right font-medium whitespace-nowrap ${entry.type === 'credit_transfer' ? 'text-slate-500 dark:text-d-muted' : 'text-red-600 dark:text-d-red'}`}>
                                                         {entry.debit > 0 ? formatCurrency(entry.debit) : '\u2014'}
                                                     </td>
-                                                    <td className="py-3 px-4 text-right font-medium text-emerald-600 dark:text-d-green whitespace-nowrap">
+                                                    <td className={`py-3 px-4 text-right font-medium whitespace-nowrap ${entry.fromCredit ? 'italic text-slate-500 dark:text-d-muted' : 'text-emerald-600 dark:text-d-green'}`}>
                                                         {entry.credit > 0 ? formatCurrency(entry.credit) : '\u2014'}
                                                     </td>
-                                                    <td className="py-3 px-4 text-right font-bold whitespace-nowrap text-slate-800 dark:text-d-heading">
-                                                        {formatCurrency(entry.balance || 0)}
+                                                    <td className={`py-3 px-4 text-right font-bold whitespace-nowrap ${(entry.balance || 0) < -0.005 ? 'text-emerald-600 dark:text-d-green' : 'text-slate-800 dark:text-d-heading'}`}>
+                                                        {formatBalance(entry.balance)}
                                                     </td>
                                                 </tr>
                                                 {isExpanded && hasDetails && (
@@ -952,7 +997,7 @@ const VendorLedger = () => {
                                             {formatCurrency(filteredEntries.reduce((s, e) => s + (e.credit || 0), 0))}
                                         </td>
                                         <td className="py-3 px-4 text-right font-bold text-slate-800 dark:text-d-heading">
-                                            {formatCurrency(summary.currentBalance || 0)}
+                                            {formatBalance(summary.currentBalance || 0)}
                                         </td>
                                     </tr>
                                 </tfoot>
@@ -962,10 +1007,16 @@ const VendorLedger = () => {
                 </div>
             </div>
 
+            {toast && (
+                <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[60] px-4 py-2.5 rounded-xl shadow-lg bg-slate-800 dark:bg-d-elevated border border-transparent dark:border-d-border text-sm text-white dark:text-d-text animate-pop-in print:hidden">
+                    {toast}
+                </div>
+            )}
+
             {/* Record Payment Modal */}
             {showPaymentModal && (() => {
                 const selectedSupply = outstandingSupplies.find((s) => String(s.supplyId) === String(paymentForm.supplyId));
-                const dueAmount = paymentMode === 'fifo' ? totalOutstanding : (selectedSupply?.due || 0);
+                const dueAmount = paymentMode === 'fifo' ? Math.min(amountDue, totalOutstanding) : (selectedSupply?.due || 0);
                 const enteredAmount = parseFloat(paymentForm.amount) || 0;
                 const remaining = Math.max(0, dueAmount - enteredAmount);
                 const isOverpay = enteredAmount > dueAmount + 0.01;
@@ -1041,7 +1092,8 @@ const VendorLedger = () => {
                                         type="button"
                                         onClick={() => {
                                             setPaymentMode('fifo');
-                                            setPaymentForm((p) => ({ ...p, amount: String(totalOutstanding || '') }));
+                                            const due = Math.min(amountDue, totalOutstanding);
+                                            setPaymentForm((p) => ({ ...p, amount: due > 0 ? String(due) : '' }));
                                         }}
                                         className={`py-2 rounded-lg text-xs font-semibold transition-all ${
                                             paymentMode === 'fifo'
@@ -1077,7 +1129,7 @@ const VendorLedger = () => {
                                     <div className="flex items-start gap-2 p-3 bg-blue-50 dark:bg-[rgba(59,130,246,0.08)] border border-blue-200 dark:border-[rgba(59,130,246,0.2)] rounded-xl">
                                         <FiAlertCircle className="text-blue-600 dark:text-blue-400 mt-0.5 flex-shrink-0" size={14} />
                                         <div className="text-[11px] text-blue-700 dark:text-blue-300 leading-relaxed">
-                                            Amount will be auto-applied to <strong>{outstandingSupplies.length} outstanding supply{outstandingSupplies.length === 1 ? '' : ' orders'}</strong>, oldest first (FIFO). Total due: <strong>{formatCurrency(totalOutstanding)}</strong>
+                                            Amount will be auto-applied to <strong>{outstandingSupplies.length} outstanding supply{outstandingSupplies.length === 1 ? '' : ' orders'}</strong>, oldest first (FIFO). Total due: <strong>{formatCurrency(dueAmount)}</strong>
                                         </div>
                                     </div>
                                 )}
@@ -1182,10 +1234,11 @@ const VendorLedger = () => {
                                     <label className="block text-[11px] font-semibold text-slate-500 dark:text-d-muted mb-2 uppercase tracking-wide">
                                         Payment Method
                                     </label>
-                                    <div className="grid grid-cols-4 gap-2">
+                                    <div className="grid grid-cols-5 gap-2">
                                         {[
                                             { id: 'cash', label: 'Cash' },
                                             { id: 'bank_transfer', label: 'Bank' },
+                                            { id: 'online', label: 'Online' },
                                             { id: 'cheque', label: 'Cheque' },
                                             { id: 'card', label: 'Card' },
                                         ].map((m) => (
@@ -1432,7 +1485,7 @@ const VendorLedger = () => {
 // Subcomponents
 // ---------------------------------------------------------------------------
 
-const SummaryCard = ({ icon, label, value, tone = 'slate', highlight = false }) => {
+const SummaryCard = ({ icon, label, value, tone = 'slate', highlight = false, hint }) => {
     const toneClasses = {
         slate: 'text-slate-700 dark:text-d-heading',
         emerald: 'text-emerald-600 dark:text-d-green',
@@ -1450,6 +1503,7 @@ const SummaryCard = ({ icon, label, value, tone = 'slate', highlight = false }) 
                 <p className="text-xs text-slate-500 dark:text-d-muted">{label}</p>
             </div>
             <p className={`text-lg font-bold ${toneClasses[tone]}`}>{value}</p>
+            {hint && <p className="text-[11px] text-emerald-600 dark:text-d-green mt-0.5">{hint}</p>}
         </div>
     );
 };
@@ -1459,6 +1513,8 @@ const TypeBadge = ({ type }) => {
         supply: { label: 'SUPPLY', cls: 'bg-blue-50 dark:bg-[rgba(91,156,246,0.1)] text-blue-600 dark:text-d-blue' },
         payment: { label: 'PAID', cls: 'bg-emerald-50 dark:bg-[rgba(52,232,161,0.1)] text-emerald-600 dark:text-d-green' },
         return: { label: 'RETURN', cls: 'bg-amber-50 dark:bg-[rgba(255,185,50,0.1)] text-amber-600 dark:text-d-accent' },
+        opening_balance: { label: 'OPENING', cls: 'bg-indigo-50 dark:bg-[rgba(124,131,253,0.12)] text-indigo-600 dark:text-d-accent' },
+        credit_transfer: { label: 'CREDIT MOVED', cls: 'bg-slate-100 dark:bg-white/10 text-slate-600 dark:text-d-muted' },
     };
     const c = config[type] || { label: type, cls: 'bg-slate-100 text-slate-600' };
     return (

@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { FiAlertTriangle, FiInfo } from 'react-icons/fi';
 
 /**
@@ -53,9 +53,19 @@ export const appChoose = (message, { choices = [], defaultValue, ...options } = 
  */
 export default function AppDialogHost() {
     const [current, setCurrent] = useState(null);
+    // The queue is shifted here, never inside a setState updater: StrictMode
+    // runs updaters twice in dev, which shifted twice and dropped a dialog
+    // (e.g. the error alert right after a confirm).
+    const currentRef = useRef(null);
+    const show = (next) => {
+        currentRef.current = next;
+        setCurrent(next);
+    };
 
     useEffect(() => {
-        const pull = () => setCurrent((cur) => cur || queue.shift() || null);
+        const pull = () => {
+            if (!currentRef.current && queue.length > 0) show(queue.shift());
+        };
         listeners.push(pull);
         pull(); // flush anything queued before mount
         return () => {
@@ -64,10 +74,8 @@ export default function AppDialogHost() {
     }, []);
 
     const close = useCallback((result) => {
-        setCurrent((cur) => {
-            cur?.resolve(result);
-            return queue.shift() || null;
-        });
+        currentRef.current?.resolve(result);
+        show(queue.shift() || null);
     }, []);
 
     // Enter = confirm/OK, Escape = cancel

@@ -3,7 +3,7 @@ import { todayLocalDate, toLocalDateStr } from '../utils/date';
 import { useNavigate } from 'react-router-dom';
 import { useBusiness } from '../context/BusinessContext';
 import { getVendors, createVendor, updateVendor, deleteVendor } from '../services/api/vendors';
-import { getSupplies, getSupplyStats, createSupply, updateSupply, deleteSupply, paySupply } from '../services/api/supplies';
+import { getSupplies, getSupplyStats, createSupply, updateSupply, deleteSupply, paySupply, returnSupply } from '../services/api/supplies';
 import { getCashBalance } from '../services/api/cashbook';
 import { getProducts } from '../services/api/products';
 import ProductFormModal from '../components/ProductFormModal';
@@ -28,6 +28,7 @@ import {
     FiMinus,
     FiChevronDown,
     FiBookOpen,
+    FiCornerUpLeft,
 } from 'react-icons/fi';
 
 // ---------------------------------------------------------------------------
@@ -53,6 +54,42 @@ const defaultVendorForm = () => ({
     notes: '',
     openingBalance: 0,
 });
+
+// Server error text, plus the item list when the server says stock already went out.
+const supplyErrorMessage = (err, fallback) => {
+    const data = err.response?.data;
+    const lines = (data?.outOfStock || []).map(
+        (o) => `• ${o.name}: needs ${o.requested}, only ${o.available} in stock`
+    );
+    return [data?.message || fallback, ...(lines.length ? ['', ...lines] : [])].join('\n');
+};
+
+const PAY_METHODS = [
+    { id: 'cash', label: 'Cash' },
+    { id: 'bank_transfer', label: 'Bank' },
+    { id: 'online', label: 'Online' },
+    { id: 'cheque', label: 'Cheque' },
+    { id: 'card', label: 'Card' },
+];
+
+const RETURN_REASONS = [
+    { id: 'defective', label: 'Defective' },
+    { id: 'damaged', label: 'Damaged' },
+    { id: 'expired', label: 'Expired' },
+    { id: 'wrong_item', label: 'Wrong item' },
+    { id: 'excess', label: 'Excess' },
+    { id: 'other', label: 'Other' },
+];
+
+// Units of a supply line that can still go back to the vendor
+const returnableQty = (item) => Math.max(0, (item.quantity ?? item.qty ?? 0) - (item.returnedQty || 0));
+
+// Same math as the server: qty × unit price, plus GST on it
+const returnLineAmount = (item, qty) => {
+    const base = qty * (item.unitPrice || 0);
+    const gst = item.gst > 0 ? Math.round(base * item.gst) / 100 : 0;
+    return base + gst;
+};
 
 const ADD_VENDOR_OPTION = '__add_vendor__';
 const ADD_PRODUCT_OPTION = '__add_product__';
@@ -108,6 +145,19 @@ const Vendors = () => {
     const [showPayModal, setShowPayModal] = useState(false);
     const [payingSupply, setPayingSupply] = useState(null);
     const [payAmount, setPayAmount] = useState('');
+    const [payMethod, setPayMethod] = useState('cash');
+
+    // ── Return modal ─────────────────────────────────────────────────────────
+    const [returningSupply, setReturningSupply] = useState(null);
+    const [returnLines, setReturnLines] = useState({}); // { [productId]: { qty, reason } }
+    const [returnNote, setReturnNote] = useState('');
+    const [returning, setReturning] = useState(false);
+
+    const [toast, setToast] = useState('');
+    const showToast = (message) => {
+        setToast(message);
+        setTimeout(() => setToast(''), 4500);
+    };
     const [paying, setPaying] = useState(false);
 
     // ── Vendor modal ─────────────────────────────────────────────────────────
@@ -193,6 +243,11 @@ const Vendors = () => {
     useEffect(() => {
         if (activeTab === 'supplies') fetchSupplies();
     }, [activeTab, fetchSupplies]);
+
+    // Vendor totals change with every supply, payment and return — reload on tab switch
+    useEffect(() => {
+        if (activeTab === 'vendors') fetchVendors();
+    }, [activeTab, fetchVendors]);
 
     useEffect(() => {
         // Both tabs show money cards sourced from stats, so load it for either.
@@ -321,6 +376,10 @@ const Vendors = () => {
 
     const itemsTotal = supplyItems.reduce((acc, i) => acc + (i.total || 0), 0);
 
+    // A supply with returns keeps its items (the server rejects changes);
+    // bill no / date / notes can still be edited.
+    const itemsLocked = !!editingSupply && (editingSupply.returns?.length || 0) > 0;
+
     const handleSupplySubmit = async (e) => {
         e.preventDefault();
 
@@ -331,8 +390,9 @@ const Vendors = () => {
             return;
         }
 
-        // Validate: paid amount cannot exceed total
-        const paid = Number(supplyForm.paidAmount) || 0;
+        // Validate: paid amount cannot exceed total (create only — paid is
+        // read-only when editing; payments go through Pay)
+        const paid = editingSupply ? 0 : Number(supplyForm.paidAmount) || 0;
         if (paid > itemsTotal) {
             appAlert(`Paid amount (${paid}) cannot exceed items total (${itemsTotal}).`);
             return;
@@ -351,20 +411,23 @@ const Vendors = () => {
             if (!editingSupply) formData.append('vendor', supplyForm.vendor);
             formData.append('billNumber', supplyForm.billNumber);
             formData.append('billDate', supplyForm.billDate);
-            formData.append('paidAmount', supplyForm.paidAmount || 0);
+            // Paid amount can't be edited (server returns 400) — only sent on create
+            if (!editingSupply) formData.append('paidAmount', supplyForm.paidAmount || 0);
             formData.append('notes', supplyForm.notes);
-            formData.append(
-                'items',
-                JSON.stringify(
-                    supplyItems.map((i) => ({
-                        product: i.product,
-                        name: i.name,
-                        quantity: Number(i.qty),
-                        unitPrice: Number(i.unitPrice),
-                        total: i.total,
-                    }))
-                )
-            );
+            if (!itemsLocked) {
+                formData.append(
+                    'items',
+                    JSON.stringify(
+                        supplyItems.map((i) => ({
+                            product: i.product,
+                            name: i.name,
+                            quantity: Number(i.qty),
+                            unitPrice: Number(i.unitPrice),
+                            total: i.total,
+                        }))
+                    )
+                );
+            }
             if (receiptFile) formData.append('receiptImage', receiptFile);
 
             if (editingSupply) {
@@ -378,7 +441,7 @@ const Vendors = () => {
             fetchStats();
         } catch (err) {
             console.error('Error saving supply:', err);
-            appAlert(err.response?.data?.message || 'Failed to save supply');
+            appAlert(supplyErrorMessage(err, 'Failed to save supply'));
         } finally {
             setSubmitting(false);
         }
@@ -392,7 +455,7 @@ const Vendors = () => {
             fetchStats();
         } catch (err) {
             console.error('Error deleting supply:', err);
-            appAlert('Failed to delete supply');
+            appAlert(supplyErrorMessage(err, 'Failed to delete supply'));
         }
     };
 
@@ -403,6 +466,7 @@ const Vendors = () => {
     const openPayModal = (supply) => {
         setPayingSupply(supply);
         setPayAmount('');
+        setPayMethod('cash');
         setShowPayModal(true);
     };
 
@@ -413,6 +477,7 @@ const Vendors = () => {
         try {
             await paySupply(payingSupply._id, {
                 amount: Number(payAmount),
+                method: payMethod,
             });
             setShowPayModal(false);
             setPayingSupply(null);
@@ -423,6 +488,75 @@ const Vendors = () => {
             appAlert(err.response?.data?.message || 'Failed to record payment');
         } finally {
             setPaying(false);
+        }
+    };
+
+    // =========================================================================
+    // Return modal handlers
+    // =========================================================================
+
+    const itemProductId = (item) => String(typeof item.product === 'object' ? item.product?._id : item.product);
+
+    // What can go back now: not more than this supply delivered (minus earlier
+    // returns), and not more than is still in stock (the rest was sold).
+    const returnLimit = (item) => {
+        const fromSupply = returnableQty(item);
+        const prod = products.find((p) => p._id === itemProductId(item));
+        const inStock = prod?.trackStock ? Math.max(0, Math.floor(prod.stockQuantity || 0)) : Infinity;
+        return { max: Math.min(fromSupply, inStock), fromSupply, inStock };
+    };
+
+    const openReturnModal = (supply) => {
+        fetchProducts(); // fresh stock for the limits
+        const lines = {};
+        for (const item of supply.items || []) lines[itemProductId(item)] = { qty: '', reason: 'defective' };
+        setReturnLines(lines);
+        setReturnNote('');
+        setReturningSupply(supply);
+    };
+
+    const setReturnLine = (productId, patch) =>
+        setReturnLines((prev) => ({ ...prev, [productId]: { ...prev[productId], ...patch } }));
+
+    const returnSelection = (returningSupply?.items || [])
+        .map((item) => {
+            const productId = itemProductId(item);
+            const line = returnLines[productId] || {};
+            const qty = Math.min(parseInt(line.qty, 10) || 0, returnLimit(item).max);
+            return { item, productId, qty, reason: line.reason || 'defective', amount: returnLineAmount(item, qty) };
+        })
+        .filter((l) => l.qty > 0);
+    const returnTotal = returnSelection.reduce((sum, l) => sum + l.amount, 0);
+
+    const handleReturn = async () => {
+        if (returnSelection.length === 0) return;
+        const summary = returnSelection.map((l) => `• ${l.item.name} × ${l.qty} — ${formatCurrency(l.amount)}`).join('\n');
+        const ok = await appConfirm(
+            `Return these items to the vendor?\n\n${summary}\n\nTotal: ${formatCurrency(returnTotal)}\nStock goes down by the returned quantity.`,
+            { confirmText: 'Return items' }
+        );
+        if (!ok) return;
+        setReturning(true);
+        try {
+            const res = await returnSupply(returningSupply._id, {
+                items: returnSelection.map((l) => ({ product: l.productId, quantity: l.qty, reason: l.reason })),
+                note: returnNote.trim(),
+            });
+            const moves = res.data?.creditSettlement || [];
+            const balance = res.data?.supply?.balance;
+            const parts = [`Returned ${formatCurrency(res.data?.totalRefund ?? returnTotal)}`];
+            parts.push(...moves.map((m) => `${formatCurrency(m.amount)} credit used on Supply #${m.toNumber}`));
+            if (balance < -0.005) parts.push(`Vendor owes you ${formatCurrency(-balance)}`);
+            showToast(parts.join(' · '));
+            setReturningSupply(null);
+            fetchSupplies(supplyPagination.page);
+            fetchStats();
+            fetchVendors();
+        } catch (err) {
+            console.error('Error returning supply:', err);
+            appAlert(supplyErrorMessage(err, 'Failed to return items'));
+        } finally {
+            setReturning(false);
         }
     };
 
@@ -519,7 +653,7 @@ const Vendors = () => {
             fetchVendors();
         } catch (err) {
             console.error('Error deleting vendor:', err);
-            appAlert('Failed to delete vendor');
+            appAlert(err.response?.data?.message || 'Failed to delete vendor');
         }
     };
 
@@ -671,9 +805,10 @@ const Vendors = () => {
                         <tbody>
                             {filteredSupplies.map((supply) => {
                                 const badge = getStatusBadge(supply.paymentStatus);
-                                const remaining =
-                                    supply.remainingAmount ??
-                                    (supply.totalAmount || 0) - (supply.paidAmount || 0);
+                                // remainingAmount already accounts for returns and credit
+                                const remaining = supply.remainingAmount || 0;
+                                const vendorOwes = (supply.balance || 0) < 0 ? -supply.balance : 0;
+                                const canDelete = !(supply.payments?.length > 0) && !(supply.returns?.length > 0);
                                 const vendorName =
                                     typeof supply.vendor === 'object'
                                         ? supply.vendor?.name || '—'
@@ -699,20 +834,37 @@ const Vendors = () => {
                                         </td>
                                         <td className="py-4 px-6 text-right font-semibold text-slate-800 dark:text-d-heading">
                                             {formatCurrency(supply.totalAmount)}
+                                            {(supply.totalReturned || 0) > 0 && (
+                                                <div className="text-[11px] font-normal text-amber-600 dark:text-d-accent whitespace-nowrap">
+                                                    − {formatCurrency(supply.totalReturned)} returned
+                                                </div>
+                                            )}
                                         </td>
                                         <td className="py-4 px-6 text-right text-green-600 dark:text-d-green font-medium">
                                             {formatCurrency(supply.paidAmount)}
+                                            {(supply.creditApplied || 0) > 0 && (
+                                                <div className="text-[11px] italic font-normal text-slate-400 dark:text-d-faint whitespace-nowrap">
+                                                    incl. {formatCurrency(supply.creditApplied)} vendor credit
+                                                </div>
+                                            )}
                                         </td>
-                                        <td className="py-4 px-6 text-right font-semibold text-red-600 dark:text-d-red">
+                                        <td className={`py-4 px-6 text-right font-semibold ${remaining > 0 ? 'text-red-600 dark:text-d-red' : 'text-slate-400 dark:text-d-faint'}`}>
                                             {formatCurrency(remaining)}
                                         </td>
                                         <td className="py-4 px-6">
-                                            <span
-                                                className={`inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-medium ${badge.color}`}
-                                            >
-                                                <badge.icon size={11} />
-                                                {badge.label}
-                                            </span>
+                                            <div className="flex flex-col items-start gap-1">
+                                                <span
+                                                    className={`inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-medium ${badge.color}`}
+                                                >
+                                                    <badge.icon size={11} />
+                                                    {badge.label}
+                                                </span>
+                                                {vendorOwes > 0 && (
+                                                    <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium whitespace-nowrap bg-emerald-50 text-emerald-700 dark:bg-[rgba(52,232,161,0.12)] dark:text-d-green">
+                                                        Vendor owes you {formatCurrency(vendorOwes)}
+                                                    </span>
+                                                )}
+                                            </div>
                                         </td>
                                         <td className="py-4 px-6">
                                             <div className="flex items-center justify-end gap-1">
@@ -726,6 +878,15 @@ const Vendors = () => {
                                                         Pay
                                                     </button>
                                                 )}
+                                                {(supply.items || []).some((i) => returnableQty(i) > 0) && (
+                                                    <button
+                                                        onClick={() => openReturnModal(supply)}
+                                                        className="p-2 text-slate-500 dark:text-d-muted hover:text-amber-600 dark:hover:text-d-accent hover:bg-amber-50 dark:hover:bg-[rgba(255,185,50,0.1)] rounded-lg transition-colors"
+                                                        title="Return items to vendor"
+                                                    >
+                                                        <FiCornerUpLeft size={15} />
+                                                    </button>
+                                                )}
                                                 <button
                                                     onClick={() => openSupplyModal(supply)}
                                                     className="p-2 text-slate-500 dark:text-d-muted hover:text-primary-500 hover:bg-primary-50 dark:hover:bg-[rgba(255,255,255,0.06)] rounded-lg transition-colors"
@@ -733,13 +894,15 @@ const Vendors = () => {
                                                 >
                                                     <FiEdit2 size={15} />
                                                 </button>
-                                                <button
-                                                    onClick={() => handleDeleteSupply(supply._id)}
-                                                    className="p-2 text-slate-500 dark:text-d-muted hover:text-red-500 dark:hover:text-d-red hover:bg-red-50 dark:hover:bg-[rgba(255,107,107,0.1)] rounded-lg transition-colors"
-                                                    title="Delete"
-                                                >
-                                                    <FiTrash2 size={15} />
-                                                </button>
+                                                {canDelete && (
+                                                    <button
+                                                        onClick={() => handleDeleteSupply(supply._id)}
+                                                        className="p-2 text-slate-500 dark:text-d-muted hover:text-red-500 dark:hover:text-d-red hover:bg-red-50 dark:hover:bg-[rgba(255,107,107,0.1)] rounded-lg transition-colors"
+                                                        title="Delete"
+                                                    >
+                                                        <FiTrash2 size={15} />
+                                                    </button>
+                                                )}
                                             </div>
                                         </td>
                                     </tr>
@@ -805,7 +968,8 @@ const Vendors = () => {
                 </thead>
                 <tbody>
                     {vendors.map((vendor) => {
-                        const remaining = (vendor.totalRemaining ?? (vendor.totalBusiness || 0) - (vendor.totalPaid || 0));
+                        const remaining = vendor.totalRemaining || 0;
+                        const credit = vendor.totalCredit || 0;
                         return (
                             <tr
                                 key={vendor._id}
@@ -831,6 +995,11 @@ const Vendors = () => {
                                     <span className={remaining > 0 ? 'text-red-600 dark:text-d-red' : 'text-slate-500 dark:text-d-muted'}>
                                         {formatCurrency(remaining)}
                                     </span>
+                                    {credit > 0 && (
+                                        <div className="text-[11px] font-medium text-emerald-600 dark:text-d-green whitespace-nowrap">
+                                            Credit: {formatCurrency(credit)} (vendor owes you)
+                                        </div>
+                                    )}
                                 </td>
                                 <td className="py-4 px-6 text-right">
                                     <span className="px-2 py-1 bg-slate-100 dark:bg-d-glass text-slate-600 dark:text-d-muted rounded-full text-xs font-medium">
@@ -1197,7 +1366,7 @@ const Vendors = () => {
                                         <label className="block text-sm font-medium text-slate-700 dark:text-d-text">
                                             Paid Amount
                                         </label>
-                                        {supplyCashBalance != null && (
+                                        {!editingSupply && supplyCashBalance != null && (
                                             <span className={`text-xs font-medium ${
                                                 (Number(supplyForm.paidAmount) || 0) > supplyCashBalance
                                                     ? 'text-red-500 dark:text-d-red'
@@ -1215,13 +1384,17 @@ const Vendors = () => {
                                         onChange={(e) =>
                                             setSupplyForm({ ...supplyForm, paidAmount: e.target.value })
                                         }
+                                        readOnly={!!editingSupply}
                                         placeholder="0"
-                                        className={`w-full px-4 py-2 bg-white dark:bg-d-bg border rounded-xl focus:ring-2 focus:ring-primary-500 dark:focus:border-d-border-hover focus:outline-none text-slate-800 dark:text-d-text placeholder-slate-400 dark:placeholder-d-faint ${
-                                            (Number(supplyForm.paidAmount) || 0) > supplyCashBalance && supplyCashBalance != null
+                                        className={`w-full px-4 py-2 bg-white dark:bg-d-bg border rounded-xl focus:ring-2 focus:ring-primary-500 dark:focus:border-d-border-hover focus:outline-none text-slate-800 dark:text-d-text placeholder-slate-400 dark:placeholder-d-faint read-only:opacity-60 read-only:cursor-not-allowed read-only:focus:ring-0 ${
+                                            !editingSupply && (Number(supplyForm.paidAmount) || 0) > supplyCashBalance && supplyCashBalance != null
                                                 ? 'border-red-400 dark:border-red-500'
                                                 : 'border-slate-200 dark:border-d-border'
                                         }`}
                                     />
+                                    {editingSupply && (
+                                        <p className="mt-1 text-xs text-slate-500 dark:text-d-muted">Use "Pay" to record a payment.</p>
+                                    )}
                                 </div>
                             </div>
 
@@ -1231,15 +1404,23 @@ const Vendors = () => {
                                     <label className="text-sm font-medium text-slate-700 dark:text-d-text">
                                         Items *
                                     </label>
-                                    <button
-                                        type="button"
-                                        onClick={addItem}
-                                        className="flex items-center gap-1 text-sm text-primary-600 hover:text-primary-700 font-medium transition-colors"
-                                    >
-                                        <FiPlus size={14} />
-                                        Add Item
-                                    </button>
+                                    {!itemsLocked && (
+                                        <button
+                                            type="button"
+                                            onClick={addItem}
+                                            className="flex items-center gap-1 text-sm text-primary-600 hover:text-primary-700 font-medium transition-colors"
+                                        >
+                                            <FiPlus size={14} />
+                                            Add Item
+                                        </button>
+                                    )}
                                 </div>
+
+                                {itemsLocked && (
+                                    <div className="mb-3 p-3 bg-slate-50 dark:bg-d-glass border border-slate-200 dark:border-d-border rounded-xl text-xs text-slate-600 dark:text-d-muted">
+                                        This supply has returns, so its items can't be changed. Bill number, date and notes can still be edited.
+                                    </div>
+                                )}
 
                                 {/* Items Header */}
                                 <div className="grid grid-cols-12 gap-2 mb-2 px-1">
@@ -1264,7 +1445,8 @@ const Vendors = () => {
                                                     value={item.product}
                                                     onChange={(e) => handleProductSelectChange(idx, e.target.value)}
                                                     required
-                                                    className="appearance-none w-full px-3 py-2 pr-9 bg-white dark:bg-d-bg border border-slate-200 dark:border-d-border rounded-xl text-sm focus:ring-2 focus:ring-primary-500 dark:focus:border-d-border-hover focus:outline-none text-slate-800 dark:text-d-text"
+                                                    disabled={itemsLocked}
+                                                    className="disabled:opacity-60 disabled:cursor-not-allowed appearance-none w-full px-3 py-2 pr-9 bg-white dark:bg-d-bg border border-slate-200 dark:border-d-border rounded-xl text-sm focus:ring-2 focus:ring-primary-500 dark:focus:border-d-border-hover focus:outline-none text-slate-800 dark:text-d-text"
                                                 >
                                                     <option value="">Select product…</option>
                                                     {products
@@ -1284,7 +1466,8 @@ const Vendors = () => {
                                                 min="1"
                                                 value={item.qty}
                                                 onChange={(e) => updateItem(idx, 'qty', e.target.value)}
-                                                className="col-span-2 px-3 py-2 bg-white dark:bg-d-bg border border-slate-200 dark:border-d-border rounded-xl text-sm focus:ring-2 focus:ring-primary-500 dark:focus:border-d-border-hover focus:outline-none text-slate-800 dark:text-d-text"
+                                                disabled={itemsLocked}
+                                                className="disabled:opacity-60 disabled:cursor-not-allowed col-span-2 px-3 py-2 bg-white dark:bg-d-bg border border-slate-200 dark:border-d-border rounded-xl text-sm focus:ring-2 focus:ring-primary-500 dark:focus:border-d-border-hover focus:outline-none text-slate-800 dark:text-d-text"
                                             />
                                             <input
                                                 type="number"
@@ -1294,7 +1477,8 @@ const Vendors = () => {
                                                 onChange={(e) => updateItem(idx, 'unitPrice', e.target.value)}
                                                 placeholder="0"
                                                 required
-                                                className="col-span-2 px-3 py-2 bg-white dark:bg-d-bg border border-slate-200 dark:border-d-border rounded-xl text-sm focus:ring-2 focus:ring-primary-500 dark:focus:border-d-border-hover focus:outline-none text-slate-800 dark:text-d-text placeholder-slate-400 dark:placeholder-d-faint"
+                                                disabled={itemsLocked}
+                                                className="disabled:opacity-60 disabled:cursor-not-allowed col-span-2 px-3 py-2 bg-white dark:bg-d-bg border border-slate-200 dark:border-d-border rounded-xl text-sm focus:ring-2 focus:ring-primary-500 dark:focus:border-d-border-hover focus:outline-none text-slate-800 dark:text-d-text placeholder-slate-400 dark:placeholder-d-faint"
                                             />
                                             <div className="col-span-2 px-3 py-2 bg-slate-50 dark:bg-d-glass border border-slate-200 dark:border-d-border rounded-xl text-sm text-slate-600 dark:text-d-text font-medium text-right">
                                                 {item.total.toLocaleString()}
@@ -1302,7 +1486,7 @@ const Vendors = () => {
                                             <button
                                                 type="button"
                                                 onClick={() => removeItem(idx)}
-                                                disabled={supplyItems.length === 1}
+                                                disabled={supplyItems.length === 1 || itemsLocked}
                                                 className="col-span-1 p-2 text-slate-400 dark:text-d-faint hover:text-red-500 dark:hover:text-d-red hover:bg-red-50 dark:hover:bg-[rgba(255,107,107,0.1)] rounded-lg transition-colors disabled:opacity-30 disabled:cursor-not-allowed flex items-center justify-center"
                                             >
                                                 <FiMinus size={14} />
@@ -1405,11 +1589,7 @@ const Vendors = () => {
                                 <p className="text-sm text-slate-500 dark:text-d-muted mt-0.5">
                                     Remaining:{' '}
                                     <span className="font-semibold text-red-600 dark:text-d-red">
-                                        {formatCurrency(
-                                            payingSupply.remainingAmount ??
-                                                (payingSupply.totalAmount || 0) -
-                                                    (payingSupply.paidAmount || 0)
-                                        )}
+                                        {formatCurrency(payingSupply.remainingAmount || 0)}
                                     </span>
                                 </p>
                             </div>
@@ -1439,6 +1619,28 @@ const Vendors = () => {
                                 />
                             </div>
 
+                            <div>
+                                <label className="block text-sm font-medium text-slate-700 dark:text-d-text mb-1">
+                                    Method
+                                </label>
+                                <div className="grid grid-cols-5 gap-1.5">
+                                    {PAY_METHODS.map((m) => (
+                                        <button
+                                            key={m.id}
+                                            type="button"
+                                            onClick={() => setPayMethod(m.id)}
+                                            className={`py-2 rounded-lg text-xs font-semibold transition-colors ${
+                                                payMethod === m.id
+                                                    ? 'bg-primary-500 dark:bg-d-accent text-white dark:text-d-card'
+                                                    : 'bg-slate-50 dark:bg-d-bg border border-slate-200 dark:border-d-border text-slate-600 dark:text-d-muted hover:border-slate-300'
+                                            }`}
+                                        >
+                                            {m.label}
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+
                             <div className="flex gap-3">
                                 <button
                                     type="button"
@@ -1462,6 +1664,143 @@ const Vendors = () => {
                             </div>
                         </form>
                     </div>
+                </div>
+            )}
+
+            {/* ================================================================
+                MODAL: Return items to vendor
+            ================================================================ */}
+            {returningSupply && (
+                <div className="fixed inset-0 bg-black/50 dark:bg-black/60 flex items-center justify-center z-50 p-4">
+                    <div className="bg-white dark:bg-d-card dark:border dark:border-d-border rounded-2xl w-full max-w-xl animate-fadeIn max-h-[90vh] flex flex-col">
+                        <div className="flex items-center justify-between p-6 border-b border-slate-200 dark:border-d-border">
+                            <div>
+                                <h3 className="text-lg font-semibold text-slate-800 dark:text-d-heading">Return items to vendor</h3>
+                                <p className="text-sm text-slate-500 dark:text-d-muted mt-0.5">
+                                    Supply #{returningSupply.supplyNumber}
+                                    {returningSupply.billNumber ? ` · Bill ${returningSupply.billNumber}` : ''}
+                                    {' · '}
+                                    {typeof returningSupply.vendor === 'object' ? returningSupply.vendor?.name : ''}
+                                </p>
+                            </div>
+                            <button
+                                onClick={() => setReturningSupply(null)}
+                                className="p-2 hover:bg-slate-100 dark:hover:bg-d-glass-hover rounded-lg transition-colors text-slate-500 dark:text-d-muted"
+                            >
+                                <FiX />
+                            </button>
+                        </div>
+
+                        <div className="p-6 space-y-4 overflow-y-auto">
+                            <div className="grid grid-cols-12 gap-2 px-1 text-xs font-medium text-slate-500 dark:text-d-muted">
+                                <span className="col-span-5">Item</span>
+                                <span className="col-span-2 text-center">Can return</span>
+                                <span className="col-span-2">Qty</span>
+                                <span className="col-span-3">Reason</span>
+                            </div>
+                            {(returningSupply.items || []).map((item) => {
+                                const productId = itemProductId(item);
+                                const line = returnLines[productId] || {};
+                                const { max, fromSupply, inStock } = returnLimit(item);
+                                const qty = parseInt(line.qty, 10) || 0;
+                                return (
+                                    <div key={productId} className={`grid grid-cols-12 gap-2 items-center ${max === 0 ? 'opacity-50' : ''}`}>
+                                        <div className="col-span-5 min-w-0">
+                                            <div className="text-sm font-medium text-slate-800 dark:text-d-heading truncate">{item.name}</div>
+                                            <div className="text-[11px] text-slate-400 dark:text-d-faint">
+                                                {formatCurrency(item.unitPrice)} each
+                                                {item.gst > 0 ? ` + ${item.gst}% GST` : ''}
+                                                {item.returnedQty > 0 ? ` · ${item.returnedQty} already returned` : ''}
+                                            </div>
+                                            {inStock < fromSupply && (
+                                                <div className="text-[11px] text-amber-600 dark:text-d-accent">
+                                                    Only {inStock} in stock — the rest was sold
+                                                </div>
+                                            )}
+                                        </div>
+                                        <div className="col-span-2 text-center text-sm text-slate-600 dark:text-d-text">{max}</div>
+                                        <input
+                                            type="number"
+                                            min="0"
+                                            max={max}
+                                            step="1"
+                                            value={line.qty ?? ''}
+                                            disabled={max === 0}
+                                            onChange={(e) => {
+                                                const v = e.target.value === '' ? '' : String(Math.min(max, Math.max(0, parseInt(e.target.value, 10) || 0)));
+                                                setReturnLine(productId, { qty: v });
+                                            }}
+                                            placeholder="0"
+                                            className={`col-span-2 px-3 py-2 bg-white dark:bg-d-bg border rounded-xl text-sm text-slate-800 dark:text-d-text focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:cursor-not-allowed ${
+                                                qty > 0 ? 'border-amber-300 dark:border-d-accent/50' : 'border-slate-200 dark:border-d-border'
+                                            }`}
+                                        />
+                                        <select
+                                            value={line.reason || 'defective'}
+                                            disabled={max === 0}
+                                            onChange={(e) => setReturnLine(productId, { reason: e.target.value })}
+                                            className="col-span-3 px-2 py-2 bg-white dark:bg-d-bg border border-slate-200 dark:border-d-border rounded-xl text-sm text-slate-800 dark:text-d-text focus:outline-none disabled:cursor-not-allowed"
+                                        >
+                                            {RETURN_REASONS.map((r) => (
+                                                <option key={r.id} value={r.id}>{r.label}</option>
+                                            ))}
+                                        </select>
+                                    </div>
+                                );
+                            })}
+
+                            <div>
+                                <label className="block text-sm font-medium text-slate-700 dark:text-d-text mb-1">Note (optional)</label>
+                                <input
+                                    type="text"
+                                    value={returnNote}
+                                    onChange={(e) => setReturnNote(e.target.value)}
+                                    placeholder="e.g. 2 cartons broken in delivery"
+                                    className="w-full px-4 py-2 bg-white dark:bg-d-bg border border-slate-200 dark:border-d-border rounded-xl text-sm text-slate-800 dark:text-d-text placeholder-slate-400 dark:placeholder-d-faint focus:outline-none focus:ring-2 focus:ring-primary-500"
+                                />
+                            </div>
+
+                            <div className="p-3 rounded-xl bg-slate-50 dark:bg-d-glass border border-slate-200 dark:border-d-border text-sm space-y-1">
+                                <div className="flex justify-between font-semibold text-slate-800 dark:text-d-heading">
+                                    <span>Return amount</span>
+                                    <span>{formatCurrency(returnTotal)}</span>
+                                </div>
+                                <p className="text-xs text-slate-500 dark:text-d-muted">
+                                    Reduces what you owe on this supply. If it's already paid, the vendor owes you the
+                                    difference, and that credit is used on their unpaid supplies automatically.
+                                </p>
+                            </div>
+                        </div>
+
+                        <div className="flex gap-3 p-6 border-t border-slate-200 dark:border-d-border">
+                            <button
+                                type="button"
+                                onClick={() => setReturningSupply(null)}
+                                className="flex-1 py-3 border border-slate-200 dark:border-d-border rounded-xl font-medium text-slate-600 dark:text-d-text hover:bg-slate-50 dark:hover:bg-d-glass transition-colors"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                type="button"
+                                onClick={handleReturn}
+                                disabled={returning || returnSelection.length === 0}
+                                className="flex-1 py-3 bg-amber-500 text-white rounded-xl font-medium hover:bg-amber-600 transition-colors flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                            >
+                                {returning ? (
+                                    <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                                ) : (
+                                    <FiCornerUpLeft size={16} />
+                                )}
+                                {returning ? 'Returning...' : 'Return items'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {toast && (
+                <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[60] px-4 py-2.5 rounded-xl shadow-lg bg-slate-800 dark:bg-d-elevated border border-transparent dark:border-d-border text-sm text-white dark:text-d-text animate-pop-in">
+                    {toast}
                 </div>
             )}
 
