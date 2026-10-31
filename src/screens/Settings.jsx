@@ -99,6 +99,7 @@ const Settings = () => {
             else if (data.status === 'available') setUpdateLabel(`Downloading v${data.version}...`);
             else if (data.status === 'downloading') setUpdateLabel(`Downloading... ${data.percent || 0}%`);
             else if (data.status === 'ready') setUpdateLabel('Update ready — restart to apply');
+            else if (data.status === 'error') setUpdateLabel('Update download failed — it will retry automatically');
         });
     }, []);
 

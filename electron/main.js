@@ -5,8 +5,9 @@ const { runOfflineDbSmokeTest } = require('./offlineDbSmokeTest');
 
 // Sentry — production builds only, initialized as early as possible to catch startup crashes.
 // DSN is safe to embed in source (it's a public write-only identifier, not a secret).
+let Sentry = null;
 if (app.isPackaged) {
-    const Sentry = require('@sentry/electron/main');
+    Sentry = require('@sentry/electron/main');
     Sentry.init({
         dsn: 'https://7477330dad5d7fcfdb8da627558a463c@o4511976432992256.ingest.de.sentry.io/4511976441184336',
         release: `pos-desktop@${app.getVersion()}`,
@@ -29,6 +30,22 @@ try {
 }
 
 let mainWindow;
+
+// One app at a time. A second copy (shop double-clicks the icon while it's open)
+// would run its own updater too: two downloads writing the same installer file
+// failed with EPERM / ENOENT (Sentry ELECTRON-6, ELECTRON-7). The second copy
+// just brings the open window forward and quits.
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
+if (!gotSingleInstanceLock) {
+    app.quit();
+} else {
+    app.on('second-instance', () => {
+        if (!mainWindow) return;
+        if (mainWindow.isMinimized()) mainWindow.restore();
+        mainWindow.show();
+        mainWindow.focus();
+    });
+}
 
 const isDev = process.env.NODE_ENV === 'development' || !app.isPackaged;
 
@@ -75,9 +92,15 @@ function createWindow() {
         mainWindow.show();
     });
 
-    // Handle external links
+    // Handle external links. openExternal rejects when Windows can't open the
+    // target ("Failed to open: … (0x2)", Sentry ELECTRON-3) — catch and log it
+    // instead of letting it become an unhandled rejection. Only web/mail/phone links.
     mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-        shell.openExternal(url);
+        if (/^(https?:|mailto:|tel:)/i.test(url)) {
+            shell.openExternal(url).catch((err) => console.error('openExternal failed:', url, err?.message));
+        } else {
+            console.warn('Blocked window.open for:', url);
+        }
         return { action: 'deny' };
     });
 
@@ -189,12 +212,39 @@ function createMenu() {
 // to the newest version — intermediate versions are never installed.
 let updateDownloaded = false;
 let updatePromptShown = false;
+let updateCheckRunning = false; // a check + its download; never two at once
+let updateRetryTimer = null;
+
+const RELEASES_URL = 'https://github.com/a17ahmed/pos-inventory-desktop/releases/latest';
+
+// Failures that just mean "no internet right now" / the PC went to sleep —
+// the next check retries; not worth a Sentry report.
+const isTransientNetworkError = (err) =>
+    /ERR_NETWORK_IO_SUSPENDED|ERR_INTERNET_DISCONNECTED|ERR_NETWORK_CHANGED|ERR_CONNECTION_(RESET|CLOSED|TIMED_OUT|REFUSED)|ERR_NAME_NOT_RESOLVED|ERR_TIMED_OUT|ETIMEDOUT|ECONNRESET|ENOTFOUND|EAI_AGAIN|socket hang up/i
+        .test(String(err?.message || err));
+
+// One check at a time. With autoDownload the download runs inside the check;
+// its promise (result.downloadPromise) was never awaited, so a failed download
+// became an unhandled rejection (Sentry ELECTRON-2, -5, -6, -7). The 'error'
+// event below still reports it once.
+function runUpdateCheck() {
+    if (isDev || updateDownloaded || updateCheckRunning) return;
+    updateCheckRunning = true;
+    autoUpdater.checkForUpdates()
+        .then((result) => result?.downloadPromise)
+        .catch(() => {})
+        .finally(() => { updateCheckRunning = false; });
+}
 
 function setupAutoUpdater() {
     if (isDev) return; // Skip in development
 
-    autoUpdater.autoDownload = true;
-    autoUpdater.autoInstallOnAppQuit = true;
+    // macOS: the app isn't code-signed, and macOS refuses to install an
+    // unsigned update in place (and the build ships no .zip — Sentry ELECTRON-5).
+    // So on Mac we only tell the user a new version is out and open the download page.
+    const isMac = process.platform === 'darwin';
+    autoUpdater.autoDownload = !isMac;
+    autoUpdater.autoInstallOnAppQuit = !isMac;
 
     autoUpdater.on('update-available', (info) => {
         console.log('Update available:', info.version);
@@ -202,6 +252,21 @@ function setupAutoUpdater() {
             status: 'available',
             version: info.version,
         });
+        if (isMac && !updatePromptShown) {
+            updatePromptShown = true;
+            dialog.showMessageBox(mainWindow, {
+                type: 'info',
+                title: 'Update available',
+                message: `Version ${info.version} is available.`,
+                detail: 'Download the new version and replace the app in Applications.',
+                buttons: ['Download', 'Later'],
+                defaultId: 0,
+            }).then((result) => {
+                if (result.response === 0) {
+                    shell.openExternal(RELEASES_URL).catch((err) => console.error('openExternal failed:', err?.message));
+                }
+            }).catch(() => {});
+        }
     });
 
     autoUpdater.on('update-not-available', (info) => {
@@ -242,19 +307,30 @@ function setupAutoUpdater() {
             if (result.response === 0) {
                 autoUpdater.quitAndInstall(false, true);
             }
-        });
+        }).catch(() => {});
     });
 
     autoUpdater.on('error', (err) => {
         console.error('Auto-update error:', err);
+        mainWindow?.webContents.send('update-status', { status: 'error', message: err?.message || String(err) });
+        // Report real problems (file locked by antivirus, disk, release files missing)
+        // as one handled warning; skip plain network drops.
+        if (Sentry && !isTransientNetworkError(err)) {
+            Sentry.captureException(err, { level: 'warning', tags: { area: 'auto-update' } });
+        }
+        // A failed download (sleep, Wi-Fi drop, a file briefly locked by antivirus)
+        // is retried in 30 minutes instead of waiting for the 4-hour check.
+        if (!updateDownloaded && !updateRetryTimer) {
+            updateRetryTimer = setTimeout(() => {
+                updateRetryTimer = null;
+                runUpdateCheck();
+            }, 30 * 60 * 1000);
+        }
     });
 
     // Check for updates every 4 hours (skip once an update is already downloaded)
-    autoUpdater.checkForUpdates().catch(() => {});
-    setInterval(() => {
-        if (updateDownloaded) return;
-        autoUpdater.checkForUpdates().catch(() => {});
-    }, 4 * 60 * 60 * 1000);
+    runUpdateCheck();
+    setInterval(runUpdateCheck, 4 * 60 * 60 * 1000);
 }
 
 // App ready
@@ -262,6 +338,7 @@ function setupAutoUpdater() {
 let offlineDbSmokeResult = null;
 
 app.whenReady().then(() => {
+    if (!gotSingleInstanceLock) return; // this copy is quitting; the open one was focused
     offlineDbSmokeResult = runOfflineDbSmokeTest(app);
     createWindow();
     createMenu();
@@ -302,9 +379,7 @@ ipcMain.handle('get-platform', () => {
 ipcMain.handle('get-offline-db-status', () => offlineDbSmokeResult);
 
 ipcMain.handle('check-for-updates', () => {
-    if (!isDev && !updateDownloaded) {
-        autoUpdater.checkForUpdates().catch(() => {});
-    }
+    runUpdateCheck();
     return { checking: true };
 });
 

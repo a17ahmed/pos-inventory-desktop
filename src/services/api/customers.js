@@ -44,3 +44,13 @@ export const deleteCustomerRate = (id, productId) =>
 // Replace the whole list: rates = [{ product, rate, note }]
 export const replaceCustomerRates = (id, rates) =>
     api.put(`/customer/${id}/rates`, { rates });
+
+// ─── Statement (ledger) ─────────────────────────────────────────────────────
+// One period of the customer's ledger, paged, with backend-computed balances.
+// params: { period, from, to, type, sort, search, page, limit }
+export const getCustomerStatement = (id, params) =>
+    api.get(`/customer/${id}/statement`, { params });
+
+// Bills that make up the customer's Amount Due. params: { sort: 'oldest'|'newest'|'amount' }
+export const getCustomerPendingBills = (id, params) =>
+    api.get(`/customer/${id}/pending-bills`, { params });

@@ -1,9 +1,24 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import html2pdf from 'html2pdf.js';
 import { useBusiness } from '../context/BusinessContext';
 import { useAuth } from '../context/AuthContext';
-import { todayLocalDate, toLocalDateStr } from '../utils/date';
+import {
+    PERIOD_OPTIONS,
+    DEFAULT_PERIOD,
+    describeSinceZero,
+    TYPE_OPTIONS,
+    PAGE_SIZE,
+    returnNote,
+    formatDateRange,
+    STATEMENT_PDF_WIDTH,
+    formatBalance,
+    describePeriod,
+    loadStatement,
+    loadPendingBills,
+    loadFullStatement,
+    buildStatementHtml,
+} from '../utils/customerStatement';
 import {
     getCustomer,
     getCustomerLedger,
@@ -35,15 +50,23 @@ import {
     FiMail,
     FiMapPin,
     FiCalendar,
-    FiFilter,
     FiPlus,
     FiX,
     FiSearch,
     FiChevronDown,
+    FiArrowDown,
     FiChevronRight,
+    FiChevronLeft,
+    FiFilter,
+    FiCheck,
     FiRefreshCw,
     FiFileText,
 } from 'react-icons/fi';
+
+// Table heading cell
+const TH = 'py-2.5 px-4 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500 dark:text-d-muted whitespace-nowrap';
+
+const METHOD_LABEL = { cash: 'Cash', card: 'Card', online: 'Online', bank_transfer: 'Bank transfer', cheque: 'Cheque', store_credit: 'Store credit' };
 
 const CustomerLedger = () => {
     const { id } = useParams();
@@ -106,24 +129,35 @@ const CustomerLedger = () => {
             setSavingRates(false);
         }
     };
-    const [ledgerData, setLedgerData] = useState(null);
+    // Statement: one period at a time. The cards use `summary` (all-time) and
+    // never change with filters; every line's balance comes from the backend.
+    const [statement, setStatement] = useState(null); // { summary, period, entries, pagination }
     const [loading, setLoading] = useState(true);
+    const [pageSize, setPageSize] = useState(PAGE_SIZE);
+    const tableScrollRef = useRef(null);
     const [error, setError] = useState(null);
 
-    // Filters — applied values that actually drive the API call
-    const [startDate, setStartDate] = useState('');
-    const [endDate, setEndDate] = useState('');
-    const [startTime, setStartTime] = useState('');
-    const [endTime, setEndTime] = useState('');
-    const [searchQuery, setSearchQuery] = useState('');
-    const [typeFilter, setTypeFilter] = useState('all'); // all | bill | payment | return
+    // Filters (all applied server-side)
+    const [periodPreset, setPeriodPreset] = useState(DEFAULT_PERIOD);
+    const [customFrom, setCustomFrom] = useState('');
+    const [customTo, setCustomTo] = useState('');
+    const [typeFilter, setTypeFilter] = useState('all');
+    const [sortOrder, setSortOrder] = useState('oldest');
+    const [searchInput, setSearchInput] = useState('');
+    const [searchQuery, setSearchQuery] = useState(''); // debounced searchInput
+    const [openMenu, setOpenMenu] = useState(null); // 'filters' when the filter menu is open
+    const filterMenuRef = useRef(null);
+    // The filter menu edits a draft; Apply commits it (one reload, not one per click)
+    const [draft, setDraft] = useState({ period: DEFAULT_PERIOD, from: '', to: '', type: 'all' });
 
-    // Filter modal — draft values, only committed to the state above via a preset or Apply.
-    const [showFilterModal, setShowFilterModal] = useState(false);
-    const [draftStartDate, setDraftStartDate] = useState('');
-    const [draftEndDate, setDraftEndDate] = useState('');
-    const [draftStartTime, setDraftStartTime] = useState('');
-    const [draftEndTime, setDraftEndTime] = useState('');
+    // Bills behind Amount Due — the Amount Due panel and Record Payment both use it
+    const [pending, setPending] = useState(null); // { bills, totalDue, availableCredit, amountDue }
+    const [showPendingPanel, setShowPendingPanel] = useState(false);
+    const [loadingPending, setLoadingPending] = useState(false);
+
+    // Print / PDF of the selected period
+    const [exporting, setExporting] = useState(false);
+    const [printHtml, setPrintHtml] = useState('');
 
     // Row expansion
     const [expandedRow, setExpandedRow] = useState(null);
@@ -140,6 +174,7 @@ const CustomerLedger = () => {
     const [submittingPayment, setSubmittingPayment] = useState(false);
 
     const currency = business?.currency || 'Rs.';
+    const formatNumber = (amount) => Math.abs(amount || 0).toLocaleString(undefined, { maximumFractionDigits: 2 });
     const formatCurrency = (amount) =>
         `${currency} ${Math.abs(amount || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
 
@@ -147,185 +182,115 @@ const CustomerLedger = () => {
     // Data
     // =========================================================================
 
-    const fetchLedger = useCallback(async () => {
+    const customIncomplete = periodPreset === 'custom' && (!customFrom || !customTo);
+    const statementParams = useMemo(() => {
+        const params = { period: periodPreset, type: typeFilter, sort: sortOrder, limit: pageSize };
+        if (periodPreset === 'custom') {
+            params.from = customFrom;
+            params.to = customTo;
+        }
+        if (searchQuery.trim()) params.search = searchQuery.trim();
+        return params;
+    }, [periodPreset, customFrom, customTo, typeFilter, sortOrder, searchQuery, pageSize]);
+
+    // Close the open filter dropdown on outside click / Escape.
+    useEffect(() => {
+        if (!openMenu) return undefined;
+        const onDown = (e) => {
+            if (filterMenuRef.current && !filterMenuRef.current.contains(e.target)) setOpenMenu(null);
+        };
+        const onKey = (e) => { if (e.key === 'Escape') setOpenMenu(null); };
+        document.addEventListener('mousedown', onDown);
+        document.addEventListener('keydown', onKey);
+        return () => {
+            document.removeEventListener('mousedown', onDown);
+            document.removeEventListener('keydown', onKey);
+        };
+    }, [openMenu]);
+
+    // Search by bill number — wait until typing pauses.
+    useEffect(() => {
+        const t = setTimeout(() => setSearchQuery(searchInput), 300);
+        return () => clearTimeout(t);
+    }, [searchInput]);
+
+    const fetchCustomer = useCallback(async () => {
+        try {
+            const res = await getCustomer(id);
+            setCustomer(res.data);
+        } catch (err) {
+            console.error('Error fetching customer:', err);
+        }
+    }, [id]);
+
+    useEffect(() => {
+        fetchCustomer();
+    }, [fetchCustomer]);
+
+    // One page of lines for the current filters. A filter change goes back to
+    // page 1. Balances are per line from the backend, so every page is correct.
+    const fetchStatement = useCallback(async (pageNum = 1) => {
+        if (customIncomplete) return;
         setLoading(true);
         setError(null);
         try {
-            // The screen also shows cancelled bills (greyed, no amounts). They never
-            // change the balance and are filtered out of every export/print below.
-            const params = { includeCancelled: true };
-            if (startDate) params.startDate = startTime ? `${startDate}T${startTime}:00` : startDate;
-            if (endDate) params.endDate = endTime ? `${endDate}T${endTime}:00` : endDate;
-
-            const [ledgerRes, customerRes] = await Promise.all([
-                getCustomerLedger(id, params),
-                getCustomer(id),
-            ]);
-
-            setLedgerData(ledgerRes.data);
-            setCustomer(customerRes.data);
+            const data = await loadStatement(id, { ...statementParams, page: pageNum });
+            if (import.meta.env.DEV && data?.period?.preset === 'sinceZero'
+                && Math.abs((data.period.closingBalance || 0) - (data.summary?.amountDue || 0)) > 0.005) {
+                console.warn('[statement] since-last-zero closing', data.period.closingBalance, '≠ amount due', data.summary?.amountDue);
+            }
+            setStatement(data);
+            setExpandedRow(null);
+            if (tableScrollRef.current) tableScrollRef.current.scrollTop = 0;
         } catch (err) {
-            console.error('Error fetching ledger:', err);
+            console.error('Error fetching statement:', err);
             setError(err.response?.data?.message || 'Failed to load ledger');
         } finally {
             setLoading(false);
         }
-    }, [id, startDate, endDate, startTime, endTime]);
+    }, [id, statementParams, customIncomplete]);
 
-    // Filters only change via an explicit preset click or the modal's Apply
-    // button now (never live-as-you-type), so a plain effect is enough.
     useEffect(() => {
-        fetchLedger();
-    }, [fetchLedger]);
+        fetchStatement(1);
+    }, [fetchStatement]);
 
-    // =========================================================================
-    // Filter modal handlers
-    // =========================================================================
+    const fetchPending = useCallback(async () => {
+        setLoadingPending(true);
+        try {
+            const data = await loadPendingBills(id, { sort: 'oldest' });
+            setPending(data);
+            return data;
+        } catch (err) {
+            appAlert(err.response?.data?.message || 'Failed to load unpaid bills');
+            return null;
+        } finally {
+            setLoadingPending(false);
+        }
+    }, [id]);
 
-    const openFilterModal = () => {
-        setDraftStartDate(startDate);
-        setDraftEndDate(endDate);
-        setDraftStartTime(startTime);
-        setDraftEndTime(endTime);
-        setShowFilterModal(true);
+    const refreshAll = () => {
+        fetchCustomer();
+        fetchStatement(statement?.pagination?.page || 1);
+        if (pending) fetchPending();
     };
 
-    const applyPreset = (preset) => {
-        const today = todayLocalDate();
-        if (preset === 'today') {
-            setStartDate(today);
-            setEndDate(today);
-        } else if (preset === 'week') {
-            const now = new Date();
-            const dayOfWeek = now.getDay();
-            const diffToMonday = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
-            const monday = new Date(now);
-            monday.setDate(now.getDate() - diffToMonday);
-            setStartDate(toLocalDateStr(monday));
-            setEndDate(today);
-        } else if (preset === 'month') {
-            const now = new Date();
-            setStartDate(toLocalDateStr(new Date(now.getFullYear(), now.getMonth(), 1)));
-            setEndDate(today);
-        } else {
-            setStartDate('');
-            setEndDate('');
-        }
-        setStartTime('');
-        setEndTime('');
-        setShowFilterModal(false);
+    const openPendingPanel = () => {
+        setShowPendingPanel(true);
+        fetchPending();
     };
 
-    const applyCustomRange = () => {
-        setStartDate(draftStartDate);
-        setEndDate(draftEndDate);
-        setStartTime(draftStartDate ? draftStartTime : '');
-        setEndTime(draftEndDate ? draftEndTime : '');
-        setShowFilterModal(false);
-    };
+    // Record Payment uses the backend's unpaid-bill list (no per-line summing here).
+    const outstandingBills = pending?.bills || [];
+    const totalOutstanding = pending?.totalDue || 0;
 
-    const clearDateFilter = () => {
-        setStartDate('');
-        setEndDate('');
-        setStartTime('');
-        setEndTime('');
-    };
-
-    const activeFilterLabel = useMemo(() => {
-        if (!startDate && !endDate) return null;
-        const today = todayLocalDate();
-        if (startDate === today && endDate === today && !startTime && !endTime) return 'Today';
-        const part = (d, t) => (d ? `${d}${t ? ' ' + t : ''}` : '…');
-        return `${part(startDate, startTime)} → ${part(endDate, endTime)}`;
-    }, [startDate, endDate, startTime, endTime]);
-
-    // =========================================================================
-    // Derived — filtered entries
-    // =========================================================================
-
-    const filteredEntries = useMemo(() => {
-        if (!ledgerData?.ledger) return [];
-        let entries = ledgerData.ledger;
-
-        if (typeFilter !== 'all') {
-            // A store-credit payment always comes with its CREDIT MOVED row; keep
-            // the pair together under Payments.
-            entries = entries.filter((e) => e.type === typeFilter
-                || (typeFilter === 'payment' && e.type === 'credit_transfer'));
-        }
-
-        if (searchQuery.trim()) {
-            const q = searchQuery.toLowerCase();
-            entries = entries.filter((e) =>
-                (e.description || '').toLowerCase().includes(q) ||
-                (e.notes || '').toLowerCase().includes(q) ||
-                (e.method || '').toLowerCase().includes(q) ||
-                String(e.billNumber || '').includes(q)
-            );
-        }
-
-        return entries;
-    }, [ledgerData, typeFilter, searchQuery]);
-
-    // What goes on the statement (PDF, print, totals): never cancelled bills.
-    const statementEntries = useMemo(
-        () => filteredEntries.filter((e) => e.type !== 'cancelled'),
-        [filteredEntries]
-    );
-    // Totals use real money only: a credit move (CREDIT MOVED + its store-credit
-    // payment) nets to zero and is reported separately.
-    const moneyEntries = useMemo(
-        () => statementEntries.filter((e) => e.type !== 'credit_transfer' && !e.fromCredit),
-        [statementEntries]
-    );
-    const creditMovedTotal = statementEntries
-        .filter((e) => e.type === 'credit_transfer')
-        .reduce((sum, e) => sum + (e.amount || e.debit || 0), 0);
-    const cancelledCount = ledgerData?.summary?.cancelledCount
-        ?? (ledgerData?.ledger || []).filter((e) => e.type === 'cancelled').length;
-
-    // Outstanding bills (for payment modal dropdown)
-    const outstandingBills = useMemo(() => {
-        if (!ledgerData?.ledger) return [];
-        // Aggregate per bill: how much was billed vs paid/returned
-        const billMap = new Map();
-        for (const e of ledgerData.ledger) {
-            if (!e.billId || e.type === 'cancelled') continue;
-            const key = String(e.billId);
-            if (!billMap.has(key)) {
-                billMap.set(key, {
-                    billId: e.billId,
-                    billNumber: e.billNumber,
-                    total: 0,
-                    credited: 0,
-                });
-            }
-            const entry = billMap.get(key);
-            // Due per bill = Σ debit − Σ credit. A credit move debits the source
-            // bill (back to 0) and credits the bill it paid, so both stay right.
-            entry.total += e.debit || 0;
-            entry.credited += e.credit || 0;
-        }
-        return Array.from(billMap.values())
-            .map((b) => ({ ...b, due: b.total - b.credited }))
-            .filter((b) => b.due > 0);
-    }, [ledgerData]);
-
-    // =========================================================================
-    // Handlers
-    // =========================================================================
-
-    const totalOutstanding = useMemo(
-        () => outstandingBills.reduce((sum, b) => sum + b.due, 0),
-        [outstandingBills]
-    );
-
-    const openPaymentModal = () => {
+    const openPaymentModal = async () => {
+        const data = await fetchPending();
+        if (!data) return;
         setPaymentMode('fifo');
         // Amount starts empty on purpose — staff kept saving the pre-filled total
         // outstanding instead of what the customer actually paid.
         setPaymentForm({
-            billId: outstandingBills[0]?.billId || '',
+            billId: data.bills?.[0]?.billId || '',
             amount: '',
             method: 'cash',
             note: '',
@@ -378,7 +343,8 @@ const CustomerLedger = () => {
                 });
             }
             setShowPaymentModal(false);
-            fetchLedger();
+            fetchStatement(statement?.pagination?.page || 1);
+            fetchPending();
             // Store credit is applied to unpaid bills before the payment — say so.
             const moves = res?.data?.creditSettlement || [];
             if (moves.length > 0) {
@@ -395,215 +361,73 @@ const CustomerLedger = () => {
         }
     };
 
-    const downloadPdf = () => {
-        if (!ledgerData) return;
-        const { summary } = ledgerData;
-        const currency = business?.currency || 'PKR';
-        const fmt = (v) => Number(v || 0).toLocaleString();
-
-        const dateRange = startDate || endDate
-            ? `${startDate ? startDate + (startTime ? ' ' + startTime : '') : 'Start'} — ${endDate ? endDate + (endTime ? ' ' + endTime : '') : 'Today'}`
-            : 'All Time';
-
-        const balanceLabel = (summary.currentBalance || 0) < 0 ? 'Store Credit' : 'Balance Due';
-        const balanceColor = (summary.currentBalance || 0) < 0 ? '#3b82f6' : '#ef4444';
-
-        const entryRows = statementEntries.map((e) => {
-            const d = new Date(e.date);
-            const typeLabel = e.type === 'bill' ? 'BILL' : e.type === 'payment' ? 'PAID' : e.type === 'return' ? 'RETURN' : e.type === 'opening_balance' ? 'OPENING' : e.type === 'credit_transfer' ? 'CREDIT MOVED' : e.type?.toUpperCase() || '';
-            const methodText = e.method === 'store_credit'
-                ? `STORE CREDIT${e.fromBillNumber ? ' (from Bill #' + e.fromBillNumber + ')' : ''}`
-                : e.method?.toUpperCase();
-            const typeColor = e.type === 'bill' ? '#f59e0b' : e.type === 'payment' ? '#10b981' : e.type === 'return' ? '#3b82f6' : '#64748b';
-            return `<tr>
-                <td style="padding:6px 8px;font-size:11px;border-bottom:1px solid #e2e8f0;">${d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}</td>
-                <td style="padding:6px 8px;font-size:11px;border-bottom:1px solid #e2e8f0;">${e.billNumber ? '#' + e.billNumber : '—'}</td>
-                <td style="padding:6px 8px;font-size:11px;border-bottom:1px solid #e2e8f0;"><span style="color:${typeColor};font-size:10px;font-weight:700;margin-right:6px;">${typeLabel}</span>${e.description}</td>
-                <td style="padding:6px 8px;font-size:11px;border-bottom:1px solid #e2e8f0;">${[methodText, e.receivedBy].filter(Boolean).join(' / ') || '—'}</td>
-                <td style="padding:6px 8px;font-size:11px;border-bottom:1px solid #e2e8f0;text-align:right;color:${e.type === 'credit_transfer' ? '#64748b' : '#ef4444'};font-weight:600;">${e.debit ? currency + ' ' + fmt(e.debit) : '—'}</td>
-                <td style="padding:6px 8px;font-size:11px;border-bottom:1px solid #e2e8f0;text-align:right;color:#10b981;font-weight:600;">${e.credit ? currency + ' ' + fmt(e.credit) : '—'}</td>
-                <td style="padding:6px 8px;font-size:11px;border-bottom:1px solid #e2e8f0;text-align:right;font-weight:700;">${currency} ${fmt(e.balance)}</td>
-            </tr>`;
-        }).join('');
-
-        // Refunds per bill (from the return ledger entries), so each bill card can
-        // show what was returned and the net after refund — not just the original.
-        const refundByBill = new Map();
-        for (const le of (ledgerData.ledger || [])) {
-            if (le.type === 'return' && le.billId) {
-                refundByBill.set(String(le.billId), (refundByBill.get(String(le.billId)) || 0) + (le.credit || 0));
-            }
-        }
-
-        // Per-bill line-item breakdown, shown after the main ledger table.
-        const billsWithItems = statementEntries.filter((e) => e.type === 'bill' && e.items && e.items.length > 0);
-        const billDetailsHtml = billsWithItems.map((e) => {
-            const d = new Date(e.date);
-            const refunded = refundByBill.get(String(e.billId)) || 0;
-            const itemRows = e.items.map((it, i) => {
-                const lineGross = (it.price || 0) * (it.qty || 0);
-                const lineDiscount = it.discountAmount || 0;
-                const lineTotal = it.itemTotal != null ? it.itemTotal : lineGross - lineDiscount;
-                return `<tr>
-                    <td style="padding:5px 8px;font-size:10px;border-bottom:1px solid #f1f5f9;">${i + 1}. ${it.name}${Number(it.returnedQty) > 0 ? `<span style="color:#dc2626;font-size:9px;"> (${it.returnedQty} returned)</span>` : ''}</td>
-                    <td style="padding:5px 8px;font-size:10px;border-bottom:1px solid #f1f5f9;text-align:center;">× ${it.qty}</td>
-                    <td style="padding:5px 8px;font-size:10px;border-bottom:1px solid #f1f5f9;text-align:right;">${currency} ${fmt(it.price)}</td>
-                    <td style="padding:5px 8px;font-size:10px;border-bottom:1px solid #f1f5f9;text-align:right;">${lineDiscount > 0 ? '− ' + currency + ' ' + fmt(lineDiscount) : '—'}</td>
-                    <td style="padding:5px 8px;font-size:10px;border-bottom:1px solid #f1f5f9;text-align:right;font-weight:700;">${currency} ${fmt(lineTotal)}</td>
-                </tr>`;
-            }).join('');
-
-            const discountTotal = e.totalDiscount || 0;
-            const taxTotal = e.totalTax || 0;
-
-            return `
-            <div style="margin-top:12px;border:1px solid #e2e8f0;border-radius:8px;overflow:hidden;page-break-inside:avoid;">
-                <div style="background:#f8fafc;padding:8px 12px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #e2e8f0;">
-                    <div style="font-size:11px;font-weight:700;">Bill #${e.billNumber} <span style="font-weight:400;color:#64748b;">— ${d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}</span></div>
-                    <div style="font-size:11px;font-weight:700;">${currency} ${fmt(e.debit)}</div>
-                </div>
-                <table style="width:100%;border-collapse:collapse;">
-                    <thead>
-                        <tr style="background:#fff;">
-                            <th style="padding:5px 8px;font-size:9px;text-align:left;font-weight:700;text-transform:uppercase;color:#94a3b8;border-bottom:1px solid #e2e8f0;">Item</th>
-                            <th style="padding:5px 8px;font-size:9px;text-align:center;font-weight:700;text-transform:uppercase;color:#94a3b8;border-bottom:1px solid #e2e8f0;">Qty</th>
-                            <th style="padding:5px 8px;font-size:9px;text-align:right;font-weight:700;text-transform:uppercase;color:#94a3b8;border-bottom:1px solid #e2e8f0;">Unit Price</th>
-                            <th style="padding:5px 8px;font-size:9px;text-align:right;font-weight:700;text-transform:uppercase;color:#94a3b8;border-bottom:1px solid #e2e8f0;">Discount</th>
-                            <th style="padding:5px 8px;font-size:9px;text-align:right;font-weight:700;text-transform:uppercase;color:#94a3b8;border-bottom:1px solid #e2e8f0;">Line Total</th>
-                        </tr>
-                    </thead>
-                    <tbody>${itemRows}</tbody>
-                </table>
-                ${(discountTotal > 0 || taxTotal > 0) ? `
-                <div style="padding:6px 12px;background:#fafafa;border-top:1px solid #f1f5f9;text-align:right;font-size:10px;color:#64748b;">
-                    ${taxTotal > 0 ? `Tax: ${currency} ${fmt(taxTotal)} &nbsp;&nbsp;` : ''}
-                    ${discountTotal > 0 ? `<span style="color:#d97706;">Saved: ${currency} ${fmt(discountTotal)}</span>` : ''}
-                </div>` : ''}
-                ${refunded > 0 ? `
-                <div style="padding:6px 12px;background:#fef2f2;border-top:1px solid #fecaca;text-align:right;font-size:11px;">
-                    <span style="color:#dc2626;">Total Refunded: − ${currency} ${fmt(refunded)}</span>
-                    &nbsp;&nbsp;<b>Net: ${currency} ${fmt((e.debit || 0) - refunded)}</b>
-                </div>` : ''}
-            </div>`;
-        }).join('');
-
-        const html = `
-        <div style="font-family:Arial,Helvetica,sans-serif;padding:20px 24px;color:#1e293b;background:#fff;width:100%;">
-            <!-- App Branding -->
-            <div style="text-align:center;margin-bottom:12px;">
-                <div style="font-size:13px;font-weight:800;letter-spacing:0.08em;color:#0f172a;">DESKTOP POS</div>
-                <div style="font-size:9px;color:#94a3b8;margin-top:2px;">
-                    Software by Ahmed Irfan &nbsp;•&nbsp; Phone: +923070019031 &nbsp;•&nbsp; WhatsApp: https://wa.me/923070019031
-                </div>
-            </div>
-            <hr style="border:none;border-top:1px solid #e2e8f0;margin-bottom:14px;" />
-
-            <!-- Header -->
-            <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:16px;">
-                <div>
-                    <h1 style="margin:0;font-size:22px;font-weight:700;">Customer Ledger Report</h1>
-                    <p style="margin:4px 0 0;font-size:12px;color:#64748b;">Generated: ${new Date().toLocaleString()} | Period: ${dateRange}</p>
-                </div>
-                ${business?.name ? `<div style="text-align:right;"><div style="font-size:14px;font-weight:700;">${business.name}</div>${business.phone ? `<div style="font-size:11px;color:#64748b;">${business.phone}</div>` : ''}</div>` : ''}
-            </div>
-
-            <!-- Customer Info -->
-            <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px 16px;margin-bottom:16px;">
-                <div style="font-size:16px;font-weight:700;margin-bottom:4px;">${customer?.name || 'Customer'}</div>
-                <div style="display:flex;gap:24px;font-size:11px;color:#64748b;">
-                    ${customer?.phone ? `<span>Phone: ${customer.phone}</span>` : ''}
-                    ${customer?.email ? `<span>Email: ${customer.email}</span>` : ''}
-                    ${customer?.address ? `<span>Address: ${customer.address}</span>` : ''}
-                </div>
-                <div style="display:flex;gap:24px;font-size:10px;color:#94a3b8;margin-top:2px;">
-                    ${customer?.creditLimit ? `<span>Credit Limit: ${currency} ${fmt(customer.creditLimit)}</span>` : ''}
-                    ${customer?.creditDays ? `<span>Credit Days: ${customer.creditDays}</span>` : ''}
-                </div>
-            </div>
-
-            <!-- Summary Cards -->
-            <div style="display:flex;gap:10px;margin-bottom:16px;">
-                <div style="flex:1;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px 14px;">
-                    <div style="font-size:10px;color:#64748b;text-transform:uppercase;font-weight:600;">Total Billed</div>
-                    <div style="font-size:16px;font-weight:700;margin-top:2px;">${currency} ${fmt(summary.totalBilled)}</div>
-                </div>
-                <div style="flex:1;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px 14px;">
-                    <div style="font-size:10px;color:#64748b;text-transform:uppercase;font-weight:600;">Total Paid</div>
-                    <div style="font-size:16px;font-weight:700;margin-top:2px;color:#10b981;">${currency} ${fmt(summary.totalPaid)}</div>
-                </div>
-                <div style="flex:1;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px 14px;">
-                    <div style="font-size:10px;color:#64748b;text-transform:uppercase;font-weight:600;">Returns</div>
-                    <div style="font-size:16px;font-weight:700;margin-top:2px;">${currency} ${fmt(summary.totalReturns)}</div>
-                </div>
-                <div style="flex:1;background:#fff5f5;border:1px solid #fecaca;border-radius:8px;padding:10px 14px;">
-                    <div style="font-size:10px;color:${balanceColor};text-transform:uppercase;font-weight:600;">${balanceLabel}</div>
-                    <div style="font-size:16px;font-weight:700;margin-top:2px;color:${balanceColor};">${currency} ${fmt(Math.abs(summary.currentBalance || 0))}</div>
-                </div>
-            </div>
-
-            <!-- Ledger Table -->
-            <table style="width:100%;border-collapse:collapse;border:1px solid #e2e8f0;border-radius:8px;overflow:hidden;">
-                <thead>
-                    <tr style="background:#f1f5f9;">
-                        <th style="padding:8px;font-size:10px;text-align:left;font-weight:700;text-transform:uppercase;color:#64748b;border-bottom:2px solid #e2e8f0;">Date</th>
-                        <th style="padding:8px;font-size:10px;text-align:left;font-weight:700;text-transform:uppercase;color:#64748b;border-bottom:2px solid #e2e8f0;">Voucher</th>
-                        <th style="padding:8px;font-size:10px;text-align:left;font-weight:700;text-transform:uppercase;color:#64748b;border-bottom:2px solid #e2e8f0;">Description</th>
-                        <th style="padding:8px;font-size:10px;text-align:left;font-weight:700;text-transform:uppercase;color:#64748b;border-bottom:2px solid #e2e8f0;">Method / By</th>
-                        <th style="padding:8px;font-size:10px;text-align:right;font-weight:700;text-transform:uppercase;color:#64748b;border-bottom:2px solid #e2e8f0;">Debit</th>
-                        <th style="padding:8px;font-size:10px;text-align:right;font-weight:700;text-transform:uppercase;color:#64748b;border-bottom:2px solid #e2e8f0;">Credit</th>
-                        <th style="padding:8px;font-size:10px;text-align:right;font-weight:700;text-transform:uppercase;color:#64748b;border-bottom:2px solid #e2e8f0;">Balance</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    ${entryRows}
-                </tbody>
-            </table>
-
-            ${billDetailsHtml ? `
-            <!-- Bill Details -->
-            <div style="margin-top:20px;">
-                <h2 style="margin:0 0 8px;font-size:14px;font-weight:700;">Bill Details</h2>
-                ${billDetailsHtml}
-            </div>` : ''}
-
-            <!-- Footer -->
-            <div style="margin-top:12px;font-size:10px;color:#94a3b8;text-align:center;">
-                Entries: ${statementEntries.length} | Bills: ${summary.billCount || 0}
-            </div>
-        </div>`;
-
-        const container = document.createElement('div');
-        container.style.cssText = 'position:fixed;top:-9999px;left:-9999px;';
-        container.innerHTML = html;
-        document.body.appendChild(container);
-
-        html2pdf()
-            .set({
-                margin: [8, 6, 8, 6],
-                filename: `ledger-${(customer?.name || 'customer').replace(/\s+/g, '_')}-${new Date().toISOString().slice(0, 10)}.pdf`,
-                image: { type: 'jpeg', quality: 0.98 },
-                html2canvas: { scale: 2, useCORS: true },
-                jsPDF: { unit: 'mm', format: 'a4', orientation: 'landscape' },
-                pagebreak: { mode: ['css', 'avoid-all'] },
-            })
-            .from(container.firstElementChild)
-            .save()
-            .then(() => document.body.removeChild(container))
-            .catch((err) => {
-                console.error('PDF download error:', err);
-                document.body.removeChild(container);
+    // Print / PDF: the selected period as a statement — every page of lines
+    // (cancelled bills excluded), opening and closing balance, all-time Amount Due.
+    const exportStatement = async (mode) => {
+        if (customIncomplete || exporting) return;
+        setExporting(true);
+        try {
+            const full = await loadFullStatement(id, statementParams);
+            const periodText = describePeriod(full.period, periodPreset);
+            const html = buildStatementHtml({
+                business,
+                customer,
+                statement: full,
+                currency: business?.currency || 'PKR',
+                periodText,
+                paged: mode === 'pdf',
             });
-    };
 
-    const handlePrint = () => {
-        window.print();
+            if (mode === 'pdf') {
+                const container = document.createElement('div');
+                // Fixed width so page breaks don't depend on the window size
+                container.style.cssText = `position:fixed;top:-9999px;left:-9999px;width:${STATEMENT_PDF_WIDTH}px;`;
+                container.innerHTML = html;
+                document.body.appendChild(container);
+                try {
+                    await html2pdf()
+                        .set({
+                            margin: [8, 6, 8, 6],
+                            filename: `statement-${(customer?.name || 'customer').replace(/\s+/g, '_')}-${periodText.replace(/[^a-z0-9]+/gi, '_')}.pdf`,
+                            image: { type: 'jpeg', quality: 0.98 },
+                            html2canvas: { scale: 2, useCORS: true },
+                            jsPDF: { unit: 'mm', format: 'a4', orientation: 'landscape' },
+                            // Pages are already split into tables (page-break-before);
+                            // only keep a single line from being cut in half.
+                            pagebreak: { mode: ['css'], avoid: 'tr' },
+                        })
+                        .from(container.firstElementChild)
+                        .save();
+                } finally {
+                    document.body.removeChild(container);
+                }
+            } else {
+                // Render the statement into the print-only block, then print.
+                setPrintHtml(html);
+                await new Promise((r) => setTimeout(r, 200));
+                if (window.electronAPI?.printPage) {
+                    const res = await window.electronAPI.printPage();
+                    if (res && res.success === false && res.failureReason && res.failureReason !== 'cancelled') {
+                        appAlert(res.failureReason, { title: 'Printing failed', danger: true });
+                    }
+                } else {
+                    window.print();
+                }
+                setPrintHtml('');
+            }
+        } catch (err) {
+            console.error('Statement export error:', err);
+            appAlert(err.response?.data?.message || 'Could not prepare the statement');
+        } finally {
+            setExporting(false);
+        }
     };
 
     // =========================================================================
     // Render
     // =========================================================================
 
-    if (loading && !ledgerData) {
+    if (loading && !statement) {
         return (
             <div className="h-full flex items-center justify-center bg-slate-50 dark:bg-d-bg">
                 <div className="flex flex-col items-center gap-4">
@@ -614,7 +438,7 @@ const CustomerLedger = () => {
         );
     }
 
-    if (error && !ledgerData) {
+    if (error && !statement) {
         return (
             <div className="h-full flex items-center justify-center bg-slate-50 dark:bg-d-bg">
                 <div className="flex flex-col items-center gap-4 text-center">
@@ -631,315 +455,290 @@ const CustomerLedger = () => {
         );
     }
 
-    const summary = ledgerData?.summary || {};
+    const summary = statement?.summary || {};
+    const period = statement?.period || {};
+    const entries = statement?.entries || [];
+    const pagination = statement?.pagination || {};
+    const amountDue = summary.amountDue || 0;
+
+    const openFilters = () => {
+        setDraft({ period: periodPreset, from: customFrom, to: customTo, type: typeFilter });
+        setOpenMenu((m) => (m === 'filters' ? null : 'filters'));
+    };
+    const draftIncomplete = draft.period === 'custom' && (!draft.from || !draft.to);
+    const applyFilters = () => {
+        if (draftIncomplete) return;
+        setPeriodPreset(draft.period);
+        setCustomFrom(draft.from);
+        setCustomTo(draft.to);
+        setTypeFilter(draft.type);
+        setOpenMenu(null);
+    };
+    const activeFilterCount = (periodPreset !== DEFAULT_PERIOD ? 1 : 0) + (typeFilter !== 'all' ? 1 : 0);
+    const periodLabel = periodPreset === 'custom'
+        ? (customIncomplete ? 'Custom dates' : formatDateRange(customFrom, customTo))
+        : (PERIOD_OPTIONS.find((o) => o.value === periodPreset)?.label || 'Today');
+    const typeLabel = TYPE_OPTIONS.find((o) => o.value === typeFilter)?.label || 'All';
 
     return (
-        <div className="h-full overflow-y-auto bg-slate-50 dark:bg-d-bg print:bg-white">
-            <div className="max-w-[1400px] mx-auto p-6 print:p-0">
-                {/* Header */}
-                <div className="flex items-center justify-between mb-6 print:hidden">
-                    <div className="flex items-center gap-3">
-                        <button
-                            onClick={() => navigate('/customers')}
-                            className="p-2 text-slate-500 dark:text-d-muted hover:bg-slate-100 dark:hover:bg-d-glass rounded-lg transition-colors"
-                            title="Back"
-                        >
-                            <FiArrowLeft size={20} />
+        <div className="h-full overflow-y-auto bg-slate-50 dark:bg-d-bg print:bg-white print:h-auto print:overflow-visible">
+            {/* Print-only statement (filled just before printing) */}
+            {printHtml && <div className="hidden print:block" dangerouslySetInnerHTML={{ __html: printHtml }} />}
+            <div className="max-w-[1400px] mx-auto p-6 print:hidden">
+                {/* Header — the customer is the title */}
+                <div className="flex flex-wrap items-center justify-between gap-4 mb-5">
+                    <div className="flex items-center gap-3.5 min-w-0">
+                        <button onClick={() => navigate('/customers')} title="Back to customers" aria-label="Back to customers" className="h-9 w-9 flex items-center justify-center rounded-[10px] border border-slate-200 dark:border-d-border text-slate-500 dark:text-d-muted hover:text-slate-900 dark:hover:text-d-text hover:bg-slate-50 dark:hover:bg-d-glass disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
+                            <FiArrowLeft size={16} />
                         </button>
-                        <div>
-                            <h1 className="text-2xl font-bold text-slate-800 dark:text-d-heading">
-                                Customer Ledger
-                            </h1>
-                            <p className="text-sm text-slate-500 dark:text-d-muted">
-                                Complete account statement and transaction history
+                        <div className="w-10 h-10 shrink-0 rounded-[10px] bg-amber-400 dark:bg-d-accent text-slate-900 dark:text-d-bg flex items-center justify-center text-[17px] font-bold">
+                            {(customer?.name || '?').charAt(0).toUpperCase()}
+                        </div>
+                        <div className="min-w-0">
+                            <h1 className="text-xl font-semibold tracking-tight text-slate-900 dark:text-d-heading truncate">{customer?.name || 'Customer'}</h1>
+                            <p className="mt-0.5 text-[13px] text-slate-500 dark:text-d-muted truncate">
+                                {[
+                                    customer?.phone,
+                                    customer?.email,
+                                    customer?.address,
+                                    customer?.lastPurchase && `Last purchase ${new Date(customer.lastPurchase).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}`,
+                                    customer?.creditLimit ? `Credit limit ${formatCurrency(customer.creditLimit)}` : null,
+                                    customer?.creditDays ? `${customer.creditDays} credit days` : null,
+                                ].filter(Boolean).join('  ·  ')}
                             </p>
                         </div>
                     </div>
                     <div className="flex items-center gap-2">
-                        <button
-                            onClick={fetchLedger}
-                            className="p-2.5 text-slate-500 dark:text-d-muted hover:bg-slate-100 dark:hover:bg-d-glass rounded-xl transition-colors"
-                            title="Refresh"
-                        >
-                            <FiRefreshCw size={17} />
+                        <button onClick={refreshAll} title="Refresh" aria-label="Refresh" className="h-9 w-9 flex items-center justify-center rounded-[10px] border border-slate-200 dark:border-d-border text-slate-500 dark:text-d-muted hover:text-slate-900 dark:hover:text-d-text hover:bg-slate-50 dark:hover:bg-d-glass disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
+                            <FiRefreshCw size={15} className={loading ? 'animate-spin' : ''} />
                         </button>
-                        <button
-                            onClick={handlePrint}
-                            className="flex items-center gap-2 px-3 py-2.5 bg-white dark:bg-d-card border border-slate-200 dark:border-d-border text-slate-700 dark:text-d-text rounded-xl text-sm font-medium hover:bg-slate-50 dark:hover:bg-d-glass transition-colors"
-                        >
+                        <button onClick={() => exportStatement('print')} disabled={exporting || customIncomplete} title="Print the selected period as a statement" aria-label="Print statement" className="h-9 w-9 flex items-center justify-center rounded-[10px] border border-slate-200 dark:border-d-border text-slate-500 dark:text-d-muted hover:text-slate-900 dark:hover:text-d-text hover:bg-slate-50 dark:hover:bg-d-glass disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
                             <FiPrinter size={15} />
-                            Print
                         </button>
-                        <button
-                            onClick={downloadPdf}
-                            className="flex items-center gap-2 px-3 py-2.5 bg-white dark:bg-d-card border border-slate-200 dark:border-d-border text-slate-700 dark:text-d-text rounded-xl text-sm font-medium hover:bg-slate-50 dark:hover:bg-d-glass transition-colors"
-                        >
-                            <FiDownload size={15} />
-                            Download PDF
+                        <button onClick={() => exportStatement('pdf')} disabled={exporting || customIncomplete} title="Download the selected period as a PDF" aria-label="Download PDF" className="h-9 w-9 flex items-center justify-center rounded-[10px] border border-slate-200 dark:border-d-border text-slate-500 dark:text-d-muted hover:text-slate-900 dark:hover:text-d-text hover:bg-slate-50 dark:hover:bg-d-glass disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
+                            {exporting ? <FiRefreshCw size={15} className="animate-spin" /> : <FiDownload size={15} />}
                         </button>
                         <button
                             onClick={openPaymentModal}
-                            disabled={outstandingBills.length === 0}
-                            className="flex items-center gap-2 px-4 py-2.5 bg-emerald-500 dark:bg-d-green text-white dark:text-d-card rounded-xl text-sm font-semibold hover:bg-emerald-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                            disabled={amountDue <= 0 || loadingPending}
+                            className="h-9 flex items-center gap-1.5 px-3.5 bg-emerald-500 hover:bg-emerald-600 dark:bg-d-green dark:hover:brightness-110 text-white dark:text-d-bg rounded-[10px] text-sm font-semibold disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
                         >
-                            <FiPlus size={15} />
-                            Record Payment
+                            <FiPlus size={15} strokeWidth={2.5} />
+                            Record payment
                         </button>
                     </div>
                 </div>
 
-                {/* Customer Info Card */}
-                <div className="bg-white dark:bg-d-card border border-slate-100 dark:border-d-border rounded-2xl p-6 mb-4 shadow-sm">
-                    <div className="flex items-start justify-between flex-wrap gap-4">
-                        <div className="flex items-start gap-4">
-                            <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-primary-400 to-primary-600 dark:from-d-accent dark:to-d-accent-s flex items-center justify-center text-white dark:text-d-card text-2xl font-bold">
-                                {(customer?.name || '?').charAt(0).toUpperCase()}
-                            </div>
-                            <div>
-                                <h2 className="text-2xl font-bold text-slate-800 dark:text-d-heading">
-                                    {customer?.name}
-                                </h2>
-                                <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-2 text-sm text-slate-500 dark:text-d-muted">
-                                    {customer?.phone && (
-                                        <span className="flex items-center gap-1.5">
-                                            <FiPhone size={13} /> {customer.phone}
-                                        </span>
-                                    )}
-                                    {customer?.email && (
-                                        <span className="flex items-center gap-1.5">
-                                            <FiMail size={13} /> {customer.email}
-                                        </span>
-                                    )}
-                                    {customer?.address && (
-                                        <span className="flex items-center gap-1.5">
-                                            <FiMapPin size={13} /> {customer.address}
-                                        </span>
-                                    )}
-                                </div>
-                                <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-1 text-xs text-slate-400 dark:text-d-faint">
-                                    {!!customer?.creditLimit && (
-                                        <span>Credit limit: {formatCurrency(customer.creditLimit)}</span>
-                                    )}
-                                    {!!customer?.creditDays && (
-                                        <span>Credit days: {customer.creditDays}</span>
-                                    )}
-                                    {customer?.lastPurchase && (
-                                        <span>Last purchase: {new Date(customer.lastPurchase).toLocaleDateString()}</span>
-                                    )}
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-                {/* Summary Strip */}
-                <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-4">
-                    <SummaryCard
-                        icon={<FiTrendingUp />}
-                        label="Total Billed"
-                        value={formatCurrency(summary.totalBilled || 0)}
-                        tone="slate"
-                    />
-                    <SummaryCard
-                        icon={<FiTrendingDown />}
-                        label="Total Paid"
-                        value={formatCurrency(summary.totalPaid || 0)}
-                        tone="emerald"
-                    />
-                    <SummaryCard
-                        icon={<FiRefreshCw />}
-                        label="Returns"
-                        value={formatCurrency(summary.totalReturns || 0)}
-                        tone="amber"
-                    />
-                    <SummaryCard
-                        icon={<FiFileText />}
-                        label="Total Bills"
-                        value={summary.billCount || 0}
-                        tone="slate"
-                    />
-                    <SummaryCard
-                        icon={<FiAlertCircle />}
-                        label={
-                            (summary.currentBalance || 0) < 0
-                                ? 'Store Credit'
-                                : (summary.currentBalance || 0) > 0
-                                    ? 'Amount Due'
-                                    : 'Current Balance'
-                        }
-                        value={formatCurrency(Math.abs(summary.currentBalance || 0))}
-                        tone={(summary.currentBalance || 0) > 0 ? 'red' : 'emerald'}
-                        highlight
+                {/* Summary — one box, five all-time figures (never change with filters) */}
+                <div className="grid grid-cols-2 md:grid-cols-5 mb-5 bg-white dark:bg-d-card border border-slate-200 dark:border-d-border rounded-2xl overflow-hidden divide-y md:divide-y-0 md:divide-x divide-slate-200 dark:divide-d-border">
+                    <SummaryFigure label="Total billed" value={formatCurrency(summary.totalBilled || 0)} />
+                    <SummaryFigure label="Total paid" value={formatCurrency(summary.totalPaid || 0)} tone="green" />
+                    <SummaryFigure label="Returns" value={formatCurrency(summary.totalReturns || 0)} tone="amber" />
+                    <SummaryFigure label="Bills" value={(summary.totalBills || 0).toLocaleString()} />
+                    <SummaryFigure
+                        label={amountDue < 0 ? 'Store credit' : 'Amount due'}
+                        value={formatCurrency(Math.abs(amountDue))}
+                        tone={amountDue > 0 ? 'red' : amountDue < 0 ? 'green' : undefined}
+                        tinted={amountDue !== 0}
+                        action={amountDue !== 0 ? 'View bills' : undefined}
+                        onClick={openPendingPanel}
                     />
                 </div>
 
-                {/* Ledger | Special Rates */}
-                <div className="flex items-center gap-1 bg-white dark:bg-d-card rounded-xl p-1 border border-slate-100 dark:border-d-border mb-4 w-fit print:hidden">
-                    {[
-                        { id: 'ledger', label: 'Ledger' },
-                        { id: 'rates', label: 'Special Rates' },
-                    ].map((t) => (
-                        <button
-                            key={t.id}
-                            type="button"
-                            onClick={() => setPageTab(t.id)}
-                            className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-colors ${
-                                pageTab === t.id
-                                    ? 'bg-primary-50 dark:bg-[rgba(124,131,253,0.12)] text-primary-600 dark:text-d-accent'
-                                    : 'text-slate-500 dark:text-d-muted hover:text-slate-700 dark:hover:text-d-text'
-                            }`}
-                        >
-                            {t.label}
-                        </button>
-                    ))}
-                </div>
-
-                {pageTab === 'rates' && (
-                    <div className="bg-white dark:bg-d-card border border-slate-100 dark:border-d-border rounded-2xl p-6 mb-4 shadow-sm max-w-3xl print:hidden">
-                        {ratesLoading && ratesOriginal === null ? (
-                            <div className="py-8 text-center text-sm text-slate-400 dark:text-d-faint">Loading special rates…</div>
-                        ) : (
-                            <>
-                                {!canSaveRates && (
-                                    <p className="text-xs text-amber-600 dark:text-d-accent mb-3">You don't have permission to change customer rates.</p>
-                                )}
-                                <SpecialRatesEditor
-                                    value={ratesDraft}
-                                    onChange={setRatesDraft}
-                                    products={rateProducts}
-                                    readOnly={!canSaveRates}
-                                    allowSellBelowCost={business?.settings?.allowSellBelowCost === true}
-                                />
-                                {canSaveRates && (
-                                    <div className="flex items-center justify-end gap-3 pt-4 mt-4 border-t border-slate-100 dark:border-d-border">
-                                        <button
-                                            type="button"
-                                            disabled={!ratesDirty || savingRates}
-                                            onClick={() => setRatesDraft(ratesLoaded)}
-                                            className="px-4 py-2.5 text-slate-600 dark:text-d-text hover:bg-slate-100 dark:hover:bg-d-glass-hover rounded-xl font-medium transition-colors disabled:opacity-50"
-                                        >
-                                            Discard changes
-                                        </button>
-                                        <button
-                                            type="button"
-                                            disabled={!ratesDirty || savingRates}
-                                            onClick={saveRates}
-                                            className="px-5 py-2.5 bg-primary-500 dark:bg-d-accent text-white dark:text-d-card rounded-xl font-medium hover:bg-primary-600 dark:hover:bg-d-accent-s transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                                        >
-                                            {savingRates ? 'Saving...' : 'Save rates'}
-                                        </button>
-                                    </div>
-                                )}
-                            </>
-                        )}
-                    </div>
-                )}
-
-                {pageTab === 'ledger' && (<>
-                {/* Filters */}
-                <div className="bg-white dark:bg-d-card border border-slate-100 dark:border-d-border rounded-2xl p-4 mb-4 shadow-sm print:hidden">
-                    <div className="flex flex-wrap items-center gap-3">
-                        <div className="flex items-center gap-2">
-                            <button
-                                onClick={openFilterModal}
-                                className={`flex items-center gap-2 px-3 py-2 rounded-xl text-sm font-medium border transition-colors ${
-                                    activeFilterLabel
-                                        ? 'bg-primary-50 dark:bg-[rgba(124,131,253,0.12)] border-primary-200 dark:border-d-accent/50 text-primary-600 dark:text-d-accent'
-                                        : 'bg-slate-50 dark:bg-d-bg border-slate-200 dark:border-d-border text-slate-600 dark:text-d-text hover:bg-slate-100 dark:hover:bg-d-glass'
-                                }`}
-                            >
-                                <FiFilter size={14} />
-                                Filter
-                            </button>
-
-                            {activeFilterLabel && (
-                                <div className="flex items-center gap-1.5 pl-3 pr-2 py-2 bg-slate-50 dark:bg-d-bg border border-slate-200 dark:border-d-border rounded-xl text-xs text-slate-600 dark:text-d-text">
-                                    <FiCalendar size={12} className="text-slate-400 dark:text-d-faint shrink-0" />
-                                    {activeFilterLabel}
-                                    <button
-                                        onClick={clearDateFilter}
-                                        className="text-slate-400 hover:text-slate-600 dark:hover:text-d-text"
-                                        title="Clear date filter"
-                                    >
-                                        <FiX size={13} />
-                                    </button>
-                                </div>
-                            )}
-
-                            {loading && ledgerData && (
-                                <FiRefreshCw size={14} className="text-slate-400 dark:text-d-faint animate-spin" />
-                            )}
-                        </div>
-
-                        <div className="flex items-center gap-1 bg-slate-50 dark:bg-d-bg rounded-xl p-1 border border-slate-200 dark:border-d-border">
+                {/* Ledger — one box: tabs + tools, period line, table, pages */}
+                <div className="bg-white dark:bg-d-card border border-slate-200 dark:border-d-border rounded-2xl">
+                    <div ref={filterMenuRef} className="flex flex-wrap items-center justify-between gap-3 px-4 border-b border-slate-200 dark:border-d-border print:hidden">
+                        <div className="flex gap-6">
                             {[
-                                { id: 'all', label: 'All' },
-                                { id: 'bill', label: 'Bills' },
-                                { id: 'payment', label: 'Payments' },
-                                { id: 'return', label: 'Returns' },
-                                ...(cancelledCount > 0 ? [{ id: 'cancelled', label: 'Cancelled' }] : []),
-                            ].map((f) => (
+                                { id: 'ledger', label: 'Ledger' },
+                                { id: 'rates', label: 'Special rates' },
+                            ].map((t) => (
                                 <button
-                                    key={f.id}
-                                    onClick={() => setTypeFilter(f.id)}
-                                    className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-                                        typeFilter === f.id
-                                            ? 'bg-primary-500 dark:bg-d-accent text-white dark:text-d-card'
-                                            : 'text-slate-600 dark:text-d-muted hover:bg-slate-100 dark:hover:bg-d-glass'
+                                    key={t.id}
+                                    type="button"
+                                    onClick={() => setPageTab(t.id)}
+                                    className={`-mb-px pt-4 pb-3.5 text-sm border-b-2 transition-colors ${
+                                        pageTab === t.id
+                                            ? 'border-amber-500 dark:border-d-accent text-slate-900 dark:text-d-heading font-semibold'
+                                            : 'border-transparent text-slate-500 dark:text-d-muted hover:text-slate-800 dark:hover:text-d-text font-medium'
                                     }`}
                                 >
-                                    {f.label}
+                                    {t.label}
                                 </button>
                             ))}
                         </div>
-
-                        <div className="relative flex-1 min-w-[200px]">
-                            <FiSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 dark:text-d-faint" size={14} />
-                            <input
-                                type="text"
-                                value={searchQuery}
-                                onChange={(e) => setSearchQuery(e.target.value)}
-                                placeholder="Search by bill #, description, method, note..."
-                                className="w-full pl-9 pr-3 py-2 bg-slate-50 dark:bg-d-bg border border-slate-200 dark:border-d-border rounded-xl text-sm text-slate-700 dark:text-d-text placeholder-slate-400 focus:outline-none focus:border-primary-300"
-                            />
-                        </div>
-
-                        <div className="text-xs text-slate-500 dark:text-d-muted ml-auto text-right">
-                            {filteredEntries.length} of {ledgerData?.ledger?.length || 0} entries
-                            {cancelledCount > 0 && (
-                                <div className="text-[11px] text-slate-400 dark:text-d-faint">
-                                    {cancelledCount} cancelled bill{cancelledCount === 1 ? '' : 's'} hidden from the statement
+                        {pageTab === 'ledger' && (
+                            <div className="relative flex items-center gap-2 py-2.5">
+                                <div className="relative">
+                                    <FiSearch className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 dark:text-d-muted" size={14} />
+                                    <input
+                                        type="text"
+                                        inputMode="numeric"
+                                        value={searchInput}
+                                        onChange={(e) => setSearchInput(e.target.value)}
+                                        placeholder="Search bill number"
+                                        aria-label="Search bill number"
+                                        className="w-56 h-[34px] pl-8 pr-3 bg-slate-50 dark:bg-d-bg border border-slate-200 dark:border-d-border rounded-[9px] text-[13px] text-slate-700 dark:text-d-text placeholder-slate-400 dark:placeholder-d-muted focus:outline-none focus:border-amber-400 dark:focus:border-d-border-hover"
+                                    />
                                 </div>
+                                <button
+                                    type="button"
+                                    onClick={openFilters}
+                                    title="Filters"
+                                    aria-label={`Filters${activeFilterCount ? ` (${activeFilterCount} active)` : ''}`}
+                                    className={`relative h-[34px] w-[34px] flex items-center justify-center rounded-[9px] border transition-colors ${
+                                        activeFilterCount || openMenu === 'filters'
+                                            ? 'bg-amber-50 border-amber-300 text-amber-600 dark:bg-[rgba(255,210,100,0.1)] dark:border-[rgba(255,210,100,0.35)] dark:text-d-accent'
+                                            : 'border-slate-200 dark:border-d-border text-slate-500 dark:text-d-muted hover:text-slate-900 dark:hover:text-d-text'
+                                    }`}
+                                >
+                                    <FiFilter size={15} />
+                                    {activeFilterCount > 0 && (
+                                        <span className="absolute -top-1.5 -right-1.5 min-w-[16px] h-4 px-1 rounded-full bg-amber-500 dark:bg-d-accent text-white dark:text-d-bg text-[10px] font-bold flex items-center justify-center">
+                                            {activeFilterCount}
+                                        </span>
+                                    )}
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => setSortOrder(sortOrder === 'oldest' ? 'newest' : 'oldest')}
+                                    title={sortOrder === 'oldest' ? 'Oldest first — click for newest first' : 'Newest first — click for oldest first'}
+                                    aria-label={sortOrder === 'oldest' ? 'Sort: oldest first' : 'Sort: newest first'}
+                                    className={`h-[34px] w-[34px] flex items-center justify-center rounded-[9px] border transition-colors ${
+                                        sortOrder === 'newest'
+                                            ? 'bg-amber-50 border-amber-300 text-amber-600 dark:bg-[rgba(255,210,100,0.1)] dark:border-[rgba(255,210,100,0.35)] dark:text-d-accent'
+                                            : 'border-slate-200 dark:border-d-border text-slate-500 dark:text-d-muted hover:text-slate-900 dark:hover:text-d-text'
+                                    }`}
+                                >
+                                    <SortIcon newestFirst={sortOrder === 'newest'} />
+                                </button>
+
+                                {openMenu === 'filters' && (
+                                    <FilterMenu
+                                        draft={draft}
+                                        setDraft={setDraft}
+                                        incomplete={draftIncomplete}
+                                        onApply={applyFilters}
+                                        onReset={() => setDraft({ period: DEFAULT_PERIOD, from: '', to: '', type: 'all' })}
+                                    />
+                                )}
+                            </div>
+                        )}
+                    </div>
+
+                    {pageTab === 'rates' && (
+                        <div className="p-6 max-w-3xl print:hidden">
+                            {ratesLoading && ratesOriginal === null ? (
+                                <div className="py-8 text-center text-sm text-slate-400 dark:text-d-faint">Loading special rates…</div>
+                            ) : (
+                                <>
+                                    {!canSaveRates && (
+                                        <p className="text-xs text-amber-600 dark:text-d-accent mb-3">You don't have permission to change customer rates.</p>
+                                    )}
+                                    <SpecialRatesEditor
+                                        value={ratesDraft}
+                                        onChange={setRatesDraft}
+                                        products={rateProducts}
+                                        readOnly={!canSaveRates}
+                                        allowSellBelowCost={business?.settings?.allowSellBelowCost === true}
+                                    />
+                                    {canSaveRates && (
+                                        <div className="flex items-center justify-end gap-3 pt-4 mt-4 border-t border-slate-100 dark:border-d-border">
+                                            <button
+                                                type="button"
+                                                disabled={!ratesDirty || savingRates}
+                                                onClick={() => setRatesDraft(ratesLoaded)}
+                                                className="px-4 py-2.5 text-slate-600 dark:text-d-text hover:bg-slate-100 dark:hover:bg-d-glass-hover rounded-xl font-medium transition-colors disabled:opacity-50"
+                                            >
+                                                Discard changes
+                                            </button>
+                                            <button
+                                                type="button"
+                                                disabled={!ratesDirty || savingRates}
+                                                onClick={saveRates}
+                                                className="px-5 py-2.5 bg-primary-500 dark:bg-d-accent text-white dark:text-d-card rounded-xl font-medium hover:bg-primary-600 dark:hover:bg-d-accent-s transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                                            >
+                                                {savingRates ? 'Saving...' : 'Save rates'}
+                                            </button>
+                                        </div>
+                                    )}
+                                </>
                             )}
                         </div>
+                    )}
+
+                {pageTab === 'ledger' && (<>
+                {/* Period line — the active filters as chips, then the period figures.
+                    Opening/closing are for the whole period, whatever the type/search filter. */}
+                <div className="flex flex-wrap items-center gap-x-5 gap-y-2 px-4 py-2.5 border-b border-slate-200 dark:border-d-border text-[13px] text-slate-500 dark:text-d-muted">
+                    <div className="flex flex-wrap items-center gap-2">
+                        <FilterChip
+                            icon={<FiCalendar size={12} />}
+                            label={periodPreset === 'custom' || periodPreset === 'all' ? periodLabel : describePeriod(period, periodPreset)}
+                            onClear={periodPreset !== DEFAULT_PERIOD ? () => setPeriodPreset(DEFAULT_PERIOD) : undefined}
+                            clearLabel="Back to since last zero"
+                        />
+                        {typeFilter !== 'all' && (
+                            <FilterChip label={typeLabel} onClear={() => setTypeFilter('all')} clearLabel="Show all types" />
+                        )}
+                        {typeFilter !== 'cancelled' && period.cancelledCount > 0 && (
+                            <button onClick={() => setTypeFilter('cancelled')} className="text-xs hover:text-slate-800 dark:hover:text-d-text">
+                                {period.cancelledCount} cancelled hidden · <span className="underline underline-offset-2">show</span>
+                            </button>
+                        )}
                     </div>
+                    <span className="tabular-nums">Opening <BalanceText value={period.openingBalance} currency={currency} /></span>
+                    <span className="tabular-nums">Bills <b className="font-semibold text-red-600 dark:text-d-red">+{formatNumber(period.bills)}</b></span>
+                    <span className="tabular-nums">Paid <b className="font-semibold text-emerald-600 dark:text-d-green">−{formatNumber(period.payments)}</b></span>
+                    <span className="tabular-nums">Returns <b className="font-semibold text-amber-600 dark:text-d-accent">−{formatNumber(period.returns)}</b></span>
+                    <span className="tabular-nums ml-auto">Closing <BalanceText value={period.closingBalance} currency={currency} strong /></span>
+                    {period.sinceZero && describeSinceZero(period.sinceZero) && (
+                        <span className="w-full text-xs text-slate-400 dark:text-d-muted">
+                            {describeSinceZero(period.sinceZero)}
+                        </span>
+                    )}
+                    {statement?.legacy && (
+                        <span className="w-full text-[11px]" title="The statement API isn't available on this server yet">
+                            Using the older ledger API
+                        </span>
+                    )}
                 </div>
 
                 {/* Ledger Table */}
-                <div className="bg-white dark:bg-d-card border border-slate-100 dark:border-d-border rounded-2xl shadow-sm overflow-hidden">
-                    {filteredEntries.length === 0 ? (
-                        <div className="flex flex-col items-center justify-center py-20 text-slate-400 dark:text-d-faint">
-                            <FiFileText size={48} />
-                            <p className="mt-4 text-base">No entries found</p>
-                            <p className="text-xs mt-1">Try adjusting your filters</p>
+                <div>
+                    {entries.length === 0 ? (
+                        <div className="flex flex-col items-center justify-center py-14 text-center">
+                            <div className="w-10 h-10 rounded-full bg-slate-100 dark:bg-d-glass flex items-center justify-center text-slate-400 dark:text-d-muted">
+                                <FiFileText size={18} />
+                            </div>
+                            <p className="mt-3 text-sm font-medium text-slate-700 dark:text-d-text">No transactions in this period</p>
+                            <p className="mt-0.5 text-[13px] text-slate-500 dark:text-d-muted">
+                                {typeFilter !== 'all' || searchQuery ? 'Try another type or clear the search.' : 'Pick another period from the filter menu.'}
+                            </p>
                         </div>
                     ) : (
-                        <div className="overflow-x-auto">
+                        <>
+                        {/* Lines scroll inside the card; the heading row stays on top.
+                            Fills the window height, never shorter than 320px. */}
+                        <div
+                            ref={tableScrollRef}
+                            className={`overflow-auto min-h-[320px] max-h-[calc(100vh-240px)] transition-opacity ${loading ? 'opacity-60' : ''}`}
+                        >
                             <table className="w-full text-sm">
-                                <thead className="bg-slate-50 dark:bg-d-glass">
+                                <thead className="sticky top-0 z-10 bg-slate-50 dark:bg-d-elevated">
                                     <tr>
                                         <th className="w-8"></th>
-                                        <th className="text-left py-3 px-4 font-medium text-slate-600 dark:text-d-muted whitespace-nowrap">Date</th>
-                                        <th className="text-left py-3 px-4 font-medium text-slate-600 dark:text-d-muted whitespace-nowrap">Voucher</th>
-                                        <th className="text-left py-3 px-4 font-medium text-slate-600 dark:text-d-muted">Description</th>
-                                        <th className="text-left py-3 px-4 font-medium text-slate-600 dark:text-d-muted whitespace-nowrap">Method / By</th>
-                                        <th className="text-right py-3 px-4 font-medium text-slate-600 dark:text-d-muted whitespace-nowrap">Debit</th>
-                                        <th className="text-right py-3 px-4 font-medium text-slate-600 dark:text-d-muted whitespace-nowrap">Credit</th>
-                                        <th className="text-right py-3 px-4 font-medium text-slate-600 dark:text-d-muted whitespace-nowrap">Balance</th>
+                                        <th className={TH}>Date</th>
+                                        <th className={TH}>Bill</th>
+                                        <th className={TH}>Description</th>
+                                        <th className={TH}>Method</th>
+                                        <th className={`${TH} text-right`}>Debit</th>
+                                        <th className={`${TH} text-right`}>Credit</th>
+                                        <th className={`${TH} text-right`}>Balance</th>
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    {filteredEntries.map((entry, idx) => {
+                                    {entries.map((entry, idx) => {
                                         const isExpanded = expandedRow === idx;
                                         const hasDetails =
                                             (entry.items && entry.items.length > 0) ||
@@ -950,10 +749,10 @@ const CustomerLedger = () => {
                                         // amounts, balance unaffected, and never printed.
                                         const isCancelled = entry.type === 'cancelled';
                                         return (
-                                            <React.Fragment key={idx}>
+                                            <React.Fragment key={entry.id || idx}>
                                                 <tr
                                                     onClick={() => hasDetails && setExpandedRow(isExpanded ? null : idx)}
-                                                    className={`border-t border-slate-100 dark:border-d-border hover:bg-slate-50 dark:hover:bg-[rgba(255,255,255,0.02)] transition-colors ${
+                                                    className={`border-t border-slate-100 dark:border-white/[0.06] hover:bg-slate-50/70 dark:hover:bg-white/[0.02] transition-colors ${
                                                         hasDetails ? 'cursor-pointer' : ''
                                                     } ${isCancelled ? 'opacity-60 print:hidden' : ''}`}
                                                 >
@@ -965,26 +764,25 @@ const CustomerLedger = () => {
                                                                 <FiChevronRight size={14} className="text-slate-400 mx-auto" />
                                                             ))}
                                                     </td>
-                                                    <td className="py-3 px-4 text-slate-600 dark:text-d-text whitespace-nowrap">
-                                                        <div className="font-medium">{d.toLocaleDateString()}</div>
-                                                        <div className="text-[10px] text-slate-400 dark:text-d-faint">
+                                                    <td className="py-3 px-4 whitespace-nowrap tabular-nums text-slate-800 dark:text-d-text">
+                                                        {d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}
+                                                        <span className="ml-1.5 text-xs text-slate-400 dark:text-d-muted">
                                                             {d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                                                        </div>
+                                                        </span>
                                                     </td>
-                                                    <td className="py-3 px-4 whitespace-nowrap">
-                                                        {entry.billNumber && (
-                                                            <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-mono bg-slate-100 dark:bg-d-glass text-slate-600 dark:text-d-muted">
-                                                                #{entry.billNumber}
-                                                            </span>
-                                                        )}
+                                                    <td className="py-3 px-4 whitespace-nowrap tabular-nums text-slate-500 dark:text-d-muted">
+                                                        {entry.billNumber ? `#${entry.billNumber}` : ''}
                                                     </td>
                                                     <td className="py-3 px-4">
                                                         <div className="flex items-center gap-2">
                                                             <TypeBadge type={entry.type} />
-                                                            <span className={isCancelled ? 'text-slate-500 dark:text-d-muted line-through' : 'text-slate-700 dark:text-d-text'}>
+                                                            <span className={isCancelled ? 'text-slate-400 dark:text-d-muted line-through' : entry.type === 'credit_transfer' ? 'text-slate-500 dark:text-d-muted' : 'text-slate-800 dark:text-d-text'}>
                                                                 {entry.description}
                                                             </span>
                                                         </div>
+                                                        {entry.type === 'return' && returnNote(entry, formatCurrency) && (
+                                                            <div className="mt-0.5 text-xs text-slate-500 dark:text-d-muted">{returnNote(entry, formatCurrency)}</div>
+                                                        )}
                                                         {isCancelled && (
                                                             <div className="text-[11px] text-slate-500 dark:text-d-muted mt-0.5">
                                                                 {formatCurrency(entry.billTotal || 0)} bill · not counted
@@ -992,40 +790,25 @@ const CustomerLedger = () => {
                                                             </div>
                                                         )}
                                                     </td>
-                                                    <td className="py-3 px-4 whitespace-nowrap text-xs">
+                                                    <td className="py-3 px-4 whitespace-nowrap text-[13px] text-slate-500 dark:text-d-muted">
                                                         {entry.method && (
-                                                            <div className="uppercase text-slate-600 dark:text-d-text font-medium">
-                                                                {entry.method === 'store_credit' ? 'Store credit' : entry.method}
+                                                            <div>
+                                                                {METHOD_LABEL[entry.method] || entry.method}
+                                                                {entry.method === 'store_credit' && entry.fromBillNumber ? ` · from #${entry.fromBillNumber}` : ''}
                                                             </div>
-                                                        )}
-                                                        {entry.method === 'store_credit' && entry.fromBillNumber && (
-                                                            <div className="text-slate-400 dark:text-d-faint">from Bill #{entry.fromBillNumber}</div>
                                                         )}
                                                         {entry.receivedBy && (
-                                                            <div className="text-slate-400 dark:text-d-faint">{entry.receivedBy}</div>
+                                                            <div className="text-xs text-slate-400 dark:text-d-faint">{entry.receivedBy}</div>
                                                         )}
                                                     </td>
-                                                    <td className={`py-3 px-4 text-right font-medium whitespace-nowrap ${entry.type === 'credit_transfer' ? 'text-slate-500 dark:text-d-muted' : 'text-red-600 dark:text-d-red'}`}>
-                                                        {entry.debit > 0 ? formatCurrency(entry.debit) : '—'}
+                                                    <td className={`py-3 px-4 text-right whitespace-nowrap tabular-nums ${entry.type === 'credit_transfer' ? 'text-slate-500 dark:text-d-muted' : 'text-red-600 dark:text-d-red'}`}>
+                                                        {entry.debit > 0 ? formatNumber(entry.debit) : <span className="text-slate-300 dark:text-d-faint">—</span>}
                                                     </td>
-                                                    <td className="py-3 px-4 text-right whitespace-nowrap">
-                                                        {entry.type === 'return' && (entry.debtWriteOff > 0 || entry.storeCredit != null) ? (
-                                                            <div className="flex flex-col items-end gap-0.5">
-                                                                {entry.storeCredit > 0 && (
-                                                                    <span className="font-medium text-emerald-600 dark:text-d-green">{formatCurrency(entry.storeCredit)}</span>
-                                                                )}
-                                                                {entry.debtWriteOff > 0 && (
-                                                                    <span className="text-xs text-slate-400 dark:text-d-faint">{formatCurrency(entry.debtWriteOff)} unpaid amount reduced</span>
-                                                                )}
-                                                            </div>
-                                                        ) : (
-                                                            <span className="font-medium text-emerald-600 dark:text-d-green">
-                                                                {entry.credit > 0 ? formatCurrency(entry.credit) : '—'}
-                                                            </span>
-                                                        )}
+                                                    <td className="py-3 px-4 text-right whitespace-nowrap tabular-nums text-emerald-600 dark:text-d-green">
+                                                        {entry.credit > 0 ? formatNumber(entry.credit) : <span className="text-slate-300 dark:text-d-faint">—</span>}
                                                     </td>
-                                                    <td className={`py-3 px-4 text-right font-bold whitespace-nowrap ${(entry.balance || 0) < 0 ? 'text-emerald-600 dark:text-d-green' : 'text-slate-800 dark:text-d-heading'}`}>
-                                                        {(entry.balance || 0) < 0 ? 'Cr ' : ''}{formatCurrency(Math.abs(entry.balance || 0))}
+                                                    <td className={`py-3 px-4 text-right font-semibold whitespace-nowrap tabular-nums ${(entry.balance || 0) < 0 ? 'text-emerald-600 dark:text-d-green' : 'text-slate-900 dark:text-d-heading'}`}>
+                                                        {(entry.balance || 0) < 0 ? 'Cr ' : ''}{formatNumber(Math.abs(entry.balance || 0))}
                                                     </td>
                                                 </tr>
                                                 {isExpanded && hasDetails && (
@@ -1240,42 +1023,89 @@ const CustomerLedger = () => {
                                         );
                                     })}
                                 </tbody>
-                                {/* Footer totals */}
-                                <tfoot className="bg-slate-50 dark:bg-d-glass border-t-2 border-slate-200 dark:border-d-border">
-                                    <tr>
-                                        <td colSpan={5} className="py-3 px-4 text-right font-semibold text-slate-600 dark:text-d-muted">Totals</td>
-                                        <td className="py-3 px-4 text-right font-bold text-red-600 dark:text-d-red">
-                                            {formatCurrency(moneyEntries.reduce((s, e) => s + (e.debit || 0), 0))}
-                                        </td>
-                                        <td className="py-3 px-4 text-right">
-                                            <div className="font-bold text-emerald-600 dark:text-d-green">
-                                                {formatCurrency(moneyEntries.reduce((s, e) => s + (e.credit || 0), 0))}
-                                            </div>
-                                            {creditMovedTotal > 0 && (
-                                                <div className="text-[10px] text-slate-400 dark:text-d-faint mt-0.5">
-                                                    {formatCurrency(creditMovedTotal)} store credit moved between bills (not included)
-                                                </div>
-                                            )}
-                                            {(() => {
-                                                const totalDebtCancelled = statementEntries.reduce((s, e) => s + (e.debtWriteOff || 0), 0);
-                                                return totalDebtCancelled > 0 ? (
-                                                    <div className="text-[10px] text-slate-400 dark:text-d-faint mt-0.5">
-                                                        incl. {formatCurrency(totalDebtCancelled)} unpaid amount reduced by returns
-                                                    </div>
-                                                ) : null;
-                                            })()}
-                                        </td>
-                                        <td className={`py-3 px-4 text-right font-bold ${(summary.currentBalance || 0) < 0 ? 'text-emerald-600 dark:text-d-green' : 'text-slate-800 dark:text-d-heading'}`}>
-                                            {(summary.currentBalance || 0) < 0 ? 'Credit: ' : ''}{formatCurrency(Math.abs(summary.currentBalance || 0))}
-                                        </td>
-                                    </tr>
-                                </tfoot>
+                                {/* Closing balance — shown once the last line of the period is loaded */}
+                                {!pagination.hasMore && (
+                                    <tfoot className="bg-slate-50 dark:bg-d-elevated border-t border-slate-200 dark:border-d-border">
+                                        <tr>
+                                            <td colSpan={7} className="py-3 px-4 text-right text-[13px] text-slate-500 dark:text-d-muted">
+                                                Closing balance · {describePeriod(period, periodPreset)}
+                                            </td>
+                                            <td className="py-3 px-4 text-right font-bold">
+                                                <BalanceText value={period.closingBalance} currency={currency} strong />
+                                            </td>
+                                        </tr>
+                                    </tfoot>
+                                )}
                             </table>
                         </div>
+                        <LedgerPager
+                            pagination={pagination}
+                            shown={entries.length}
+                            pageSize={pageSize}
+                            loading={loading}
+                            onPage={(n) => fetchStatement(n)}
+                            onPageSize={setPageSize}
+                        />
+                        </>
                     )}
                 </div>
                 </>)}
+                </div>
             </div>
+
+            {/* Amount Due panel — the unpaid bills behind Amount Due, oldest first */}
+            {showPendingPanel && (
+                <div className="fixed inset-0 bg-black/40 z-50 flex justify-end print:hidden" onClick={() => setShowPendingPanel(false)}>
+                    <div className="w-full max-w-md h-full bg-white dark:bg-d-card border-l border-slate-200 dark:border-d-border shadow-2xl flex flex-col animate-fade-slide-left" onClick={(e) => e.stopPropagation()}>
+                        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100 dark:border-d-border">
+                            <div>
+                                <h3 className="text-lg font-bold text-slate-800 dark:text-d-heading">What makes up {amountDue < 0 ? 'the credit' : 'Amount Due'}</h3>
+                                <p className="text-xs text-slate-500 dark:text-d-muted">Unpaid bills, oldest first</p>
+                            </div>
+                            <button onClick={() => setShowPendingPanel(false)} className="p-2 text-slate-400 hover:text-slate-600 rounded-lg">
+                                <FiX size={18} />
+                            </button>
+                        </div>
+                        <div className="flex-1 overflow-y-auto p-5 space-y-2">
+                            {loadingPending && !pending ? (
+                                <p className="text-sm text-slate-400 dark:text-d-faint text-center py-8">Loading…</p>
+                            ) : (pending?.bills || []).length === 0 ? (
+                                <p className="text-sm text-slate-400 dark:text-d-faint text-center py-8">No unpaid bills</p>
+                            ) : (
+                                pending.bills.map((b) => (
+                                    <div key={b.billId} className="flex items-center justify-between px-4 py-3 rounded-xl border border-slate-200 dark:border-d-border">
+                                        <div>
+                                            <div className="font-semibold text-slate-800 dark:text-d-heading text-sm">Bill #{b.billNumber}</div>
+                                            <div className="text-[11px] text-slate-500 dark:text-d-muted">
+                                                {b.date ? new Date(b.date).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : ''}
+                                                {b.ageDays != null ? ` · ${b.ageDays} day${b.ageDays === 1 ? '' : 's'} old` : ''}
+                                                {b.total != null && b.total !== b.due ? ` · of ${formatCurrency(b.total)}` : ''}
+                                            </div>
+                                        </div>
+                                        <div className="font-bold text-red-600 dark:text-d-red text-sm">{formatCurrency(b.due)}</div>
+                                    </div>
+                                ))
+                            )}
+                        </div>
+                        {pending && (
+                            <div className="px-5 py-4 border-t border-slate-100 dark:border-d-border space-y-1 text-sm">
+                                <div className="flex justify-between text-slate-500 dark:text-d-muted">
+                                    <span>Unpaid bills</span><span>{formatCurrency(pending.totalDue)}</span>
+                                </div>
+                                {(pending.availableCredit || 0) > 0 && (
+                                    <div className="flex justify-between text-emerald-600 dark:text-d-green">
+                                        <span>Available credit</span><span>−{formatCurrency(pending.availableCredit)}</span>
+                                    </div>
+                                )}
+                                <div className="flex justify-between font-bold text-slate-800 dark:text-d-heading pt-1 border-t border-slate-100 dark:border-d-border">
+                                    <span>{(pending.amountDue || 0) < 0 ? 'Store credit' : 'Amount Due'}</span>
+                                    <span>{formatCurrency(Math.abs(pending.amountDue || 0))}</span>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            )}
 
             {/* Record Payment Modal */}
             {showPaymentModal && (() => {
@@ -1590,110 +1420,6 @@ const CustomerLedger = () => {
                 );
             })()}
 
-            {/* ================================================================
-                MODAL: Filter Ledger
-            ================================================================ */}
-            {showFilterModal && (
-                <div className="fixed inset-0 bg-black/50 dark:bg-black/60 flex items-center justify-center z-50 p-4">
-                    <div className="bg-white dark:bg-d-card dark:border dark:border-d-border rounded-2xl w-full max-w-md animate-fadeIn max-h-[90vh] overflow-y-auto">
-                        <div className="flex items-center justify-between p-6 border-b border-slate-200 dark:border-d-border">
-                            <h3 className="text-xl font-semibold text-slate-800 dark:text-d-heading">Filter Ledger</h3>
-                            <button
-                                onClick={() => setShowFilterModal(false)}
-                                className="p-2 hover:bg-slate-100 dark:hover:bg-d-glass-hover rounded-lg transition-colors text-slate-500 dark:text-d-muted"
-                            >
-                                <FiX />
-                            </button>
-                        </div>
-
-                        <div className="p-6 space-y-5">
-                            <div>
-                                <label className="block text-sm font-medium text-slate-700 dark:text-d-text mb-2">
-                                    Quick Ranges
-                                </label>
-                                <div className="grid grid-cols-2 gap-2">
-                                    {[
-                                        { id: 'today', label: 'Today' },
-                                        { id: 'week', label: 'This Week' },
-                                        { id: 'month', label: 'This Month' },
-                                        { id: 'all', label: 'All Time' },
-                                    ].map((p) => (
-                                        <button
-                                            key={p.id}
-                                            type="button"
-                                            onClick={() => applyPreset(p.id)}
-                                            className="px-4 py-2.5 rounded-xl border border-slate-200 dark:border-d-border text-sm font-medium text-slate-700 dark:text-d-text hover:bg-slate-100 dark:hover:bg-d-glass hover:border-primary-300 dark:hover:border-d-accent/50 transition-colors"
-                                        >
-                                            {p.label}
-                                        </button>
-                                    ))}
-                                </div>
-                            </div>
-
-                            <div className="border-t border-slate-100 dark:border-d-border pt-5">
-                                <label className="block text-sm font-medium text-slate-700 dark:text-d-text mb-2">
-                                    Custom Range
-                                </label>
-                                <div className="space-y-3">
-                                    <div className="flex items-center gap-2 bg-slate-50 dark:bg-d-bg rounded-xl pl-3 pr-2 py-2 border border-slate-200 dark:border-d-border">
-                                        <span className="text-xs text-slate-400 dark:text-d-faint w-9 shrink-0">From</span>
-                                        <input
-                                            type="date"
-                                            value={draftStartDate}
-                                            onChange={(e) => { setDraftStartDate(e.target.value); if (!e.target.value) setDraftStartTime(''); }}
-                                            className="bg-transparent text-sm text-slate-700 dark:text-d-text focus:outline-none flex-1"
-                                        />
-                                        <div className="w-px h-4 bg-slate-200 dark:bg-d-border shrink-0" />
-                                        <input
-                                            type="time"
-                                            value={draftStartTime}
-                                            onChange={(e) => setDraftStartTime(e.target.value)}
-                                            disabled={!draftStartDate}
-                                            title={draftStartDate ? 'Start time (optional)' : 'Pick a start date first'}
-                                            className="bg-transparent text-sm text-slate-700 dark:text-d-text focus:outline-none disabled:opacity-30 disabled:cursor-not-allowed w-[90px]"
-                                        />
-                                    </div>
-                                    <div className="flex items-center gap-2 bg-slate-50 dark:bg-d-bg rounded-xl pl-3 pr-2 py-2 border border-slate-200 dark:border-d-border">
-                                        <span className="text-xs text-slate-400 dark:text-d-faint w-9 shrink-0">To</span>
-                                        <input
-                                            type="date"
-                                            value={draftEndDate}
-                                            onChange={(e) => { setDraftEndDate(e.target.value); if (!e.target.value) setDraftEndTime(''); }}
-                                            className="bg-transparent text-sm text-slate-700 dark:text-d-text focus:outline-none flex-1"
-                                        />
-                                        <div className="w-px h-4 bg-slate-200 dark:bg-d-border shrink-0" />
-                                        <input
-                                            type="time"
-                                            value={draftEndTime}
-                                            onChange={(e) => setDraftEndTime(e.target.value)}
-                                            disabled={!draftEndDate}
-                                            title={draftEndDate ? 'End time (optional)' : 'Pick an end date first'}
-                                            className="bg-transparent text-sm text-slate-700 dark:text-d-text focus:outline-none disabled:opacity-30 disabled:cursor-not-allowed w-[90px]"
-                                        />
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-
-                        <div className="flex gap-3 p-6 pt-0">
-                            <button
-                                type="button"
-                                onClick={() => setShowFilterModal(false)}
-                                className="flex-1 py-3 border border-slate-200 dark:border-d-border rounded-xl font-medium text-slate-600 dark:text-d-text hover:bg-slate-50 dark:hover:bg-d-glass transition-colors"
-                            >
-                                Cancel
-                            </button>
-                            <button
-                                type="button"
-                                onClick={applyCustomRange}
-                                className="flex-1 py-3 bg-primary-500 text-white rounded-xl font-medium hover:bg-primary-600 transition-colors"
-                            >
-                                Apply
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            )}
         </div>
     );
 };
@@ -1702,42 +1428,212 @@ const CustomerLedger = () => {
 // Subcomponents
 // ---------------------------------------------------------------------------
 
-const SummaryCard = ({ icon, label, value, tone = 'slate', highlight = false }) => {
-    const toneClasses = {
-        slate: 'text-slate-700 dark:text-d-heading',
-        emerald: 'text-emerald-600 dark:text-d-green',
-        red: 'text-red-600 dark:text-d-red',
-        amber: 'text-amber-600 dark:text-d-accent',
-    };
+// Balance with the "Cr" convention: negative = the shop owes the customer (green).
+const BalanceText = ({ value, currency, strong = false }) => {
+    const v = Math.round((Number(value) || 0) * 100) / 100;
     return (
-        <div className={`bg-white dark:bg-d-card border rounded-2xl p-4 shadow-sm ${
-            highlight
-                ? 'border-primary-300 dark:border-d-accent/40 ring-1 ring-primary-100 dark:ring-d-accent/10'
-                : 'border-slate-100 dark:border-d-border'
-        }`}>
-            <div className="flex items-center gap-2 mb-1.5">
-                <span className={`${toneClasses[tone]}`}>{icon}</span>
-                <p className="text-xs text-slate-500 dark:text-d-muted">{label}</p>
+        <span className={`${strong ? 'font-bold' : 'font-semibold'} ${v < 0 ? 'text-emerald-600 dark:text-d-green' : 'text-slate-800 dark:text-d-heading'}`}>
+            {formatBalance(v, currency)}
+        </span>
+    );
+};
+
+// ↑↓ icon for the sort button; the arrow for the current direction is solid
+const SortIcon = ({ newestFirst }) => (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <path d="M7 4v16M7 4L4 7M7 4l3 3" opacity={newestFirst ? 0.4 : 1} />
+        <path d="M17 20V4M17 20l-3-3M17 20l3-3" opacity={newestFirst ? 1 : 0.4} />
+    </svg>
+);
+
+// Small chip in the period line: "All time ✕"
+const FilterChip = ({ icon, label, onClear, clearLabel }) => (
+    <span className="inline-flex items-center gap-1.5 h-[26px] pl-2.5 pr-1.5 rounded-full bg-slate-100 dark:bg-white/[0.05] border border-slate-200 dark:border-d-border text-slate-800 dark:text-d-text font-medium">
+        {icon && <span className="text-slate-400 dark:text-d-muted">{icon}</span>}
+        {label}
+        {onClear ? (
+            <button type="button" onClick={onClear} title={clearLabel} aria-label={clearLabel} className="w-[18px] h-[18px] flex items-center justify-center rounded-full text-slate-400 dark:text-d-muted hover:text-slate-800 dark:hover:text-d-text">
+                <FiX size={11} strokeWidth={2.5} />
+            </button>
+        ) : <span className="w-1" />}
+    </span>
+);
+
+// The menu under the filter icon: period + type, applied together
+const FilterMenu = ({ draft, setDraft, incomplete, onApply, onReset }) => {
+    const pick = (active) => `h-8 rounded-lg border text-[13px] transition-colors ${
+        active
+            ? 'bg-amber-50 border-amber-300 text-amber-700 font-semibold dark:bg-[rgba(255,210,100,0.12)] dark:border-[rgba(255,210,100,0.45)] dark:text-d-accent'
+            : 'border-slate-200 dark:border-d-border text-slate-700 dark:text-d-text hover:border-slate-300 dark:hover:border-white/20'
+    }`;
+    const label = 'mb-2 text-[11px] font-semibold uppercase tracking-wider text-slate-500 dark:text-d-muted';
+    const dateInput = 'mt-1 w-full h-8 px-2 bg-white dark:bg-d-bg border border-slate-200 dark:border-d-border rounded-lg text-[13px] text-slate-700 dark:text-d-text';
+    return (
+        <div className="absolute right-0 top-full mt-1 z-30 w-[340px] p-4 flex flex-col gap-4 bg-white dark:bg-d-elevated border border-slate-200 dark:border-d-border rounded-2xl shadow-xl dark:shadow-[0_16px_40px_rgba(0,0,0,0.5)] animate-pop-in">
+            <div>
+                <p className={label}>Period</p>
+                {/* The default gets its own full-width row */}
+                <button type="button" onClick={() => setDraft((d) => ({ ...d, period: DEFAULT_PERIOD }))} className={`${pick(draft.period === DEFAULT_PERIOD)} w-full mb-1.5`}>
+                    {PERIOD_OPTIONS.find((o) => o.value === DEFAULT_PERIOD)?.label}
+                </button>
+                <div className="grid grid-cols-3 gap-1.5">
+                    {PERIOD_OPTIONS.filter((o) => o.value !== 'custom' && o.value !== DEFAULT_PERIOD).map((o) => (
+                        <button key={o.value} type="button" onClick={() => setDraft((d) => ({ ...d, period: o.value }))} className={pick(draft.period === o.value)}>
+                            {o.label}
+                        </button>
+                    ))}
+                </div>
+                <div className="grid grid-cols-2 gap-1.5 mt-2">
+                    <label className="text-xs text-slate-500 dark:text-d-muted">
+                        From
+                        <input
+                            type="date"
+                            value={draft.from}
+                            max={draft.to || undefined}
+                            onChange={(e) => setDraft((d) => ({ ...d, period: 'custom', from: e.target.value }))}
+                            className={dateInput}
+                        />
+                    </label>
+                    <label className="text-xs text-slate-500 dark:text-d-muted">
+                        To
+                        <input
+                            type="date"
+                            value={draft.to}
+                            min={draft.from || undefined}
+                            onChange={(e) => setDraft((d) => ({ ...d, period: 'custom', to: e.target.value }))}
+                            className={dateInput}
+                        />
+                    </label>
+                </div>
             </div>
-            <p className={`text-lg font-bold ${toneClasses[tone]}`}>{value}</p>
+            <div>
+                <p className={label}>Show</p>
+                <div className="flex flex-wrap gap-1.5">
+                    {TYPE_OPTIONS.map((o) => (
+                        <button key={o.value} type="button" onClick={() => setDraft((d) => ({ ...d, type: o.value }))} className={`${pick(draft.type === o.value)} px-3 rounded-full`}>
+                            {o.value === 'all' ? 'All' : o.label}
+                        </button>
+                    ))}
+                </div>
+            </div>
+            <div className="flex items-center justify-between pt-3 border-t border-slate-200 dark:border-d-border">
+                <button type="button" onClick={onReset} className="text-[13px] text-slate-500 dark:text-d-muted hover:text-slate-900 dark:hover:text-d-text">
+                    Reset
+                </button>
+                <button
+                    type="button"
+                    onClick={onApply}
+                    disabled={incomplete}
+                    className="h-8 px-4 rounded-lg bg-amber-500 hover:bg-amber-600 dark:bg-d-accent dark:hover:brightness-110 text-white dark:text-d-bg text-[13px] font-semibold disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                    {incomplete ? 'Pick both dates' : 'Apply'}
+                </button>
+            </div>
         </div>
     );
 };
 
+// Footer under the ledger table: "Showing 51–100 of 105", page size, Prev / 1 2 3 / Next.
+const LedgerPager = ({ pagination, shown, pageSize, loading, onPage, onPageSize }) => {
+    const page = pagination.page || 1;
+    const pages = Math.max(1, pagination.pages || Math.ceil((pagination.total || 0) / (pagination.limit || pageSize)) || 1);
+    const total = pagination.total ?? shown;
+    const first = total === 0 ? 0 : (page - 1) * (pagination.limit || pageSize) + 1;
+    const last = first === 0 ? 0 : first + shown - 1;
+
+    // 1 … 4 5 6 … 12
+    const numbers = [];
+    for (let n = 1; n <= pages; n++) {
+        if (n === 1 || n === pages || Math.abs(n - page) <= 1) numbers.push(n);
+        else if (numbers[numbers.length - 1] !== '…') numbers.push('…');
+    }
+
+    const navBtn = 'h-[30px] flex items-center gap-1 px-2.5 rounded-lg text-[13px] border border-slate-200 dark:border-d-border text-slate-600 dark:text-d-text hover:bg-slate-50 dark:hover:bg-d-glass disabled:opacity-40 disabled:cursor-not-allowed';
+    return (
+        <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-2.5 border-t border-slate-200 dark:border-d-border text-[13px] text-slate-500 dark:text-d-muted">
+            <div className="flex items-center gap-3">
+                <span className="tabular-nums"><b className="font-semibold text-slate-800 dark:text-d-text">{first}–{last}</b> of {total} lines</span>
+                <label className="flex items-center gap-1.5">
+                    Rows
+                    <select
+                        value={pageSize}
+                        onChange={(e) => onPageSize(Number(e.target.value))}
+                        className="px-1.5 py-1 bg-white dark:bg-d-bg border border-slate-200 dark:border-d-border rounded-md text-xs text-slate-700 dark:text-d-text"
+                    >
+                        {[25, 50, 100].map((n) => <option key={n} value={n}>{n}</option>)}
+                    </select>
+                </label>
+            </div>
+            {pages > 1 && (
+                <div className="flex items-center gap-1">
+                    <button className={navBtn} disabled={loading || page <= 1} onClick={() => onPage(page - 1)}>
+                        <FiChevronLeft size={13} /> Prev
+                    </button>
+                    {numbers.map((n, i) => (n === '…' ? (
+                        <span key={`gap-${i}`} className="px-1.5">…</span>
+                    ) : (
+                        <button
+                            key={n}
+                            disabled={loading}
+                            onClick={() => n !== page && onPage(n)}
+                            className={`h-[30px] min-w-[30px] px-2 rounded-lg text-[13px] tabular-nums ${
+                                n === page
+                                    ? 'bg-amber-500 dark:bg-d-accent text-white dark:text-d-bg font-semibold'
+                                    : 'text-slate-600 dark:text-d-text hover:bg-slate-100 dark:hover:bg-d-glass'
+                            }`}
+                        >
+                            {n}
+                        </button>
+                    )))}
+                    <button className={navBtn} disabled={loading || page >= pages} onClick={() => onPage(page + 1)}>
+                        Next <FiChevronRight size={13} />
+                    </button>
+                </div>
+            )}
+        </div>
+    );
+};
+
+// One figure in the summary box
+const SummaryFigure = ({ label, value, tone, tinted = false, action, onClick }) => {
+    const color = {
+        green: 'text-emerald-600 dark:text-d-green',
+        amber: 'text-amber-600 dark:text-d-accent',
+        red: 'text-red-600 dark:text-d-red',
+    }[tone] || 'text-slate-900 dark:text-d-heading';
+    const tint = tinted
+        ? (tone === 'red' ? 'bg-red-50/70 dark:bg-[rgba(255,107,107,0.06)]' : 'bg-emerald-50/70 dark:bg-[rgba(52,232,161,0.06)]')
+        : '';
+    const body = (
+        <>
+            <div className="flex items-center justify-between gap-2 text-xs text-slate-500 dark:text-d-muted">
+                <span>{label}</span>
+                {action && <span className={`flex items-center ${tone === 'red' ? 'text-red-500 dark:text-[#ff8f8f]' : 'text-emerald-600 dark:text-d-green'}`}>{action} <FiChevronRight size={12} /></span>}
+            </div>
+            <div className={`mt-1 text-xl font-semibold tabular-nums ${color}`}>{value}</div>
+        </>
+    );
+    return action && onClick ? (
+        <button type="button" onClick={onClick} className={`text-left px-5 py-4 ${tint} hover:brightness-[0.98] dark:hover:bg-white/[0.04] transition-colors`}>
+            {body}
+        </button>
+    ) : (
+        <div className={`px-5 py-4 ${tint}`}>{body}</div>
+    );
+};
+
+// Type of a ledger line as a small coloured word (SALE, PAID, …)
 const TypeBadge = ({ type }) => {
     const config = {
-        bill: { label: 'SALE', cls: 'bg-red-50 dark:bg-[rgba(255,107,107,0.1)] text-red-600 dark:text-d-red' },
-        payment: { label: 'PAID', cls: 'bg-emerald-50 dark:bg-[rgba(52,232,161,0.1)] text-emerald-600 dark:text-d-green' },
-        return: { label: 'RETURN', cls: 'bg-amber-50 dark:bg-[rgba(255,185,50,0.1)] text-amber-600 dark:text-d-accent' },
-        cancelled: { label: 'CANCELLED', cls: 'bg-slate-200 dark:bg-white/10 text-slate-600 dark:text-d-muted' },
-        credit_transfer: { label: 'CREDIT MOVED', cls: 'bg-slate-100 dark:bg-white/10 text-slate-600 dark:text-d-muted' },
+        opening_balance: { label: 'OPENING', cls: 'text-indigo-600 dark:text-[#a5a9ff]' },
+        bill: { label: 'SALE', cls: 'text-red-600 dark:text-d-red' },
+        payment: { label: 'PAID', cls: 'text-emerald-600 dark:text-d-green' },
+        return: { label: 'RETURN', cls: 'text-amber-600 dark:text-d-accent' },
+        cancelled: { label: 'CANCELLED', cls: 'text-slate-400 dark:text-d-muted' },
+        credit_transfer: { label: 'CREDIT MOVED', cls: 'text-slate-500 dark:text-d-muted' },
     };
-    const c = config[type] || { label: type, cls: 'bg-slate-100 text-slate-600' };
-    return (
-        <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-bold tracking-wide ${c.cls}`}>
-            {c.label}
-        </span>
-    );
+    const c = config[type] || { label: String(type || '').toUpperCase(), cls: 'text-slate-500 dark:text-d-muted' };
+    return <span className={`shrink-0 text-[11px] font-semibold tracking-wide ${c.cls}`}>{c.label}</span>;
 };
 
 export default CustomerLedger;

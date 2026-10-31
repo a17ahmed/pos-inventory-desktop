@@ -1,5 +1,14 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useBusiness } from '../context/BusinessContext';
+import { useAuth } from '../context/AuthContext';
+import {
+    ADJUST_REASONS,
+    NOTE_MAX,
+    adjustReasonLabel,
+    reasonsForOperation,
+    stockAfterAdjust,
+    adjustFormError,
+} from '../utils/stockAdjustment';
 import {
     FiPackage,
     FiDollarSign,
@@ -18,6 +27,7 @@ import {
     FiMinus,
     FiCalendar,
     FiFileText,
+    FiChevronDown,
 } from 'react-icons/fi';
 import {
     getProducts,
@@ -61,6 +71,15 @@ const Inventory = () => {
     const [adjustModal, setAdjustModal] = useState(null);
     const [adjustQty, setAdjustQty] = useState('');
     const [adjustOp, setAdjustOp] = useState('set');
+    const [adjustReason, setAdjustReason] = useState('');
+    const [adjustNote, setAdjustNote] = useState('');
+    const [adjustSaving, setAdjustSaving] = useState(false);
+    const [movementReason, setMovementReason] = useState(''); // manual adjustments only
+
+    // Adjusting stock needs Products → Update Stock (admins always can);
+    // the backend enforces it too.
+    const { isAdmin, permissions } = useAuth();
+    const canAdjustStock = !!isAdmin || permissions?.products?.updateStock === true;
 
     // Print
     const [showPrintView, setShowPrintView] = useState(false);
@@ -94,6 +113,7 @@ const Inventory = () => {
         try {
             const params = { page, limit: 30 };
             if (movementType) params.type = movementType;
+            if (movementType === 'manual_adjustment' && movementReason) params.reason = movementReason;
             const res = await getStockMovements(params);
             setMovements(res.data?.movements || []);
             setMovementsMeta({
@@ -104,7 +124,7 @@ const Inventory = () => {
         } catch (err) {
             console.error('Error fetching movements:', err);
         }
-    }, [movementType]);
+    }, [movementType, movementReason]);
 
     const fetchDeadStock = useCallback(async () => {
         try {
@@ -134,7 +154,7 @@ const Inventory = () => {
     // Refetch movements on page/filter change
     useEffect(() => {
         if (activeTab === 'movements') fetchMovements(movementPage);
-    }, [movementPage, movementType, activeTab, fetchMovements]);
+    }, [movementPage, movementType, movementReason, activeTab, fetchMovements]);
 
     // ── Group products by category (for stock sheet) ───────────
     const groupedProducts = React.useMemo(() => {
@@ -175,17 +195,46 @@ const Inventory = () => {
     }, [groupedProducts]);
 
     // ── Adjust stock ───────────────────────────────────────────
+    const openAdjust = (product) => {
+        setAdjustModal(product);
+        setAdjustQty('');
+        setAdjustOp('subtract');
+        setAdjustReason('');
+        setAdjustNote('');
+    };
+
+    const changeAdjustOp = (op) => {
+        setAdjustOp(op);
+        // Drop a reason that doesn't fit the new operation (transfer out = subtract only, …)
+        if (adjustReason && !reasonsForOperation(op).some((r) => r.value === adjustReason)) setAdjustReason('');
+        if (op === 'set' && adjustQty === '') setAdjustQty(String(adjustModal?.stockQuantity ?? 0));
+    };
+
+    const adjustCurrent = adjustModal?.stockQuantity ?? 0;
+    const adjustError = adjustModal
+        ? adjustFormError({ current: adjustCurrent, op: adjustOp, qty: adjustQty, reason: adjustReason, note: adjustNote, trackStock: adjustModal.trackStock })
+        : '';
+
     const handleAdjustStock = async () => {
-        if (!adjustModal || !adjustQty) return;
+        if (!adjustModal || adjustError || adjustSaving) return;
+        setAdjustSaving(true);
         try {
-            await updateStock(adjustModal._id, { quantity: Number(adjustQty), operation: adjustOp });
+            const note = adjustNote.trim();
+            await updateStock(adjustModal._id, {
+                quantity: Number(adjustQty),
+                operation: adjustOp,
+                reason: adjustReason,
+                ...(note ? { note } : {}),
+            });
             setAdjustModal(null);
-            setAdjustQty('');
             // Refresh relevant data
             fetchProducts();
             fetchOverview();
+            if (activeTab === 'movements') fetchMovements(movementPage);
         } catch (err) {
             appAlert(err.response?.data?.message || 'Failed to adjust stock');
+        } finally {
+            setAdjustSaving(false);
         }
     };
 
@@ -567,7 +616,7 @@ const Inventory = () => {
                                                         <th className="text-right py-2.5 px-6 font-medium text-slate-500 dark:text-d-muted">Cost Price</th>
                                                         <th className="text-right py-2.5 px-6 font-medium text-slate-500 dark:text-d-muted">Sell Price</th>
                                                         <th className="text-right py-2.5 px-6 font-medium text-slate-500 dark:text-d-muted">Margin</th>
-                                                        <th className="text-center py-2.5 px-6 font-medium text-slate-500 dark:text-d-muted no-print w-16">Adjust</th>
+                                                        {canAdjustStock && <th className="text-center py-2.5 px-6 font-medium text-slate-500 dark:text-d-muted no-print w-16">Adjust</th>}
                                                     </tr>
                                                 </thead>
                                                 <tbody>
@@ -592,15 +641,17 @@ const Inventory = () => {
                                                                 <td className="py-3 px-6 text-right text-slate-600 dark:text-d-muted">{fmt(p.costPrice)}</td>
                                                                 <td className="py-3 px-6 text-right text-slate-600 dark:text-d-muted">{fmt(p.sellingPrice)}</td>
                                                                 <td className="py-3 px-6 text-right text-slate-600 dark:text-d-muted">{margin.toFixed(1)}%</td>
+                                                                {canAdjustStock && (
                                                                 <td className="py-3 px-6 text-center no-print">
                                                                     <button
-                                                                        onClick={() => { setAdjustModal(p); setAdjustQty(String(stock)); setAdjustOp('set'); }}
+                                                                        onClick={() => openAdjust(p)}
                                                                         className="p-1.5 text-slate-400 dark:text-d-faint hover:text-amber-500 dark:hover:text-d-accent hover:bg-amber-50 dark:hover:bg-amber-500/10 rounded-lg transition-colors"
                                                                         title="Adjust stock"
                                                                     >
                                                                         <FiActivity size={16} />
                                                                     </button>
                                                                 </td>
+                                                                )}
                                                             </tr>
                                                         );
                                                     })}
@@ -684,6 +735,17 @@ const Inventory = () => {
                                     <option value="supply_update_add">Supply Added</option>
                                     <option value="supply_delete">Supply Deleted</option>
                                 </select>
+                                {movementType === 'manual_adjustment' && (
+                                    <select
+                                        value={movementReason}
+                                        onChange={(e) => { setMovementReason(e.target.value); setMovementPage(1); }}
+                                        aria-label="Adjustment reason"
+                                        className="px-4 py-2.5 bg-white dark:bg-d-card border border-slate-200 dark:border-d-border rounded-xl text-sm text-slate-700 dark:text-d-text focus:outline-none focus:border-amber-300 dark:focus:border-d-border-hover"
+                                    >
+                                        <option value="">All reasons</option>
+                                        {ADJUST_REASONS.map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
+                                    </select>
+                                )}
                             </div>
                             <span className="text-sm text-slate-400 dark:text-d-faint">{movementsMeta.total} records</span>
                         </div>
@@ -700,6 +762,7 @@ const Inventory = () => {
                                         <th className="text-right py-3 px-5 font-medium text-slate-500 dark:text-d-muted">Before</th>
                                         <th className="text-right py-3 px-5 font-medium text-slate-500 dark:text-d-muted">After</th>
                                         <th className="text-left py-3 px-5 font-medium text-slate-500 dark:text-d-muted">Reference</th>
+                                        <th className="text-left py-3 px-5 font-medium text-slate-500 dark:text-d-muted">Reason / By</th>
                                     </tr>
                                 </thead>
                                 <tbody>
@@ -729,12 +792,24 @@ const Inventory = () => {
                                                 <td className="py-3 px-5 text-right text-slate-500 dark:text-d-muted">{m.previousStock}</td>
                                                 <td className="py-3 px-5 text-right font-medium text-slate-800 dark:text-d-text">{m.newStock}</td>
                                                 <td className="py-3 px-5 text-slate-500 dark:text-d-muted font-mono text-xs">{m.referenceNumber || '-'}</td>
+                                                <td className="py-3 px-5 text-xs max-w-[280px]">
+                                                    {m.type === 'manual_adjustment' && m.adjustmentReason ? (
+                                                        <>
+                                                            <div className="font-medium text-slate-700 dark:text-d-text">{adjustReasonLabel(m.adjustmentReason)}</div>
+                                                            {m.note && <div className="text-slate-500 dark:text-d-muted break-words">{m.note}</div>}
+                                                        </>
+                                                    ) : m.reason ? (
+                                                        <div className="text-slate-600 dark:text-d-muted break-words">{m.reason}</div>
+                                                    ) : null}
+                                                    {m.performedBy && <div className="text-slate-400 dark:text-d-faint">by {m.performedBy}</div>}
+                                                    {!m.reason && !m.adjustmentReason && !m.performedBy && <span className="text-slate-300 dark:text-d-faint">-</span>}
+                                                </td>
                                             </tr>
                                         );
                                     })}
                                     {movements.length === 0 && (
                                         <tr>
-                                            <td colSpan={7} className="py-20 text-center text-slate-400 dark:text-d-faint">
+                                            <td colSpan={8} className="py-20 text-center text-slate-400 dark:text-d-faint">
                                                 <FiActivity size={36} className="mx-auto mb-3 opacity-40" />
                                                 <p className="text-slate-500 dark:text-d-muted">No stock movements found</p>
                                             </td>
@@ -917,73 +992,157 @@ const Inventory = () => {
             </div>
 
             {/* ── ADJUST STOCK MODAL ──────────────────────────────── */}
-            {adjustModal && (
-                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-                    <div className="bg-white dark:bg-d-card border border-slate-200 dark:border-d-border rounded-2xl w-full max-w-sm animate-pop-in max-h-[90vh] overflow-y-auto">
-                        <div className="flex items-center justify-between p-5 border-b border-slate-200 dark:border-d-border">
-                            <h3 className="text-lg font-semibold text-slate-800 dark:text-d-heading">Adjust Stock</h3>
-                            <button onClick={() => setAdjustModal(null)} className="p-2 hover:bg-slate-100 dark:hover:bg-d-glass rounded-lg text-slate-500 dark:text-d-muted">
-                                <FiX size={18} />
-                            </button>
-                        </div>
-                        <div className="p-5 space-y-4">
-                            <div>
-                                <p className="font-medium text-slate-800 dark:text-d-text">{adjustModal.name}</p>
-                                <p className="text-sm text-slate-500 dark:text-d-muted">Current stock: {adjustModal.stockQuantity ?? 0}</p>
+            {adjustModal && (() => {
+                const after = stockAfterAdjust(adjustCurrent, adjustOp, adjustQty);
+                const change = after === null ? null : after - adjustCurrent;
+                const reasonDef = ADJUST_REASONS.find((r) => r.value === adjustReason);
+                const field = 'w-full h-10 px-3 bg-white dark:bg-d-bg border border-slate-200 dark:border-d-border rounded-lg text-sm text-slate-800 dark:text-d-text placeholder-slate-400 dark:placeholder-d-faint focus:outline-none focus:border-amber-400 dark:focus:border-d-border-hover';
+                const label = 'block mb-1.5 text-xs font-medium text-slate-500 dark:text-d-muted';
+                return (
+                    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+                        <div className="bg-white dark:bg-d-card border border-slate-200 dark:border-d-border rounded-2xl w-full max-w-md shadow-xl animate-pop-in max-h-[90vh] overflow-y-auto">
+                            {/* Header: product + current stock */}
+                            <div className="flex items-start justify-between gap-3 px-5 pt-5 pb-4 border-b border-slate-200 dark:border-d-border">
+                                <div className="min-w-0">
+                                    <h3 className="text-base font-semibold text-slate-900 dark:text-d-heading">Adjust stock</h3>
+                                    <p className="mt-0.5 text-sm text-slate-500 dark:text-d-muted truncate">
+                                        {adjustModal.name} · <span className="tabular-nums">In stock: <b className="font-semibold text-slate-800 dark:text-d-text">{adjustCurrent}</b></span>
+                                    </p>
+                                </div>
+                                <button onClick={() => setAdjustModal(null)} aria-label="Close" className="p-1.5 -mr-1.5 hover:bg-slate-100 dark:hover:bg-d-glass rounded-lg text-slate-400 dark:text-d-muted">
+                                    <FiX size={18} />
+                                </button>
                             </div>
-                            <div>
-                                <label className="block text-sm font-medium text-slate-600 dark:text-d-muted mb-2">Operation</label>
-                                <div className="flex gap-2">
+
+                            <div className="px-5 py-4 space-y-4">
+                                {/* Operation — compact segmented control */}
+                                <div className="grid grid-cols-3 p-1 rounded-lg bg-slate-100 dark:bg-d-bg border border-slate-200 dark:border-d-border">
                                     {[
-                                        { value: 'set', label: 'Set to', icon: FiMinus },
-                                        { value: 'add', label: 'Add', icon: FiArrowUp },
                                         { value: 'subtract', label: 'Subtract', icon: FiArrowDown },
+                                        { value: 'add', label: 'Add', icon: FiArrowUp },
+                                        { value: 'set', label: 'Set to', icon: FiMinus },
                                     ].map((op) => (
                                         <button
                                             key={op.value}
                                             type="button"
-                                            onClick={() => setAdjustOp(op.value)}
-                                            className={`flex-1 flex items-center justify-center gap-1.5 py-2.5 rounded-xl text-sm font-medium border transition-all ${
+                                            onClick={() => changeAdjustOp(op.value)}
+                                            className={`h-8 flex items-center justify-center gap-1.5 rounded-md text-sm font-medium transition-colors ${
                                                 adjustOp === op.value
-                                                    ? 'bg-amber-500 dark:bg-d-accent text-white dark:text-d-card border-amber-500 dark:border-d-accent'
-                                                    : 'border-slate-200 dark:border-d-border text-slate-600 dark:text-d-muted hover:bg-slate-50 dark:hover:bg-d-glass'
+                                                    ? 'bg-white dark:bg-d-elevated text-slate-900 dark:text-d-heading shadow-sm'
+                                                    : 'text-slate-500 dark:text-d-muted hover:text-slate-800 dark:hover:text-d-text'
                                             }`}
                                         >
-                                            <op.icon size={14} />
+                                            <op.icon size={13} />
                                             {op.label}
                                         </button>
                                     ))}
                                 </div>
+
+                                {/* Quantity + resulting stock side by side */}
+                                <div className="grid grid-cols-2 gap-3">
+                                    <div>
+                                        <label htmlFor="adjust-qty" className={label}>{adjustOp === 'set' ? 'New stock' : 'Quantity'}</label>
+                                        <input
+                                            id="adjust-qty"
+                                            type="number"
+                                            inputMode="numeric"
+                                            value={adjustQty}
+                                            onChange={(e) => setAdjustQty(e.target.value)}
+                                            min="0"
+                                            step="1"
+                                            placeholder="0"
+                                            className={`${field} tabular-nums font-semibold`}
+                                            autoFocus
+                                        />
+                                    </div>
+                                    <div>
+                                        <p className={label}>{adjustOp === 'set' ? 'Change' : 'New stock'}</p>
+                                        <div className="h-10 px-3 flex items-center rounded-lg bg-slate-50 dark:bg-white/[0.03] border border-dashed border-slate-200 dark:border-d-border text-sm tabular-nums">
+                                            {after === null ? (
+                                                <span className="text-slate-400 dark:text-d-faint">—</span>
+                                            ) : adjustOp === 'set' ? (
+                                                <b className={`font-semibold ${change > 0 ? 'text-emerald-600 dark:text-d-green' : change < 0 ? 'text-red-600 dark:text-d-red' : 'text-slate-500 dark:text-d-muted'}`}>
+                                                    {change > 0 ? '+' : ''}{change}
+                                                </b>
+                                            ) : (
+                                                <span className="text-slate-500 dark:text-d-muted">
+                                                    {adjustCurrent} → <b className={`font-semibold ${after < 0 ? 'text-red-600 dark:text-d-red' : 'text-slate-900 dark:text-d-heading'}`}>{after}</b>
+                                                </span>
+                                            )}
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {/* Reason — dropdown; "Other" lets them type it */}
+                                <div>
+                                    <label htmlFor="adjust-reason" className={label}>Reason <span className="text-red-500">*</span></label>
+                                    <div className="relative">
+                                        <select
+                                            id="adjust-reason"
+                                            value={adjustReason}
+                                            onChange={(e) => setAdjustReason(e.target.value)}
+                                            className={`${field} appearance-none pr-9 ${adjustReason ? '' : 'text-slate-400 dark:text-d-faint'}`}
+                                        >
+                                            <option value="" disabled>Select a reason…</option>
+                                            {reasonsForOperation(adjustOp).map((r) => (
+                                                <option key={r.value} value={r.value} className="text-slate-800">{r.label}</option>
+                                            ))}
+                                        </select>
+                                        <FiChevronDown className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 dark:text-d-muted" size={15} />
+                                    </div>
+                                </div>
+
+                                {/* Typed reason for "Other", otherwise an optional note */}
+                                {adjustReason && (
+                                    <div>
+                                        <label htmlFor="adjust-note" className={label}>
+                                            {reasonDef?.noteRequired ? <>Type the reason <span className="text-red-500">*</span></> : <>Note <span className="font-normal text-slate-400 dark:text-d-faint">(optional)</span></>}
+                                        </label>
+                                        <input
+                                            id="adjust-note"
+                                            type="text"
+                                            value={adjustNote}
+                                            onChange={(e) => setAdjustNote(e.target.value)}
+                                            maxLength={NOTE_MAX}
+                                            autoFocus={!!reasonDef?.noteRequired}
+                                            placeholder={
+                                                reasonDef?.noteRequired ? 'e.g. Given to staff, sample for customer'
+                                                    : adjustReason === 'transfer_out' || adjustReason === 'transfer_in' ? 'e.g. Branch 2'
+                                                    : 'e.g. Counted shelf today'
+                                            }
+                                            className={field}
+                                        />
+                                        {adjustNote.length > NOTE_MAX - 40 && (
+                                            <p className="mt-1 text-right text-[11px] text-slate-400 dark:text-d-faint">{adjustNote.length}/{NOTE_MAX}</p>
+                                        )}
+                                    </div>
+                                )}
+
+                                {adjustError && (adjustQty !== '' || adjustReason) && (
+                                    <p className="text-[13px] text-red-600 dark:text-d-red">{adjustError}</p>
+                                )}
                             </div>
-                            <div>
-                                <label className="block text-sm font-medium text-slate-600 dark:text-d-muted mb-2">Quantity</label>
-                                <input
-                                    type="number"
-                                    value={adjustQty}
-                                    onChange={(e) => setAdjustQty(e.target.value)}
-                                    min="0"
-                                    className="w-full px-4 py-3 bg-slate-50 dark:bg-d-bg border border-slate-200 dark:border-d-border rounded-xl text-slate-800 dark:text-d-text text-lg font-semibold text-center focus:outline-none focus:border-amber-300 dark:focus:border-d-border-hover"
-                                    autoFocus
-                                />
-                            </div>
-                            <div className="flex gap-3 pt-2">
+
+                            {/* Footer */}
+                            <div className="flex justify-end gap-2 px-5 py-4 border-t border-slate-200 dark:border-d-border">
                                 <button
                                     onClick={() => setAdjustModal(null)}
-                                    className="flex-1 py-3 border border-slate-200 dark:border-d-border rounded-xl font-medium text-slate-600 dark:text-d-muted hover:bg-slate-100 dark:hover:bg-d-glass transition-colors"
+                                    className="h-10 px-4 rounded-lg text-sm font-medium text-slate-600 dark:text-d-muted hover:bg-slate-100 dark:hover:bg-d-glass transition-colors"
                                 >
                                     Cancel
                                 </button>
                                 <button
                                     onClick={handleAdjustStock}
-                                    className="flex-1 py-3 bg-gradient-to-r from-amber-400 to-amber-500 dark:from-d-accent dark:to-d-accent-s text-white dark:text-d-card rounded-xl font-semibold hover:shadow-md transition-all"
+                                    disabled={!!adjustError || adjustSaving}
+                                    className="h-10 px-5 rounded-lg text-sm font-semibold bg-amber-500 hover:bg-amber-600 dark:bg-d-accent dark:hover:brightness-110 text-white dark:text-d-card transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                                 >
-                                    Update Stock
+                                    {adjustSaving ? 'Saving…' : 'Update stock'}
                                 </button>
                             </div>
                         </div>
                     </div>
-                </div>
-            )}
+                );
+            })()}
         </div>
     );
 };
