@@ -30,6 +30,7 @@ import {
     FiSun,
     FiDownload,
     FiAlertTriangle,
+    FiPlusSquare,
 } from 'react-icons/fi';
 
 const Settings = () => {
@@ -126,6 +127,21 @@ const Settings = () => {
             appAlert('Failed to save: ' + (err.response?.data?.message || err.message));
         } finally {
             setSavingBelowCost(false);
+        }
+    };
+
+    // Business-wide: may the POS add items to a customer's credit bill from today?
+    const allowBillAmend = business?.settings?.allowBillAmend === true;
+    const [savingBillAmend, setSavingBillAmend] = useState(false);
+    const handleToggleBillAmend = async () => {
+        setSavingBillAmend(true);
+        try {
+            await updateBusinessSettings({ ...(business?.settings || {}), allowBillAmend: !allowBillAmend });
+            await refreshBusiness();
+        } catch (err) {
+            appAlert('Failed to save: ' + (err.response?.data?.message || err.message));
+        } finally {
+            setSavingBillAmend(false);
         }
     };
 
@@ -355,6 +371,33 @@ const Settings = () => {
                                     onChange={handleToggleSellBelowCost}
                                 />
                                 <div className="w-11 h-6 bg-slate-200 dark:bg-slate-600 peer-focus:ring-2 peer-focus:ring-primary-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-red-500 peer-disabled:opacity-50"></div>
+                            </div>
+                        }
+                    />
+                )}
+                {isAdmin && (
+                    <SettingItem
+                        icon={FiPlusSquare}
+                        label="Add to Today's Bill"
+                        value={allowBillAmend
+                            ? "On — items can be added to a customer's credit bill from today"
+                            : "Off — every visit makes a new bill"}
+                        onClick={savingBillAmend ? undefined : handleToggleBillAmend}
+                        color="text-amber-500"
+                        rightElement={
+                            <div
+                                className="relative inline-flex items-center cursor-pointer"
+                                onClick={(e) => e.stopPropagation()}
+                            >
+                                <input
+                                    type="checkbox"
+                                    className="sr-only peer"
+                                    aria-label="Allow adding items to a customer's credit bill from today"
+                                    checked={allowBillAmend}
+                                    disabled={savingBillAmend}
+                                    onChange={handleToggleBillAmend}
+                                />
+                                <div className="w-11 h-6 bg-slate-200 dark:bg-slate-600 peer-focus:ring-2 peer-focus:ring-primary-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-amber-500 peer-disabled:opacity-50"></div>
                             </div>
                         }
                     />

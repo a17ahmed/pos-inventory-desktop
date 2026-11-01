@@ -43,7 +43,7 @@ const DAYS_OF_WEEK = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 's
 
 // Access control module definitions
 const ACCESS_MODULES = [
-    { key: 'pos', label: 'POS / Sales', actions: ['view', 'create', 'viewProfit', 'saveCustomerRates', 'sellBeyondLimit', 'cancelBill'] },
+    { key: 'pos', label: 'POS / Sales', actions: ['view', 'create', 'viewProfit', 'saveCustomerRates', 'sellBeyondLimit', 'cancelBill', 'amendBill'] },
     { key: 'returns', label: 'Returns', actions: ['view', 'create', 'standalone', 'cancel'] },
     { key: 'products', label: 'Products', actions: ['view', 'create', 'edit', 'delete', 'updateStock'] },
     { key: 'vendors', label: 'Vendors', actions: ['view', 'create', 'edit', 'delete', 'pay'] },
@@ -63,8 +63,14 @@ const ACTION_LABELS = {
     processReturn: 'Process Return', approve: 'Approve', resetPassword: 'Reset Password',
     resume: 'Resume', cancel: 'Cancel', viewProfit: 'View Profit',
     saveCustomerRates: 'Save Customer Rates', sellBeyondLimit: 'Sell Beyond Discount Limit',
-    cancelBill: 'Cancel Bills',
+    cancelBill: 'Cancel Bills', amendBill: "Add to today's bill",
 };
+
+// Actions the backend treats as ON unless explicitly turned off (missing = allowed)
+const DEFAULT_ON_ACTIONS = { pos: ['amendBill'] };
+const isDefaultOn = (module, action) => (DEFAULT_ON_ACTIONS[module] || []).includes(action);
+const permissionOn = (perms, module, action) =>
+    isDefaultOn(module, action) ? perms[module]?.[action] !== false : !!perms[module]?.[action];
 
 const Employees = () => {
     const { config } = useBusiness();
@@ -301,13 +307,13 @@ const Employees = () => {
             ...prev,
             [module]: {
                 ...prev[module],
-                [action]: !prev[module]?.[action]
+                [action]: !permissionOn(prev, module, action)
             }
         }));
     };
 
     const toggleAllModule = (moduleKey, actions) => {
-        const allEnabled = actions.every(a => permissions[moduleKey]?.[a]);
+        const allEnabled = actions.every(a => permissionOn(permissions, moduleKey, a));
         setPermissions(prev => ({
             ...prev,
             [moduleKey]: Object.fromEntries(actions.map(a => [a, !allEnabled]))
@@ -770,8 +776,8 @@ const Employees = () => {
                             ) : (
                                 <div className="space-y-4">
                                     {ACCESS_MODULES.map(mod => {
-                                        const allEnabled = mod.actions.every(a => permissions[mod.key]?.[a]);
-                                        const someEnabled = mod.actions.some(a => permissions[mod.key]?.[a]);
+                                        const allEnabled = mod.actions.every(a => permissionOn(permissions, mod.key, a));
+                                        const someEnabled = mod.actions.some(a => permissionOn(permissions, mod.key, a));
 
                                         return (
                                             <div key={mod.key} className="border border-slate-200 dark:border-d-border rounded-xl overflow-hidden">
@@ -798,7 +804,7 @@ const Employees = () => {
                                                             type="button"
                                                             onClick={() => togglePermission(mod.key, action)}
                                                             className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
-                                                                permissions[mod.key]?.[action]
+                                                                permissionOn(permissions, mod.key, action)
                                                                     ? 'bg-purple-100 text-purple-700 dark:bg-[rgba(139,92,246,0.2)] dark:text-[#a78bfa] border border-purple-300 dark:border-[rgba(139,92,246,0.3)]'
                                                                     : 'bg-slate-100 text-slate-500 dark:bg-d-glass dark:text-d-muted border border-transparent hover:border-slate-300 dark:hover:border-d-border'
                                                             }`}

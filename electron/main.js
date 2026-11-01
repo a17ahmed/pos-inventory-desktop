@@ -717,7 +717,11 @@ ipcMain.handle('print-receipt', async (event, { receiptData, printerName, paperW
             paymentMethod, amountPaid, cashGiven, change, currency,
             totalRefunded, netAmount,
             creditPayments = [],
-            receiptFooter, receiptNote
+            receiptFooter, receiptNote,
+            // "Add to today's bill": an updated receipt for the same bill number
+            title = 'SALE INVOICE',
+            updateLine = '',
+            addedItems = [], // [{ name, qty }] lines just added, listed under the items
         } = receiptData;
 
         // Chars per line for this printer (32/42/48), chosen in Settings. Column
@@ -773,8 +777,9 @@ ipcMain.handle('print-receipt', async (event, { receiptData, printerName, paperW
         if (storePhone) printer.println('Tel: ' + storePhone);
         printer.newLine();
         printer.bold(true);
-        printer.println('SALE INVOICE');
+        printer.println(title || 'SALE INVOICE');
         printer.bold(false);
+        if (updateLine) printer.println(updateLine);
         printer.alignLeft();
         printer.drawLine();
 
@@ -873,6 +878,13 @@ ipcMain.handle('print-receipt', async (event, { receiptData, printerName, paperW
             { text: totalDisc > 0 ? cell(totalDisc, c.disc, '-') : '0', cols: c.disc, align: 'RIGHT' },
         ]);
         printer.bold(false);
+
+        if (addedItems.length > 0) {
+            printer.bold(true);
+            printer.println('Added now:');
+            printer.bold(false);
+            addedItems.forEach((it) => wrapText(`${it.name} x${it.qty}`, W - 2).forEach((l) => printer.println('  ' + l)));
+        }
         printer.drawLine();
 
         // ──── TOTALS ────

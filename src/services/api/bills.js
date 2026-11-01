@@ -11,6 +11,11 @@ export const updateBill = (id, data) => api.patch(`/bill/${id}`, data);
 // cash is reversed and the customer balance is recalculated.
 export const cancelBill = (id, reason) => api.post(`/bill/${id}/cancel`, { reason });
 
+// "Add to today's bill": the customer's sale bills from today, each with
+// canAmend / blockedReason; then add new lines (+ optional payment) to one.
+export const getOpenBillsForCustomer = (customerId) => api.get(`/bill/open-for-customer/${customerId}`);
+export const addBillItems = (id, data) => api.post(`/bill/${id}/add-items`, data);
+
 // ─── Payments ────────────────────────────────────────────────
 export const addBillPayment = (id, data) => api.post(`/bill/${id}/payment`, data);
 

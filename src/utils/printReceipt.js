@@ -1,5 +1,6 @@
 import { buildReceiptHTML } from './receiptTemplate';
 import { appAlert } from '../components/AppDialog';
+import { mergeReceiptItems } from './receiptItems';
 
 // localStorage keys for per-machine printer settings (not synced to backend).
 export const PRINTER_NAME_KEY = 'posPrinterName';
@@ -19,7 +20,7 @@ export const printReceipt = (opts) => {
         customerAddress = '',
         cashierName = '',
         customerBalanceBefore = 0,
-        items = [],
+        items: rawItems = [],
         subtotal = 0,
         tax = 0,
         itemDiscounts = 0,
@@ -32,7 +33,11 @@ export const printReceipt = (opts) => {
         totalRefunded = 0,
         netAmount = total,
         creditPayments = [],
+        title = 'SALE INVOICE',
+        updateLine = '',
+        addedItems = [],
     } = opts;
+    const items = mergeReceiptItems(rawItems);
 
     // Electron app — send structured data for direct ESC/POS printing
     if (window.electronAPI?.printReceipt) {
@@ -74,6 +79,8 @@ export const printReceipt = (opts) => {
                 totalRefunded, netAmount,
                 creditPayments,
                 receiptFooter, receiptNote,
+                title, updateLine,
+                addedItems: mergeReceiptItems(addedItems).map((it) => ({ name: it.name, qty: it.qty })),
             },
         })
             .then(result => {
