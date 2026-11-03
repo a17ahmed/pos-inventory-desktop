@@ -3,6 +3,7 @@ import { NavLink, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useBusiness } from '../context/BusinessContext';
 import { useTheme } from '../context/ThemeContext';
+import { PaymentDueBanner, usePaymentDueVisible } from './AccountStatus';
 import {
     FiHome,
     FiPackage,
@@ -30,6 +31,7 @@ const Layout = ({ children }) => {
     const { isDark, toggleTheme } = useTheme();
     const navigate = useNavigate();
     const [sidebarExpanded, setSidebarExpanded] = useState(false);
+    const showPaymentDue = usePaymentDueVisible();
 
     const handleLogout = async () => {
         await logout();
@@ -401,9 +403,13 @@ const Layout = ({ children }) => {
             )}
 
             {/* Main content */}
-            <main className={`flex-1 overflow-y-auto print:overflow-visible relative z-5 ${(isMac || isWin) ? 'pt-8' : ''}`}>
-                {children}
-            </main>
+            <div className="flex-1 min-w-0 flex flex-col">
+                {/* Payment due: the bar also serves as the window's drag strip */}
+                <PaymentDueBanner className={`app-drag-region ${isWin ? 'pr-[150px]' : ''}`} />
+                <main className={`flex-1 overflow-y-auto print:overflow-visible relative z-5 ${(isMac || isWin) && !showPaymentDue ? 'pt-8' : ''}`}>
+                    {children}
+                </main>
+            </div>
         </div>
     );
 };

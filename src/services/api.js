@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { isAccountBlocked, reportBlocked, noteWarningHeader } from './accountStatus';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
 
@@ -28,6 +29,22 @@ const onRefreshFailed = (error) => {
     refreshSubscribers = [];
 };
 
+const SESSION_KEYS = ['token', 'refreshToken', 'user', 'admin', 'employee', 'counterUser', 'business', 'permissions'];
+
+// Log out and open the login screen. Uses the hash + reload, not
+// location.href = '/#/login': the packaged app runs from file://, where that
+// path points outside the app and leaves a blank window.
+const endSession = (reason) => {
+    SESSION_KEYS.forEach((key) => localStorage.removeItem(key));
+    if (reason) {
+        try { sessionStorage.setItem('logoutReason', reason); } catch (e) { /* ignore */ }
+    }
+    window.location.hash = '#/login';
+    window.location.reload();
+};
+
+const isLoginRequest = (url = '') => url.includes('/adminAuth/login') || url.includes('/employeeAuth/login');
+
 // Request interceptor - add auth token
 api.interceptors.request.use(
     (config) => {
@@ -42,11 +59,23 @@ api.interceptors.request.use(
     }
 );
 
-// Response interceptor - handle token refresh
+// Response interceptor - account status, then token refresh
 api.interceptors.response.use(
-    (response) => response,
+    (response) => {
+        if (String(response.headers?.['x-account-status'] || '').toLowerCase() === 'warning') noteWarningHeader();
+        return response;
+    },
     async (error) => {
         const originalRequest = error.config;
+
+        // Business blocked by the software owner: show the Account blocked dialog
+        // (once). Tokens and saved data stay — the same login works after unblock.
+        if (isAccountBlocked(error)) {
+            const url = originalRequest?.url || '';
+            if (!url.includes('/auth/logout')) reportBlocked(error.response.data, { onLogin: isLoginRequest(url) });
+            return Promise.reject(error);
+        }
+        const revoked = error.response?.data?.code === 'SESSION_REVOKED';
 
         // Skip token refresh for auth endpoints (login, register, etc.)
         const isAuthEndpoint = originalRequest?.url?.includes('/adminAuth/') ||
@@ -61,13 +90,7 @@ api.interceptors.response.use(
             const refreshToken = localStorage.getItem('refreshToken');
             if (!refreshToken) {
                 // No refresh token - full cleanup and redirect to login
-                localStorage.removeItem('token');
-                localStorage.removeItem('user');
-                localStorage.removeItem('admin');
-                localStorage.removeItem('employee');
-                localStorage.removeItem('business');
-                localStorage.removeItem('permissions');
-                window.location.href = '/#/login';
+                endSession(revoked ? 'revoked' : '');
                 return Promise.reject(error);
             }
 
@@ -108,15 +131,18 @@ api.interceptors.response.use(
                 isRefreshing = false;
                 onRefreshFailed(refreshError);
 
-                // Refresh failed - logout
-                localStorage.removeItem('token');
-                localStorage.removeItem('refreshToken');
-                localStorage.removeItem('user');
-                localStorage.removeItem('admin');
-                localStorage.removeItem('employee');
-                localStorage.removeItem('business');
-                localStorage.removeItem('permissions');
-                window.location.href = '/#/login';
+                // Blocked: the dialog, no logout — tokens are kept for after unblock
+                if (isAccountBlocked(refreshError)) {
+                    reportBlocked(refreshError.response.data);
+                    return Promise.reject(refreshError);
+                }
+                // The server turned the refresh token down → log out. No answer
+                // (offline) or a server error keeps the session for the next try.
+                const status = refreshError.response?.status;
+                if (status && status < 500) {
+                    const refreshRevoked = refreshError.response?.data?.code === 'SESSION_REVOKED';
+                    endSession(revoked || refreshRevoked ? 'revoked' : '');
+                }
                 return Promise.reject(refreshError);
             }
         }
