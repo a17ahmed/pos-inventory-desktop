@@ -1,10 +1,22 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { FiMail, FiLock, FiEye, FiEyeOff, FiUser, FiUsers, FiUserPlus } from 'react-icons/fi';
 import { useAuth } from '../context/AuthContext';
 import { useBusiness } from '../context/BusinessContext';
 import { adminLogin, employeeLogin } from '../services/api/auth';
 import { appAlert } from '../components/AppDialog';
+import { isAccountBlocked } from '../services/accountStatus';
+
+// Set by the API client when the owner ended every session (401 SESSION_REVOKED)
+const readLogoutNotice = () => {
+    try {
+        return sessionStorage.getItem('logoutReason') === 'revoked'
+            ? 'Your session was ended by the administrator. Please log in again.'
+            : '';
+    } catch (e) {
+        return '';
+    }
+};
 
 const Login = () => {
     const navigate = useNavigate();
@@ -21,6 +33,10 @@ const Login = () => {
     const [showPassword, setShowPassword] = useState(false);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
+    const [notice] = useState(readLogoutNotice);
+    useEffect(() => {
+        try { sessionStorage.removeItem('logoutReason'); } catch (e) { /* ignore */ }
+    }, []);
     const isDev = import.meta.env.VITE_ENV === 'development';
 
     const handleAdminLogin = async () => {
@@ -59,7 +75,8 @@ const Login = () => {
             }
         } catch (err) {
             console.error('Login error:', err);
-            setError(err.response?.data?.message || 'Invalid email or password');
+            // Blocked: the Account blocked dialog explains it
+            if (!isAccountBlocked(err)) setError(err.response?.data?.message || 'Invalid email or password');
         } finally {
             setLoading(false);
         }
@@ -111,7 +128,7 @@ const Login = () => {
             }
         } catch (err) {
             console.error('Login error:', err);
-            setError(err.response?.data?.message || 'Invalid Employee ID or password');
+            if (!isAccountBlocked(err)) setError(err.response?.data?.message || 'Invalid Employee ID or password');
         } finally {
             setLoading(false);
         }
@@ -158,6 +175,12 @@ const Login = () => {
                 {/* Login Card */}
                 <div className="bg-white rounded-2xl shadow-xl p-8">
                     <form onSubmit={handleSubmit} className="space-y-6">
+                        {notice && !error && (
+                            <div className="bg-amber-50 border border-amber-200 text-amber-800 px-4 py-3 rounded-xl text-sm" role="status">
+                                {notice}
+                            </div>
+                        )}
+
                         {/* Error message */}
                         {error && (
                             <div className="bg-red-50 border border-red-200 text-red-600 px-4 py-3 rounded-xl text-sm">

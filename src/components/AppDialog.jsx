@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { FiAlertTriangle, FiInfo } from 'react-icons/fi';
+import { getAccountState } from '../services/accountStatus';
 
 /**
  * In-app alert/confirm dialog — a drop-in replacement for the browser's
@@ -27,6 +28,12 @@ const emit = () => listeners.forEach((l) => l());
 
 const request = (config) =>
     new Promise((resolve) => {
+        // While the Account blocked dialog is up, screens' error popups are
+        // dropped (answered as if cancelled) so none pile up behind it
+        if (getAccountState().blocked) {
+            resolve(config.type === 'confirm' ? false : config.type === 'choice' ? config.defaultValue : undefined);
+            return;
+        }
         queue.push({ ...config, resolve });
         emit();
     });

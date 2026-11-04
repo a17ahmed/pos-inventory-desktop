@@ -4,6 +4,7 @@ import { getTodaySummary, getReturnByReceipt, getReturnProductByBarcode, createR
 import { getCashBalance } from '../services/api/cashbook';
 import { getProducts } from '../services/api/products';
 import { searchCustomers, getCustomer } from '../services/api/customers';
+import { mergeReceiptItems } from '../utils/receiptItems';
 import {
     FiSearch,
     FiX,
@@ -282,15 +283,42 @@ const Returns = () => {
         setSearchMode(mode);
     };
 
-    // Add item from linked bill
+    // Linked bill's lines with the same product combined (items added to the
+    // bill later are separate lines in the backend). Each keeps the original
+    // lines in `parts` so the return can be split back across them.
+    const billLines = mergeReceiptItems(linkedBill?.items || []).map((group) => {
+        const parts = group.lines.map((line) => ({
+            itemId: line._id,
+            remaining: line.remainingQty !== undefined ? line.remainingQty : line.qty - (line.returnedQty || 0),
+        }));
+        return {
+            ...group,
+            groupId: group.lines[0]._id,
+            parts,
+            remainingQty: parts.reduce((sum, p) => sum + Math.max(0, p.remaining), 0),
+        };
+    });
+
+    // A combined line's return quantity, spread over its original lines (newest
+    // first) — processReturn takes one entry per bill line.
+    const splitAcrossLines = (item) => {
+        let left = item.quantity;
+        return [...item.parts].reverse().flatMap((part) => {
+            const quantity = Math.min(left, Math.max(0, part.remaining));
+            left -= quantity;
+            return quantity > 0 ? [{ itemId: part.itemId, quantity, reason: item.reason }] : [];
+        });
+    };
+
+    // Add item from linked bill (a combined line from billLines)
     const addItemFromBill = (item) => {
-        const remainingQty = item.remainingQty !== undefined ? item.remainingQty : item.qty;
+        const remainingQty = item.remainingQty;
         if (remainingQty <= 0) {
             setError('All items already returned');
             return;
         }
 
-        const existingIndex = returnItems.findIndex(ri => ri.name === item.name);
+        const existingIndex = returnItems.findIndex(ri => ri.groupId === item.groupId);
         if (existingIndex >= 0) {
             const existing = returnItems[existingIndex];
             if (existing.quantity >= remainingQty) {
@@ -303,7 +331,8 @@ const Returns = () => {
         } else {
             setReturnItems([...returnItems, {
                 id: Date.now().toString(),
-                itemId: item._id,          // bill item _id — required by processReturn
+                groupId: item.groupId,
+                parts: item.parts,         // original bill lines — processReturn needs their _id
                 name: item.name,
                 productName: item.name,
                 price: item.price,
@@ -423,9 +452,9 @@ const Returns = () => {
         }
 
         // If a bill is linked, every returned item MUST come from that bill
-        // (so it has an itemId). Block mixed scans to avoid silent drops.
+        // (so it has bill line ids). Block mixed scans to avoid silent drops.
         if (linkedBill) {
-            const orphan = returnItems.find((i) => !i.itemId);
+            const orphan = returnItems.find((i) => !i.parts?.length);
             if (orphan) {
                 setError(`"${orphan.name}" is not on bill #${linkedBill.billNumber}. Remove it or clear the linked bill.`);
                 return;
@@ -446,11 +475,7 @@ const Returns = () => {
             if (linkedBill) {
                 payload = {
                     billId: linkedBill._id,
-                    items: returnItems.map((item) => ({
-                        itemId: item.itemId,
-                        quantity: item.quantity,
-                        reason: item.reason,
-                    })),
+                    items: returnItems.flatMap(splitAcrossLines),
                     notes,
                 };
             } else {
@@ -686,8 +711,8 @@ const Returns = () => {
                                             )}
 
                                             <div className="flex flex-wrap gap-2">
-                                                {linkedBill.items?.map((item, index) => {
-                                                    const remaining = item.remainingQty !== undefined ? item.remainingQty : item.qty;
+                                                {billLines.map((item, index) => {
+                                                    const remaining = item.remainingQty;
                                                     const isFullyReturned = remaining <= 0;
                                                     return (
                                                         <button
@@ -831,8 +856,8 @@ const Returns = () => {
                                     )}
                                     <p className="text-xs text-slate-500 dark:text-d-muted mb-2">Click items to add to return:</p>
                                     <div className="flex flex-wrap gap-2">
-                                        {linkedBill.items?.map((item, index) => {
-                                            const remaining = item.remainingQty !== undefined ? item.remainingQty : item.qty;
+                                        {billLines.map((item, index) => {
+                                            const remaining = item.remainingQty;
                                             const isFullyReturned = remaining <= 0;
                                             return (
                                                 <button

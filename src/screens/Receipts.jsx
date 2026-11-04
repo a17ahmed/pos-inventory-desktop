@@ -7,6 +7,7 @@ import { getCancelState, estimateCashReversal, isCancelledBill, isCancelledHold 
 import { getCreditPayments, getPrimaryPaymentMethod, formatPaymentMethod } from '../utils/billCredit';
 import { printReceipt } from '../utils/printReceipt';
 import { downloadReceipt } from '../utils/downloadReceipt';
+import { mergeReceiptItems } from '../utils/receiptItems';
 import {
     FiSearch,
     FiFileText,
@@ -277,6 +278,7 @@ const Receipts = () => {
 
     const buildReceiptOpts = async (receipt) => {
         const items = (receipt.items || []).map(it => ({
+            product: it.product?._id || it.product,
             name: it.name,
             qty: it.qty || it.quantity || 0,
             price: it.price || it.sellingPrice || 0,
@@ -317,6 +319,8 @@ const Receipts = () => {
             totalRefunded: receipt.totalRefunded || 0,
             netAmount: receipt.netAmount ?? ((receipt.total || 0) - (receipt.totalRefunded || 0)),
             creditPayments: getCreditPayments(receipt),
+            // Reprint of a bill that had items added later: lines are combined, header says so
+            ...(receipt.revisionCount > 0 ? { title: `SALE INVOICE - UPDATE ${receipt.revisionCount}` } : {}),
         };
     };
 
@@ -836,7 +840,7 @@ const Receipts = () => {
                                             </tr>
                                         </thead>
                                         <tbody>
-                                            {r.items?.map((item, i) => {
+                                            {mergeReceiptItems(r.items).map((item, i) => {
                                                 const qty = item.qty || item.quantity || 0;
                                                 const lineTotal = item.itemTotal || (item.price * qty);
                                                 return (

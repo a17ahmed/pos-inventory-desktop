@@ -2,6 +2,7 @@
  * Shared receipt HTML template used by both print and download.
  * Matches the POS thermal printer receipt format.
  */
+import { mergeReceiptItems } from './receiptItems';
 
 // Whole amounts print without decimals; anything else always with exactly two
 // (84.7 → 84.70, 329.96999 → 329.97) so columns line up and read consistently.
@@ -27,7 +28,7 @@ export const buildReceiptHTML = ({
     customerAddress = '',
     cashierName = '',
     customerBalanceBefore = 0,
-    items = [],
+    items: rawItems = [],
     subtotal = 0,
     tax = 0,
     itemDiscounts = 0,
@@ -41,7 +42,11 @@ export const buildReceiptHTML = ({
     totalRefunded = 0,
     netAmount = total,
     creditPayments = [], // [{ fromBillNumber, amount }] store credit applied to this bill
+    title = 'SALE INVOICE', // "SALE INVOICE - UPDATE 2" for a bill with added items
+    updateLine = '', // e.g. "Total Rs. 300 → Rs. 450"
+    addedItems = [], // [{ name, qty }] lines just added to the bill, listed under the items
 }) => {
+    const items = mergeReceiptItems(rawItems);
     const storeName = store.name || 'Store';
     const storePhone = store.phone || '';
     const addr = store.address;
@@ -92,7 +97,8 @@ export const buildReceiptHTML = ({
             ${storeAddress ? `<div style="font-size:9px;margin-top:1px;">${storeAddress}</div>` : ''}
             ${storePhone ? `<div style="font-size:9px;">Tel: ${storePhone}</div>` : ''}
         </div>
-        <div style="text-align:center;font-size:10px;margin-top:3px;">SALE INVOICE</div>
+        <div style="text-align:center;font-size:10px;margin-top:3px;">${title}</div>
+        ${updateLine ? `<div style="text-align:center;font-size:9px;">${updateLine}</div>` : ''}
         ${line}
         <table style="width:100%;border-collapse:collapse;">
             <tr>
@@ -135,6 +141,7 @@ export const buildReceiptHTML = ({
                 </tr>
             </tbody>
         </table>
+        ${addedItems.length > 0 ? `<div style="font-size:9px;padding:2px 0;"><b>Added now:</b> ${mergeReceiptItems(addedItems).map((it) => `${it.name} ×${it.qty}`).join(', ')}</div>` : ''}
         ${solidLine}
         <table style="width:100%;border-collapse:collapse;">
             <tr>

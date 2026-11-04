@@ -5,12 +5,12 @@ import { useBusiness } from '../context/BusinessContext';
 import { useAuth } from '../context/AuthContext';
 import { getProducts } from '../services/api/products';
 import { getReceiptStats, getTopProducts } from '../services/api/receipts';
-import { createBill } from '../services/api/bills';
+import { createBill, getBill, getOpenBillsForCustomer, addBillItems } from '../services/api/bills';
 import { getDashboardSummary } from '../services/api/dashboard';
 import { printReceipt as printReceiptUtil } from '../utils/printReceipt';
 import { appAlert, appConfirm, appChoose } from '../components/AppDialog';
 import { searchCustomers, saveCustomerRate } from '../services/api/customers';
-import { getCreditPayments } from '../utils/billCredit';
+import { getCreditPayments, getPrimaryPaymentMethod } from '../utils/billCredit';
 import {
     buildRateMap,
     getRateStatus,
@@ -56,6 +56,7 @@ import {
     FiPieChart,
     FiGrid,
     FiPrinter,
+    FiPlusCircle,
 } from 'react-icons/fi';
 import {
     LineChart,
@@ -138,6 +139,24 @@ const EmployeeDashboard = () => {
     const cashInputRef = useRef(null);
 
 
+    // "Add to today's bill": offer shown after picking a customer who has an
+    // open credit bill from today; payment choices for saving to that bill.
+    const [amendOffer, setAmendOffer] = useState(null); // { posBillId, customerName, bills }
+    const [amendPayMethod, setAmendPayMethod] = useState('credit'); // credit | cash | card | online
+    const [amendPayAmount, setAmendPayAmount] = useState('');
+    // The current "add to bill" save attempt: { key, fingerprint, billId, payMethod, payAmount }.
+    // Kept until the server gives a definite answer, so closing and reopening the
+    // payment window and saving the same thing again reuses the same idempotency key.
+    const amendKeyRef = useRef(null);
+    // Keys of saves whose answer never arrived (timeout / connection lost) → fingerprint
+    const amendUncertainRef = useRef(new Map());
+    // Latest POS tabs, for answers that arrive after the cashier moved on
+    const billsRef = useRef(bills);
+    billsRef.current = bills;
+    const openBillsReqRef = useRef(0); // only the newest "open bills" answer counts
+    const amendEnabled = business?.settings?.allowBillAmend === true;
+    const canAmendBills = !!isAdmin || (permissions?.pos?.create === true && permissions?.pos?.amendBill !== false);
+
     // Toast
     const [toast, setToast] = useState({ show: false, message: '', icon: '' });
 
@@ -197,7 +216,7 @@ const EmployeeDashboard = () => {
         const handleKeyDown = (e) => {
             const currentBill = bills.find(b => b.id === activeBillId);
             const hasItems = currentBill?.items?.length > 0;
-            const anyModalOpen = showPaymentModal;
+            const anyModalOpen = showPaymentModal || !!amendOffer;
 
             // Ctrl+K or Cmd+K - Focus search
             if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
@@ -209,9 +228,7 @@ const EmployeeDashboard = () => {
             // Ctrl+0 - Pay
             if ((e.ctrlKey || e.metaKey) && e.key === '0' && hasItems && !anyModalOpen) {
                 e.preventDefault();
-                setShowPaymentModal(true);
-                setPaymentMethod('cash');
-                setCashGiven('');
+                openPayment();
                 return;
             }
 
@@ -224,7 +241,7 @@ const EmployeeDashboard = () => {
 
         window.addEventListener('keydown', handleKeyDown);
         return () => window.removeEventListener('keydown', handleKeyDown);
-    }, [bills, activeBillId, showPaymentModal, showSuccess]);
+    }, [bills, activeBillId, showPaymentModal, showSuccess, amendOffer]);
 
     useEffect(() => {
         if (showPaymentModal && paymentMethod === 'cash') {
@@ -599,7 +616,8 @@ const EmployeeDashboard = () => {
     // A below-cost rate can only be chosen when the business allows it.
     const applyCustomerRates = (bill) => {
         const rates = bill.customerRates || {};
-        const billDiscountActive = (Number(bill.billDiscountAmount) || 0) > 0;
+        // New lines on a bill that has a bill discount can't carry item discounts
+        const billDiscountActive = (Number(bill.billDiscountAmount) || 0) > 0 || bill.amend?.discountMode === 'bill';
         const items = bill.items.map((item) => {
             const isRated = item.discountSource === 'customerRate';
             const base = { ...item, limitPending: false, limitOverride: false };
@@ -665,6 +683,10 @@ const EmployeeDashboard = () => {
     };
 
     const setItemDiscount = (itemId, amount) => {
+        if (activeBill?.amend?.discountMode === 'bill') {
+            showToast(`Bill #${activeBill.amend.billNumber} has a bill discount — new items can't have their own`);
+            return;
+        }
         const requested = Math.max(0, Number(amount) || 0);
         updateActiveBill((bill) => {
             const target = bill.items.find((i) => i._id === itemId);
@@ -734,9 +756,13 @@ const EmployeeDashboard = () => {
             customerAddress: customer?.address || '',
             customerBalance: customer?.balance || 0,
             customerRates,
+            amend: null, // a different customer → not adding to the old bill any more
             // Decisions about the previous customer's rates don't carry over.
             items: bill.items.map(resetRateFlags),
         }));
+        setAmendOffer(null);
+        if (customer?._id) checkOpenBills(customer, activeBillId);
+        else openBillsReqRef.current++;
         if (appliedCount > 0) {
             showToast(`${appliedCount} special rate${appliedCount > 1 ? 's' : ''} applied for ${customer.name}`, '🏷');
         }
@@ -753,8 +779,95 @@ const EmployeeDashboard = () => {
             customerPhone: '',
             customerAddress: '',
             customerRates: {},
+            amend: null,
             items: bill.items.map(resetRateFlags),
         }));
+        setAmendOffer(null);
+        openBillsReqRef.current++; // an answer still on its way is ignored
+    };
+
+    // ── Add to today's bill ──────────────────────────────────────
+    const toAmendState = (b) => ({
+        billId: b.billId,
+        billNumber: b.billNumber,
+        createdAt: b.createdAt,
+        revision: b.revision || 0,
+        total: Number(b.total) || 0,
+        paid: Number(b.paid) || 0,
+        returned: Number(b.returned) || 0,
+        due: Number(b.due) || 0,
+        discountMode: b.discountMode || 'none',
+        items: b.items || [],
+    });
+
+    // After picking a registered customer: offer their open credit bill(s) from today.
+    const checkOpenBills = async (customer, posBillId) => {
+        const req = ++openBillsReqRef.current;
+        if (!customer?._id || !amendEnabled || !canAmendBills || !navigator.onLine) return;
+        try {
+            const res = await getOpenBillsForCustomer(customer._id);
+            const data = res.data || {};
+            // A slow answer for a customer who's no longer on this tab is ignored
+            const posBill = billsRef.current.find((b) => b.id === posBillId);
+            if (req !== openBillsReqRef.current || String(posBill?.customer || '') !== String(customer._id)) return;
+            // Only bills that can take items are offered (fully paid / returned /
+            // before closing aren't shown at all)
+            const usable = data.canAmend ? (data.bills || []).filter((b) => b.canAmend) : [];
+            if (usable.length === 0) return;
+            setAmendOffer({ posBillId, customerId: customer._id, customerName: data.customer?.name || customer.name, bills: usable });
+        } catch (err) {
+            // Feature off / no permission / offline: just make a new bill as usual.
+            console.warn('Open bills check failed:', err?.response?.data?.message || err?.message);
+        }
+    };
+
+    // A new / ended "add to bill": forget the save attempt and start the payment as credit
+    const resetAmendAttempt = () => {
+        amendKeyRef.current = null;
+        amendUncertainRef.current = new Map();
+        setAmendPayMethod('credit');
+        setAmendPayAmount('');
+    };
+
+    const startAmend = (posBillId, openBill) => {
+        // The customer was changed or removed while the box was open
+        const posBill = billsRef.current.find((b) => b.id === posBillId);
+        if (String(posBill?.customer || '') !== String(amendOffer?.customerId || '')) {
+            setAmendOffer(null);
+            showToast('The customer changed — this will be a new bill', '⚠');
+            return;
+        }
+        setBills((prev) => {
+            const updated = prev.map((b) => (b.id !== posBillId ? b : applyCustomerRates({
+                ...b,
+                amend: toAmendState(openBill),
+                // New lines can't take a bill discount; on a bill-discount bill they
+                // can't take item discounts either.
+                billDiscountAmount: 0,
+                billDiscountReason: '',
+                items: openBill.discountMode === 'bill'
+                    ? b.items.map((i) => ({ ...i, discountAmount: 0, discountSource: 'manual', customerRate: null }))
+                    : b.items,
+            })));
+            saveBills(updated);
+            return updated;
+        });
+        resetAmendAttempt();
+        setAmendOffer(null);
+        showToast(`Adding to Bill #${openBill.billNumber} — scan the new items`, '➕');
+    };
+
+    const stopAmend = () => {
+        updateActiveBill((bill) => ({ ...bill, amend: null }));
+        resetAmendAttempt();
+    };
+
+    const setPosBillAmend = (posBillId, amend) => {
+        setBills((prev) => {
+            const updated = prev.map((b) => (b.id !== posBillId ? b : applyCustomerRates({ ...b, amend })));
+            saveBills(updated);
+            return updated;
+        });
     };
 
     // Save a rate to the attached customer's profile, then refresh the bill's rate map.
@@ -906,6 +1019,273 @@ const EmployeeDashboard = () => {
         });
     }, [pendingLimitLine?._id, activeBillId, limitPromptTick]);
 
+    const toBillItemPayload = (item) => ({
+        product: item._id,
+        name: item.name,
+        barcode: item.barcode || '',
+        category: item.category || 'General',
+        qty: item.qty,
+        price: item.price,
+        costPrice: Number(item.costPrice) || 0,
+        gst: item.gst || 0,
+        discountAmount: Number(item.discountAmount) || 0,
+        discountSource: item.discountSource === 'customerRate' ? 'customerRate' : 'manual',
+        customerRate: item.discountSource === 'customerRate' ? item.customerRate : null,
+        limitOverride: !!item.limitOverride,
+    });
+
+    // Close a finished POS tab (or reset the only one)
+    const removePosBill = (posBillId) => {
+        if (bills.length > 1) {
+            const updated = bills.filter(b => b.id !== posBillId);
+            setBills(updated);
+            setActiveBillId(updated[0]?.id);
+            saveBills(updated, updated[0]?.id);
+        } else {
+            const newBill = {
+                id: Date.now().toString(),
+                name: 'Bill 1',
+                items: [],
+                createdAt: new Date().toISOString(),
+                customer: null,
+                customerName: '',
+                customerPhone: '',
+                billDiscountAmount: 0,
+                billDiscountReason: '',
+            };
+            setBills([newBill]);
+            setActiveBillId(newBill.id);
+            setBillCounter(1);
+            saveBills([newBill], newBill.id);
+        }
+    };
+
+    const openPayment = () => {
+        const bill = bills.find((b) => b.id === activeBillId);
+        if (!bill || bill.items.length === 0) return;
+        if (bill.amend) {
+            // A save whose answer never came: offer the same payment again, so
+            // saving again reuses its key and can't add the items twice
+            const pending = amendKeyRef.current;
+            if (pending && pending.billId === bill.amend.billId) {
+                setAmendPayMethod(pending.payMethod);
+                setAmendPayAmount(pending.payAmount);
+            } else {
+                setAmendPayMethod('credit');
+                setAmendPayAmount('');
+            }
+        } else {
+            setPaymentMethod('cash');
+            setCashGiven('');
+            setCreditPaidNow('');
+        }
+        setShowPaymentModal(true);
+    };
+
+    // Updated receipt for a bill with added lines: same bill number, the same
+    // product combined into one line, an "Added now" note, total before → after.
+    const printAmendedReceipt = (savedBill, change) => {
+        const number = change?.number || savedBill.revisionCount || 0;
+        const items = (savedBill.items || []).map((it) => ({
+            product: it.product?._id || it.product,
+            name: it.name,
+            qty: it.qty,
+            price: it.price,
+            discountAmount: it.discountAmount || 0,
+            returnedQty: it.returnedQty || 0,
+        }));
+        const addedItems = (savedBill.items || [])
+            .filter((it) => (it.revision || 0) === number)
+            .map((it) => ({ product: it.product?._id || it.product, name: it.name, qty: it.qty }));
+        printReceiptUtil({
+            store: business,
+            currency: business?.currency || 'Rs.',
+            billNumber: savedBill.billNumber || '-',
+            date: new Date().toLocaleString('en-PK', { dateStyle: 'medium', timeStyle: 'short' }),
+            customerName: savedBill.customerName || 'Walk-in',
+            customerPhone: savedBill.customerPhone || '',
+            customerAddress: savedBill.customerAddress || '',
+            cashierName: user?.name || '',
+            customerBalanceBefore: savedBill.customerBalanceBefore || 0,
+            items,
+            subtotal: items.reduce((sum, it) => sum + (it.price * it.qty - (Number(it.discountAmount) || 0)), 0),
+            tax: savedBill.totalTax || 0,
+            itemDiscounts: savedBill.totalItemDiscount || 0,
+            billDiscount: savedBill.billDiscountAmount || 0,
+            total: savedBill.total || 0,
+            paymentMethod: savedBill.paymentStatus === 'unpaid' ? 'credit' : getPrimaryPaymentMethod(savedBill),
+            amountPaid: savedBill.amountPaid || 0,
+            amountDue: savedBill.amountDue || 0,
+            totalRefunded: savedBill.totalRefunded || 0,
+            netAmount: (savedBill.total || 0) - (savedBill.totalRefunded || 0),
+            creditPayments: getCreditPayments(savedBill),
+            title: `SALE INVOICE - UPDATE ${number}`,
+            updateLine: change ? `Total ${formatCurrency(change.totalBefore)} → ${formatCurrency(change.totalAfter)}` : '',
+            addedItems,
+        });
+    };
+
+    const finishAmend = (posBill, savedBill, change, key) => {
+        const revisions = savedBill?.revisions || [];
+        const last = change || (key && revisions.find((r) => r.idempotencyKey === key)) || revisions.slice(-1)[0] || null;
+        removePosBill(posBill.id);
+        const sData = {
+            billNumber: savedBill?.billNumber,
+            amended: true,
+            change: last,
+            savedBill,
+            total: last?.addedTotal ?? 0,
+            paymentMethod: last?.paymentMethod || 'credit',
+            amountPaid: last?.paymentAmount || 0,
+        };
+        setSuccessData(sData);
+        setShowPaymentModal(false);
+        setShowSuccess(true);
+        resetAmendAttempt();
+        if (window.electronAPI?.printReceipt && savedBill) printAmendedReceipt(savedBill, last);
+        loadData(false);
+    };
+
+    // The bill changed under us (someone else added items / took a payment / a
+    // return): reload it and let the cashier check before saving again.
+    const reloadAmend = async (posBill, message, currentFingerprint) => {
+        // Did a save whose answer never arrived go through after all? Then the
+        // bill "changed" because of us — finish it instead of letting the cashier
+        // save the same items a second time.
+        if (amendUncertainRef.current.size > 0) {
+            try {
+                const res = await getBill(posBill.amend.billId);
+                const saved = res.data?.bill || res.data;
+                const applied = (saved?.revisions || []).find((r) => amendUncertainRef.current.has(r.idempotencyKey));
+                if (applied) {
+                    const sameAsNow = amendUncertainRef.current.get(applied.idempotencyKey) === currentFingerprint;
+                    finishAmend(posBill, saved, null, applied.idempotencyKey);
+                    if (!sameAsNow) {
+                        appAlert(`Your earlier save to Bill #${saved.billNumber} went through before the connection dropped (update ${applied.number}).\n\nThe changes you made after that were not saved. Check the bill and add anything missing again.`, { title: 'Already saved' });
+                    }
+                    return;
+                }
+            } catch {
+                showToast(message || 'This bill was just changed. Try again.', '⚠');
+                return; // keep the attempt — we still don't know if it went through
+            }
+        }
+        amendKeyRef.current = null;
+        amendUncertainRef.current = new Map();
+        try {
+            const res = await getOpenBillsForCustomer(posBill.customer);
+            const fresh = (res.data?.bills || []).find((b) => String(b.billId) === String(posBill.amend.billId));
+            if (fresh?.canAmend) {
+                setPosBillAmend(posBill.id, toAmendState(fresh));
+                showToast(`Bill #${fresh.billNumber} was just changed — reloaded. Check and save again.`, '⚠');
+                return;
+            }
+            setPosBillAmend(posBill.id, null);
+            setShowPaymentModal(false);
+            showToast(`${fresh?.blockedReason || message || "This bill can't take more items now"} — this will be a new bill`, '⚠');
+        } catch {
+            showToast(message || 'This bill was just changed. Try again.', '⚠');
+        }
+    };
+
+    // The server refused the save. If the bill can't take items any more (not
+    // from today, closing done, fully paid / returned, other customer), switch
+    // this tab back to a normal new bill — the items stay in the cart.
+    const recheckAmendable = async (posBill, message) => {
+        try {
+            const res = await getOpenBillsForCustomer(posBill.customer);
+            const fresh = (res.data?.bills || []).find((b) => String(b.billId) === String(posBill.amend.billId));
+            if (res.data?.canAmend && fresh?.canAmend) {
+                showToast(message || 'Failed to add items to the bill', '⚠'); // still open: a different problem
+                return;
+            }
+            dropAmend(posBill, fresh?.blockedReason || message);
+        } catch {
+            showToast(message || 'Failed to add items to the bill', '⚠');
+        }
+    };
+
+    const dropAmend = (posBill, reason) => {
+        setPosBillAmend(posBill.id, null);
+        resetAmendAttempt();
+        setShowPaymentModal(false);
+        // Backend reasons end with "Make a new bill." — the toast already says that
+        const why = String(reason || "This bill can't take more items now").replace(/\.?\s*Make a new bill\.?\s*$/i, '');
+        showToast(`${why} — this will be a new bill`, '⚠');
+    };
+
+    const handleAmendSave = async () => {
+        const bill = bills.find((b) => b.id === activeBillId);
+        const amend = bill?.amend;
+        if (!bill || !amend || bill.items.length === 0 || processing) return;
+        if (!navigator.onLine) {
+            showToast('Adding to a bill needs an internet connection', '⚠');
+            return;
+        }
+        const newTotal = getBillTotal(bill).total;
+        const dueNow = Math.round((amend.due + newTotal) * 100) / 100;
+        let payment;
+        if (amendPayMethod !== 'credit') {
+            const amount = Math.round((parseFloat(amendPayAmount) || 0) * 100) / 100;
+            if (!(amount > 0)) { showToast('Enter the amount paid now, or choose Leave as credit'); return; }
+            if (amount > dueNow + 0.01) { showToast(`Paid amount is more than the due (${formatCurrency(dueNow)})`); return; }
+            payment = { amount, method: amendPayMethod };
+        }
+        const itemsPayload = [...bill.items].reverse().map(toBillItemPayload); // saved oldest-first, like a new bill
+        const fingerprint = JSON.stringify({ bill: amend.billId, items: itemsPayload, payment: payment || null });
+        // Same bill, items and payment as the last unanswered try → same key, so the
+        // server can tell it's a repeat. Anything changed → a new key.
+        const prev = amendKeyRef.current;
+        if (!prev || prev.billId !== amend.billId || prev.fingerprint !== fingerprint) {
+            amendKeyRef.current = {
+                key: window.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2, 11)}`,
+                fingerprint,
+                billId: amend.billId,
+            };
+        }
+        Object.assign(amendKeyRef.current, { payMethod: amendPayMethod, payAmount: amendPayAmount });
+        const { key } = amendKeyRef.current;
+        setProcessing(true);
+        try {
+            const res = await addBillItems(amend.billId, {
+                customer: bill.customer,
+                revision: amend.revision,
+                idempotencyKey: key,
+                items: itemsPayload,
+                ...(payment ? { payment } : {}),
+            });
+            finishAmend(bill, res.data?.bill, res.data?.change);
+        } catch (error) {
+            const status = error.response?.status;
+            const data = error.response?.data || {};
+            if (status === 409 && data.alreadyApplied && data.bill) {
+                finishAmend(bill, data.bill, null, key); // this save already went through
+            } else if (status === 409) {
+                await reloadAmend(bill, data.message, fingerprint);
+            } else if (status === 403) {
+                setPosBillAmend(bill.id, null);
+                setShowPaymentModal(false);
+                showToast(`${data.message || 'Not allowed'} — this will be a new bill`, '⚠');
+            } else if (status === 400 && !data.outOfStock?.length) {
+                amendKeyRef.current = null;
+                await recheckAmendable(bill, data.message);
+            } else if (status === 400 && data.outOfStock?.length) {
+                amendKeyRef.current = null;
+                appAlert(`${data.message}\n\n${data.outOfStock.map((o) => `• ${o.name}: needs ${o.requested}, only ${o.available} in stock`).join('\n')}`);
+            } else if (!error.response || status >= 500) {
+                // No answer (timeout / connection lost): it may have been saved. Keep
+                // the key so saving again is recognised as a repeat.
+                amendUncertainRef.current.set(key, fingerprint);
+                showToast('No answer from the server — save again to retry (it won\'t be added twice)', '⚠');
+            } else {
+                amendKeyRef.current = null; // a definite "no": the next try is a new save
+                showToast(data.message || 'Failed to add items to the bill');
+            }
+        } finally {
+            setProcessing(false);
+        }
+    };
+
     const handleCheckout = async (confirmedWalkIn = false) => {
         const bill = bills.find(b => b.id === activeBillId);
         if (!bill || bill.items.length === 0) return;
@@ -956,20 +1336,7 @@ const EmployeeDashboard = () => {
         setProcessing(true);
         try {
             const response = await createBill({
-                items: orderedItems.map((item) => ({
-                    product: item._id,
-                    name: item.name,
-                    barcode: item.barcode || '',
-                    category: item.category || 'General',
-                    qty: item.qty,
-                    price: item.price,
-                    costPrice: Number(item.costPrice) || 0,
-                    gst: item.gst || 0,
-                    discountAmount: Number(item.discountAmount) || 0,
-                    discountSource: item.discountSource === 'customerRate' ? 'customerRate' : 'manual',
-                    customerRate: item.discountSource === 'customerRate' ? item.customerRate : null,
-                    limitOverride: !!item.limitOverride,
-                })),
+                items: orderedItems.map(toBillItemPayload),
                 status: 'completed',
                 customer: bill.customer || null,
                 customerName: bill.customerName || 'Walk-in',
@@ -1057,6 +1424,7 @@ const EmployeeDashboard = () => {
             cashierName: user?.name || '',
             customerBalanceBefore: billData.customerBalanceBefore ?? bill.customerBalance ?? 0,
             items: bill.items.map(item => ({
+                product: item._id,
                 name: item.name,
                 qty: item.qty,
                 price: item.price,
@@ -1432,7 +1800,51 @@ const EmployeeDashboard = () => {
 
                     {/* Cart Items */}
                     <div className="flex-1 overflow-y-auto px-5 pb-4 dark-scrollbar">
-                        {activeBill?.items.length === 0 ? (
+                        {activeBill?.amend && (
+                            <div className="mb-3 rounded-2xl border border-amber-300 dark:border-[rgba(255,210,100,0.3)] bg-amber-50/60 dark:bg-[rgba(255,210,100,0.04)] overflow-hidden">
+                                <div className="flex items-center justify-between gap-3 px-4 py-2.5 border-b border-amber-200 dark:border-[rgba(255,210,100,0.15)]">
+                                    <div className="flex items-center gap-2 text-[13px] text-amber-800 dark:text-d-accent">
+                                        <FiPlusCircle size={14} />
+                                        <span className="font-semibold">Adding to Bill #{activeBill.amend.billNumber}</span>
+                                        <span className="text-amber-700/70 dark:text-d-muted">· {new Date(activeBill.amend.createdAt).toLocaleTimeString('en-PK', { hour: 'numeric', minute: '2-digit' })} · {formatCurrency(activeBill.amend.due)} due</span>
+                                    </div>
+                                    <button
+                                        type="button"
+                                        onClick={stopAmend}
+                                        className="text-[12px] text-amber-700 dark:text-d-muted hover:underline"
+                                        title="Make a new bill instead"
+                                    >
+                                        Make a new bill instead
+                                    </button>
+                                </div>
+                                <div className="px-4 py-2 divide-y divide-amber-100 dark:divide-[rgba(255,255,255,0.04)]">
+                                    {activeBill.amend.items.map((it) => (
+                                        <div key={it.itemId} className="flex items-center gap-3 py-1.5 text-[13px]">
+                                            <span className="shrink-0 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-slate-200/70 dark:bg-white/10 text-slate-600 dark:text-d-muted">Earlier</span>
+                                            <div className="flex-1 min-w-0">
+                                                <span className="text-slate-700 dark:text-d-text">{it.name}</span>
+                                                {(it.revision || 0) > 0 && it.addedBy && (
+                                                    <span className="ml-2 text-[11px] text-slate-400 dark:text-d-faint">Added by {it.addedBy}</span>
+                                                )}
+                                                {(it.returnedQty || 0) > 0 && (
+                                                    <span className="ml-2 text-[11px] text-red-500 dark:text-d-red">{it.returnedQty} returned</span>
+                                                )}
+                                            </div>
+                                            <span className="text-slate-500 dark:text-d-muted tabular-nums">{it.qty} × {formatCurrency(it.price)}</span>
+                                            <span className="w-20 text-right font-medium text-slate-700 dark:text-d-text tabular-nums">{formatCurrency(it.itemTotal)}</span>
+                                        </div>
+                                    ))}
+                                </div>
+                                <p className="px-4 pb-2.5 text-[11px] text-slate-500 dark:text-d-muted">
+                                    Earlier items can't be changed here — to take one back, use Return on Bill #{activeBill.amend.billNumber}.
+                                </p>
+                            </div>
+                        )}
+                        {activeBill?.items.length === 0 && activeBill?.amend ? (
+                            <div className="py-8 text-center text-[13px] text-slate-500 dark:text-d-muted">
+                                Scan or search the new items to add to Bill #{activeBill.amend.billNumber}
+                            </div>
+                        ) : activeBill?.items.length === 0 ? (
                             <div className="h-full flex flex-col items-center justify-center pb-10">
                                 <div className="w-[100px] h-[100px] rounded-full border-2 border-amber-200 dark:border-[rgba(255,210,100,0.15)] flex items-center justify-center relative animate-spin-ring">
                                     <div className="absolute inset-[-2px] rounded-full border-2 border-transparent border-t-amber-500 dark:border-t-d-accent animate-spin-fast" />
@@ -1458,7 +1870,7 @@ const EmployeeDashboard = () => {
                                     // Sold at the limit price instead of the (lower) customer rate
                                     const rateCapped = isRated && !item.limitOverride
                                         && Math.round((item.price - item.discountAmount / (item.qty || 1)) * 100) / 100 > Number(item.customerRate);
-                                    const hasBillDiscount = (Number(activeBill.billDiscountAmount) || 0) > 0;
+                                    const hasBillDiscount = (Number(activeBill.billDiscountAmount) || 0) > 0 || activeBill.amend?.discountMode === 'bill';
                                     const discountCap = getItemDiscountCap(item);
                                     return (
                                         <div
@@ -1473,7 +1885,12 @@ const EmployeeDashboard = () => {
                                             >
                                                 <span className="text-2xl flex-shrink-0">{item.emoji || '📦'}</span>
                                                 <div className="flex-1 min-w-0">
-                                                    <h4 className="font-medium text-[14px] text-slate-800 dark:text-d-text truncate">{item.name}</h4>
+                                                    <h4 className="font-medium text-[14px] text-slate-800 dark:text-d-text truncate">
+                                                        {activeBill.amend && (
+                                                            <span className="mr-2 align-middle px-1.5 py-0.5 rounded text-[10px] font-semibold bg-emerald-100 dark:bg-[rgba(52,232,161,0.15)] text-emerald-700 dark:text-d-green">New</span>
+                                                        )}
+                                                        {item.name}
+                                                    </h4>
                                                     <p className="text-[11px] text-slate-500 dark:text-d-muted tracking-wide">
                                                         {item._id?.slice(-4)} · {formatCurrency(item.price)} each
                                                         {isRated && (
@@ -1590,7 +2007,7 @@ const EmployeeDashboard = () => {
                                                         />
                                                         {hasBillDiscount && (
                                                             <span className="text-[10px] text-slate-400 dark:text-d-faint">
-                                                                Bill-level discount active
+                                                                {activeBill.amend?.discountMode === 'bill' ? `Bill #${activeBill.amend.billNumber} has a bill discount` : 'Bill-level discount active'}
                                                             </span>
                                                         )}
                                                     </div>
@@ -1759,7 +2176,42 @@ const EmployeeDashboard = () => {
             {/* Cart Footer */}
             <div className="px-6 py-4 border-t border-slate-200 dark:border-d-border bg-white/80 dark:bg-[rgba(11,14,26,0.6)] backdrop-blur-lg flex-shrink-0">
 
-                {/* Totals */}
+                {/* Totals — adding to an earlier bill */}
+                {activeBill?.amend ? (() => {
+                    const am = activeBill.amend;
+                    const dueNow = am.due + effectiveTotal;
+                    const row = 'flex justify-between text-[13px]';
+                    return (
+                        <div className="flex flex-col gap-2 mb-4">
+                            <div className={row}>
+                                <span className="text-slate-500 dark:text-d-muted">Earlier total (Bill #{am.billNumber})</span>
+                                <span className="text-slate-700 dark:text-d-text tabular-nums">{formatCurrency(am.total)}</span>
+                            </div>
+                            <div className={row}>
+                                <span className="text-slate-500 dark:text-d-muted">New items ({activeItemCount})</span>
+                                <span className="font-medium text-emerald-600 dark:text-d-green tabular-nums">+ {formatCurrency(effectiveTotal)}</span>
+                            </div>
+                            <div className={row}>
+                                <span className="text-slate-500 dark:text-d-muted">New total</span>
+                                <span className="font-medium text-slate-800 dark:text-d-text tabular-nums">{formatCurrency(am.total + effectiveTotal)}</span>
+                            </div>
+                            <div className={row}>
+                                <span className="text-slate-500 dark:text-d-muted">Already paid</span>
+                                <span className="text-slate-700 dark:text-d-text tabular-nums">− {formatCurrency(am.paid)}</span>
+                            </div>
+                            {am.returned > 0 && (
+                                <div className={row}>
+                                    <span className="text-slate-500 dark:text-d-muted">Returned</span>
+                                    <span className="text-slate-700 dark:text-d-text tabular-nums">− {formatCurrency(am.returned)}</span>
+                                </div>
+                            )}
+                            <div className="flex justify-between items-end pt-3 mt-1 border-t border-slate-200 dark:border-d-border">
+                                <span className="font-display text-[15px] font-semibold text-slate-800 dark:text-d-text">Due now</span>
+                                <span className="font-display text-[28px] font-bold text-amber-600 dark:text-d-accent leading-none tracking-tight">{formatCurrency(dueNow)}</span>
+                            </div>
+                        </div>
+                    );
+                })() : (
                 <div className="flex flex-col gap-2 mb-4">
                     <div className="flex justify-between text-[13px]">
                         <span className="text-slate-500 dark:text-d-muted">Subtotal ({activeItemCount} items)</span>
@@ -1838,24 +2290,132 @@ const EmployeeDashboard = () => {
                         <span className="font-display text-[28px] font-bold text-amber-600 dark:text-d-accent leading-none tracking-tight">{formatCurrency(effectiveTotal)}</span>
                     </div>
                 </div>
+                )}
 
                 {/* Action Buttons */}
                 <div className="flex gap-3">
                     <button
-                        onClick={() => { setShowPaymentModal(true); setPaymentMethod('cash'); setCashGiven(''); setCreditPaidNow(''); }}
+                        onClick={openPayment}
                         disabled={!activeBill || activeBill.items.length === 0}
                         className="flex-[2] py-3.5 px-4 rounded-xl bg-gradient-to-r from-amber-400 to-amber-500 dark:from-d-accent dark:to-d-accent-s text-white dark:text-d-card font-bold text-[14px] flex items-center justify-center gap-2 shadow-md dark:shadow-[0_6px_24px_rgba(255,185,50,0.3)] hover:-translate-y-0.5 hover:shadow-lg dark:hover:shadow-[0_10px_36px_rgba(255,185,50,0.45)] active:translate-y-0 transition-all disabled:opacity-50 disabled:cursor-not-allowed relative overflow-hidden group"
                     >
                         <div className="absolute top-[-50%] left-[-60%] w-[40%] h-[200%] bg-[rgba(255,255,255,0.15)] transform skew-x-[-20deg] group-hover:left-[160%] transition-all duration-500" />
-                        <FiShoppingCart size={15} />
-                        Pay · {formatCurrency(effectiveTotal)}
+                        {activeBill?.amend ? <FiPlusCircle size={15} /> : <FiShoppingCart size={15} />}
+                        {activeBill?.amend
+                            ? `Add to Bill #${activeBill.amend.billNumber} · ${formatCurrency(effectiveTotal)}`
+                            : `Pay · ${formatCurrency(effectiveTotal)}`}
                         <span className="text-[10px] opacity-65 font-normal">Ctrl+0</span>
                     </button>
                 </div>
             </div>
 
+            {/* Save to an earlier bill — optional payment, or leave as credit */}
+            {showPaymentModal && activeBill?.amend && (() => {
+                const am = activeBill.amend;
+                const dueNow = Math.round((am.due + effectiveTotal) * 100) / 100;
+                const amount = parseFloat(amendPayAmount) || 0;
+                const payInvalid = amendPayMethod !== 'credit' && (!(amount > 0) || amount > dueNow + 0.01);
+                const offline = typeof navigator !== 'undefined' && !navigator.onLine;
+                return (
+                    <div className="fixed inset-0 bg-black/40 dark:bg-black/60 flex items-center justify-center z-50 backdrop-blur-sm">
+                        <div className="bg-white dark:bg-d-elevated border border-slate-200 dark:border-[rgba(255,255,255,0.1)] rounded-2xl p-6 w-full max-w-md animate-pop-in shadow-2xl max-h-[90vh] overflow-y-auto">
+                            <div className="flex items-start justify-between mb-5">
+                                <div>
+                                    <h3 className="text-lg font-bold text-slate-800 dark:text-d-text">Add to Bill #{am.billNumber}</h3>
+                                    <p className="text-[12px] text-slate-500 dark:text-d-muted">{activeBill.customerName} · same bill number, updated receipt</p>
+                                </div>
+                                <button onClick={() => setShowPaymentModal(false)} aria-label="Close" className="p-2 hover:bg-slate-100 dark:hover:bg-[rgba(255,255,255,0.05)] rounded-lg text-slate-500 dark:text-d-muted">
+                                    <FiX size={18} />
+                                </button>
+                            </div>
+
+                            <div className="rounded-xl border border-slate-200 dark:border-d-border p-4 space-y-1.5 text-[13px] tabular-nums">
+                                <div className="flex justify-between"><span className="text-slate-500 dark:text-d-muted">Earlier total</span><span className="text-slate-700 dark:text-d-text">{formatCurrency(am.total)}</span></div>
+                                <div className="flex justify-between"><span className="text-slate-500 dark:text-d-muted">New items</span><span className="text-emerald-600 dark:text-d-green">+ {formatCurrency(effectiveTotal)}</span></div>
+                                <div className="flex justify-between"><span className="text-slate-500 dark:text-d-muted">New total</span><span className="font-medium text-slate-800 dark:text-d-text">{formatCurrency(am.total + effectiveTotal)}</span></div>
+                                <div className="flex justify-between"><span className="text-slate-500 dark:text-d-muted">Already paid{am.returned > 0 ? ' / returned' : ''}</span><span className="text-slate-700 dark:text-d-text">− {formatCurrency(am.paid + am.returned)}</span></div>
+                                <div className="flex justify-between items-end pt-2 mt-1 border-t border-slate-200 dark:border-d-border">
+                                    <span className="font-semibold text-slate-800 dark:text-d-text">Due now</span>
+                                    <span className="font-display text-2xl font-bold text-amber-600 dark:text-d-accent">{formatCurrency(dueNow)}</span>
+                                </div>
+                            </div>
+
+                            <p className="mt-5 mb-2 text-sm font-medium text-slate-500 dark:text-d-muted">Payment now</p>
+                            <div className="grid grid-cols-4 gap-2">
+                                {[
+                                    { id: 'credit', label: 'Credit', icon: FiUser },
+                                    { id: 'cash', label: 'Cash', icon: FiDollarSign },
+                                    { id: 'card', label: 'Card', icon: FiCreditCard },
+                                    { id: 'online', label: 'Online', icon: FiSmartphone },
+                                ].map((m) => (
+                                    <button
+                                        key={m.id}
+                                        type="button"
+                                        onClick={() => {
+                                            setAmendPayMethod(m.id);
+                                            if (m.id !== 'credit' && !amendPayAmount) setAmendPayAmount(String(dueNow));
+                                        }}
+                                        className={`py-2.5 rounded-xl text-sm font-medium flex items-center justify-center gap-1.5 transition-all ${
+                                            amendPayMethod === m.id
+                                                ? 'bg-amber-500 dark:bg-d-accent text-white dark:text-d-card'
+                                                : 'bg-slate-100 dark:bg-[rgba(255,255,255,0.05)] border border-slate-200 dark:border-d-border text-slate-600 dark:text-d-muted hover:bg-slate-200 dark:hover:bg-d-glass-hover'
+                                        }`}
+                                    >
+                                        <m.icon size={15} />
+                                        {m.label}
+                                    </button>
+                                ))}
+                            </div>
+                            {amendPayMethod === 'credit' ? (
+                                <p className="mt-3 text-[12px] text-slate-500 dark:text-d-muted">
+                                    Nothing paid now — {formatCurrency(dueNow)} stays on {activeBill.customerName}'s Bill #{am.billNumber}.
+                                </p>
+                            ) : (
+                                <div className="mt-3">
+                                    <label htmlFor="amend-pay" className="block mb-1.5 text-[12px] text-slate-500 dark:text-d-muted">Amount paid now (up to {formatCurrency(dueNow)})</label>
+                                    <div className="flex gap-2">
+                                        <input
+                                            id="amend-pay"
+                                            type="number"
+                                            min="0"
+                                            step="0.01"
+                                            value={amendPayAmount}
+                                            onChange={(e) => setAmendPayAmount(e.target.value)}
+                                            className="flex-1 px-3 py-2.5 bg-slate-50 dark:bg-[rgba(255,255,255,0.05)] border border-slate-200 dark:border-d-border rounded-xl text-base text-slate-800 dark:text-d-text focus:border-amber-400 dark:focus:border-d-border-hover outline-none"
+                                        />
+                                        <button type="button" onClick={() => setAmendPayAmount(String(dueNow))} className="px-3 rounded-xl text-[12px] bg-slate-100 dark:bg-[rgba(255,255,255,0.05)] text-slate-600 dark:text-d-muted hover:bg-slate-200 dark:hover:bg-d-glass-hover">Full</button>
+                                    </div>
+                                    {amount > 0 && amount <= dueNow + 0.01 && (
+                                        <p className="mt-1.5 text-[12px] text-slate-500 dark:text-d-muted">Still due after this: {formatCurrency(Math.max(0, dueNow - amount))}</p>
+                                    )}
+                                    {amount > dueNow + 0.01 && (
+                                        <p className="mt-1.5 text-[12px] text-red-500 dark:text-d-red">More than the due ({formatCurrency(dueNow)})</p>
+                                    )}
+                                </div>
+                            )}
+
+                            {offline && (
+                                <p className="mt-4 text-[12px] text-red-500 dark:text-d-red">You're offline — adding to a bill needs an internet connection.</p>
+                            )}
+
+                            <button
+                                onClick={handleAmendSave}
+                                disabled={processing || payInvalid || offline}
+                                className="mt-5 w-full py-3.5 bg-emerald-500 dark:bg-d-green text-white dark:text-d-card font-bold rounded-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                            >
+                                {processing ? (
+                                    <><div className="w-5 h-5 border-2 border-white dark:border-d-card border-t-transparent rounded-full animate-spin" /> Saving...</>
+                                ) : (
+                                    <><FiCheck size={18} /> Save to Bill #{am.billNumber}</>
+                                )}
+                            </button>
+                        </div>
+                    </div>
+                );
+            })()}
+
             {/* Payment Modal */}
-            {showPaymentModal && (
+            {showPaymentModal && !activeBill?.amend && (
                 <div className="fixed inset-0 bg-black/40 dark:bg-black/60 flex items-center justify-center z-50 backdrop-blur-sm">
                     <div className="bg-white dark:bg-d-elevated border border-slate-200 dark:border-[rgba(255,255,255,0.1)] rounded-2xl p-6 w-full max-w-md animate-pop-in shadow-2xl max-h-[90vh] overflow-y-auto">
                         <div className="flex items-center justify-between mb-6">
@@ -2012,6 +2572,49 @@ const EmployeeDashboard = () => {
                 </div>
             )}
 
+            {/* Customer has a credit bill from today: add to it, or a new bill */}
+            {amendOffer && (
+                <div className="fixed inset-0 bg-black/50 dark:bg-black/70 flex items-center justify-center z-[200] backdrop-blur-sm">
+                    <div className="bg-white dark:bg-d-elevated border border-slate-200 dark:border-[rgba(255,255,255,0.1)] rounded-2xl p-6 w-full max-w-md animate-pop-in shadow-2xl">
+                        <div className="flex items-center gap-3 mb-4">
+                            <div className="w-11 h-11 rounded-full bg-amber-100 dark:bg-[rgba(255,185,50,0.15)] flex items-center justify-center">
+                                <FiPlusCircle className="text-amber-600 dark:text-d-accent" size={20} />
+                            </div>
+                            <div>
+                                <h3 className="text-base font-bold text-slate-800 dark:text-d-text">{amendOffer.customerName} has a credit bill from today</h3>
+                                <p className="text-xs text-slate-500 dark:text-d-muted">Add today's items to it, or start a new bill</p>
+                            </div>
+                        </div>
+                        <div className="space-y-2">
+                            {amendOffer.bills.map((b) => (
+                                <button
+                                    key={b.billId}
+                                    type="button"
+                                    onClick={() => startAmend(amendOffer.posBillId, b)}
+                                    className="w-full flex items-center justify-between gap-3 px-4 py-3 rounded-xl border border-amber-300 dark:border-[rgba(255,210,100,0.35)] bg-amber-50/50 dark:bg-[rgba(255,210,100,0.05)] hover:bg-amber-50 dark:hover:bg-[rgba(255,210,100,0.1)] text-left transition-colors"
+                                >
+                                    <div>
+                                        <div className="text-sm font-semibold text-slate-800 dark:text-d-text">Bill #{b.billNumber} · {new Date(b.createdAt).toLocaleTimeString('en-PK', { hour: 'numeric', minute: '2-digit' })}</div>
+                                        <div className="text-[12px] text-slate-500 dark:text-d-muted">{b.items.length} item{b.items.length === 1 ? '' : 's'} · total {formatCurrency(b.total)}</div>
+                                    </div>
+                                    <div className="text-right">
+                                        <div className="text-sm font-bold text-amber-700 dark:text-d-accent">{formatCurrency(b.due)} due</div>
+                                        <div className="text-[11px] font-medium text-amber-600 dark:text-d-accent">Add to this bill →</div>
+                                    </div>
+                                </button>
+                            ))}
+                        </div>
+                        <button
+                            type="button"
+                            onClick={() => setAmendOffer(null)}
+                            className="mt-4 w-full py-3 rounded-xl border border-slate-200 dark:border-d-border text-sm font-semibold text-slate-700 dark:text-d-text hover:bg-slate-50 dark:hover:bg-d-glass transition-colors"
+                        >
+                            New bill
+                        </button>
+                    </div>
+                </div>
+            )}
+
             {/* Walk-in Confirmation Modal */}
             {showWalkInConfirm && (
                 <div className="fixed inset-0 bg-black/50 dark:bg-black/70 flex items-center justify-center z-[200] backdrop-blur-sm">
@@ -2067,8 +2670,18 @@ const EmployeeDashboard = () => {
                         <div className="w-20 h-20 bg-emerald-50 dark:bg-[rgba(52,232,161,0.1)] rounded-full flex items-center justify-center mx-auto mb-4">
                             <FiCheck size={40} className="text-emerald-500 dark:text-d-green" />
                         </div>
-                        <h3 className="text-xl font-bold text-slate-800 dark:text-d-text mb-2">Sale Complete!</h3>
-                        {successData && (
+                        <h3 className="text-xl font-bold text-slate-800 dark:text-d-text mb-2">{successData?.amended ? `Bill #${successData.billNumber} updated` : 'Sale Complete!'}</h3>
+                        {successData?.amended && successData.change && (
+                            <div className="text-left bg-slate-50 dark:bg-[rgba(255,255,255,0.03)] rounded-xl p-4 mt-4 space-y-2 text-sm">
+                                <div className="flex justify-between"><span className="text-slate-500 dark:text-d-muted">Added</span><span className="font-medium text-slate-800 dark:text-d-text">{formatCurrency(successData.change.addedTotal)}</span></div>
+                                <div className="flex justify-between"><span className="text-slate-500 dark:text-d-muted">Bill total</span><span className="font-medium text-slate-800 dark:text-d-text">{formatCurrency(successData.change.totalBefore)} → {formatCurrency(successData.change.totalAfter)}</span></div>
+                                {successData.change.paymentAmount > 0 && (
+                                    <div className="flex justify-between"><span className="text-slate-500 dark:text-d-muted">Paid now ({successData.change.paymentMethod})</span><span className="font-medium text-emerald-600 dark:text-d-green">{formatCurrency(successData.change.paymentAmount)}</span></div>
+                                )}
+                                <div className="flex justify-between pt-2 border-t border-slate-200 dark:border-[rgba(255,255,255,0.05)]"><span className="text-slate-500 dark:text-d-muted">Still due on this bill</span><span className="font-semibold text-amber-600 dark:text-d-accent">{formatCurrency(successData.change.dueAfter)}</span></div>
+                            </div>
+                        )}
+                        {successData && !successData.amended && (
                             <div className="text-left bg-slate-50 dark:bg-[rgba(255,255,255,0.03)] rounded-xl p-4 mt-4 space-y-2">
                                 {successData.billNumber && (
                                     <div className="flex justify-between text-sm">
@@ -2101,9 +2714,11 @@ const EmployeeDashboard = () => {
                             >
                                 Close
                             </button>
-                            {successData?.bill && (
+                            {(successData?.bill || successData?.savedBill) && (
                                 <button
-                                    onClick={() => printReceipt(successData, successData.bill)}
+                                    onClick={() => (successData.amended
+                                        ? printAmendedReceipt(successData.savedBill, successData.change)
+                                        : printReceipt(successData, successData.bill))}
                                     className="flex-1 py-3 rounded-xl bg-emerald-500 text-white text-sm font-medium hover:bg-emerald-600 transition-colors flex items-center justify-center gap-2 whitespace-nowrap"
                                 >
                                     <FiPrinter size={16} />
