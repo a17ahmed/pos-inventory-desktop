@@ -320,7 +320,7 @@ const Receipts = () => {
             netAmount: receipt.netAmount ?? ((receipt.total || 0) - (receipt.totalRefunded || 0)),
             creditPayments: getCreditPayments(receipt),
             // Reprint of a bill that had items added later: lines are combined, header says so
-            ...(receipt.revisionCount > 0 ? { title: `SALE INVOICE — UPDATED (update ${receipt.revisionCount})` } : {}),
+            ...(receipt.revisionCount > 0 ? { title: `SALE INVOICE - UPDATE ${receipt.revisionCount}` } : {}),
         };
     };
 

@@ -5,7 +5,7 @@ import { useBusiness } from '../context/BusinessContext';
 import { useAuth } from '../context/AuthContext';
 import { getProducts } from '../services/api/products';
 import { getReceiptStats, getTopProducts } from '../services/api/receipts';
-import { createBill, getOpenBillsForCustomer, addBillItems } from '../services/api/bills';
+import { createBill, getBill, getOpenBillsForCustomer, addBillItems } from '../services/api/bills';
 import { getDashboardSummary } from '../services/api/dashboard';
 import { printReceipt as printReceiptUtil } from '../utils/printReceipt';
 import { appAlert, appConfirm, appChoose } from '../components/AppDialog';
@@ -144,7 +144,16 @@ const EmployeeDashboard = () => {
     const [amendOffer, setAmendOffer] = useState(null); // { posBillId, customerName, bills }
     const [amendPayMethod, setAmendPayMethod] = useState('credit'); // credit | cash | card | online
     const [amendPayAmount, setAmendPayAmount] = useState('');
-    const amendKeyRef = useRef(null); // idempotency key: new per save attempt, reused on retry
+    // The current "add to bill" save attempt: { key, fingerprint, billId, payMethod, payAmount }.
+    // Kept until the server gives a definite answer, so closing and reopening the
+    // payment window and saving the same thing again reuses the same idempotency key.
+    const amendKeyRef = useRef(null);
+    // Keys of saves whose answer never arrived (timeout / connection lost) → fingerprint
+    const amendUncertainRef = useRef(new Map());
+    // Latest POS tabs, for answers that arrive after the cashier moved on
+    const billsRef = useRef(bills);
+    billsRef.current = bills;
+    const openBillsReqRef = useRef(0); // only the newest "open bills" answer counts
     const amendEnabled = business?.settings?.allowBillAmend === true;
     const canAmendBills = !!isAdmin || (permissions?.pos?.create === true && permissions?.pos?.amendBill !== false);
 
@@ -207,7 +216,7 @@ const EmployeeDashboard = () => {
         const handleKeyDown = (e) => {
             const currentBill = bills.find(b => b.id === activeBillId);
             const hasItems = currentBill?.items?.length > 0;
-            const anyModalOpen = showPaymentModal;
+            const anyModalOpen = showPaymentModal || !!amendOffer;
 
             // Ctrl+K or Cmd+K - Focus search
             if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
@@ -232,7 +241,7 @@ const EmployeeDashboard = () => {
 
         window.addEventListener('keydown', handleKeyDown);
         return () => window.removeEventListener('keydown', handleKeyDown);
-    }, [bills, activeBillId, showPaymentModal, showSuccess]);
+    }, [bills, activeBillId, showPaymentModal, showSuccess, amendOffer]);
 
     useEffect(() => {
         if (showPaymentModal && paymentMethod === 'cash') {
@@ -751,7 +760,9 @@ const EmployeeDashboard = () => {
             // Decisions about the previous customer's rates don't carry over.
             items: bill.items.map(resetRateFlags),
         }));
+        setAmendOffer(null);
         if (customer?._id) checkOpenBills(customer, activeBillId);
+        else openBillsReqRef.current++;
         if (appliedCount > 0) {
             showToast(`${appliedCount} special rate${appliedCount > 1 ? 's' : ''} applied for ${customer.name}`, '🏷');
         }
@@ -771,6 +782,8 @@ const EmployeeDashboard = () => {
             amend: null,
             items: bill.items.map(resetRateFlags),
         }));
+        setAmendOffer(null);
+        openBillsReqRef.current++; // an answer still on its way is ignored
     };
 
     // ── Add to today's bill ──────────────────────────────────────
@@ -789,19 +802,41 @@ const EmployeeDashboard = () => {
 
     // After picking a registered customer: offer their open credit bill(s) from today.
     const checkOpenBills = async (customer, posBillId) => {
+        const req = ++openBillsReqRef.current;
         if (!customer?._id || !amendEnabled || !canAmendBills || !navigator.onLine) return;
         try {
             const res = await getOpenBillsForCustomer(customer._id);
             const data = res.data || {};
-            if (!data.canAmend || !(data.bills || []).some((b) => b.canAmend)) return;
-            setAmendOffer({ posBillId, customerName: data.customer?.name || customer.name, bills: data.bills });
+            // A slow answer for a customer who's no longer on this tab is ignored
+            const posBill = billsRef.current.find((b) => b.id === posBillId);
+            if (req !== openBillsReqRef.current || String(posBill?.customer || '') !== String(customer._id)) return;
+            // Only bills that can take items are offered (fully paid / returned /
+            // before closing aren't shown at all)
+            const usable = data.canAmend ? (data.bills || []).filter((b) => b.canAmend) : [];
+            if (usable.length === 0) return;
+            setAmendOffer({ posBillId, customerId: customer._id, customerName: data.customer?.name || customer.name, bills: usable });
         } catch (err) {
             // Feature off / no permission / offline: just make a new bill as usual.
             console.warn('Open bills check failed:', err?.response?.data?.message || err?.message);
         }
     };
 
+    // A new / ended "add to bill": forget the save attempt and start the payment as credit
+    const resetAmendAttempt = () => {
+        amendKeyRef.current = null;
+        amendUncertainRef.current = new Map();
+        setAmendPayMethod('credit');
+        setAmendPayAmount('');
+    };
+
     const startAmend = (posBillId, openBill) => {
+        // The customer was changed or removed while the box was open
+        const posBill = billsRef.current.find((b) => b.id === posBillId);
+        if (String(posBill?.customer || '') !== String(amendOffer?.customerId || '')) {
+            setAmendOffer(null);
+            showToast('The customer changed — this will be a new bill', '⚠');
+            return;
+        }
         setBills((prev) => {
             const updated = prev.map((b) => (b.id !== posBillId ? b : applyCustomerRates({
                 ...b,
@@ -817,14 +852,14 @@ const EmployeeDashboard = () => {
             saveBills(updated);
             return updated;
         });
-        amendKeyRef.current = null;
+        resetAmendAttempt();
         setAmendOffer(null);
         showToast(`Adding to Bill #${openBill.billNumber} — scan the new items`, '➕');
     };
 
     const stopAmend = () => {
         updateActiveBill((bill) => ({ ...bill, amend: null }));
-        amendKeyRef.current = null;
+        resetAmendAttempt();
     };
 
     const setPosBillAmend = (posBillId, amend) => {
@@ -1029,9 +1064,16 @@ const EmployeeDashboard = () => {
         const bill = bills.find((b) => b.id === activeBillId);
         if (!bill || bill.items.length === 0) return;
         if (bill.amend) {
-            setAmendPayMethod('credit');
-            setAmendPayAmount('');
-            amendKeyRef.current = null; // new save attempt
+            // A save whose answer never came: offer the same payment again, so
+            // saving again reuses its key and can't add the items twice
+            const pending = amendKeyRef.current;
+            if (pending && pending.billId === bill.amend.billId) {
+                setAmendPayMethod(pending.payMethod);
+                setAmendPayAmount(pending.payAmount);
+            } else {
+                setAmendPayMethod('credit');
+                setAmendPayAmount('');
+            }
         } else {
             setPaymentMethod('cash');
             setCashGiven('');
@@ -1077,14 +1119,15 @@ const EmployeeDashboard = () => {
             totalRefunded: savedBill.totalRefunded || 0,
             netAmount: (savedBill.total || 0) - (savedBill.totalRefunded || 0),
             creditPayments: getCreditPayments(savedBill),
-            title: `SALE INVOICE — UPDATED (update ${number})`,
+            title: `SALE INVOICE - UPDATE ${number}`,
             updateLine: change ? `Total ${formatCurrency(change.totalBefore)} → ${formatCurrency(change.totalAfter)}` : '',
             addedItems,
         });
     };
 
-    const finishAmend = (posBill, savedBill, change) => {
-        const last = change || (savedBill?.revisions || []).slice(-1)[0] || null;
+    const finishAmend = (posBill, savedBill, change, key) => {
+        const revisions = savedBill?.revisions || [];
+        const last = change || (key && revisions.find((r) => r.idempotencyKey === key)) || revisions.slice(-1)[0] || null;
         removePosBill(posBill.id);
         const sData = {
             billNumber: savedBill?.billNumber,
@@ -1098,15 +1141,37 @@ const EmployeeDashboard = () => {
         setSuccessData(sData);
         setShowPaymentModal(false);
         setShowSuccess(true);
-        amendKeyRef.current = null;
+        resetAmendAttempt();
         if (window.electronAPI?.printReceipt && savedBill) printAmendedReceipt(savedBill, last);
         loadData(false);
     };
 
     // The bill changed under us (someone else added items / took a payment / a
     // return): reload it and let the cashier check before saving again.
-    const reloadAmend = async (posBill, message) => {
+    const reloadAmend = async (posBill, message, currentFingerprint) => {
+        // Did a save whose answer never arrived go through after all? Then the
+        // bill "changed" because of us — finish it instead of letting the cashier
+        // save the same items a second time.
+        if (amendUncertainRef.current.size > 0) {
+            try {
+                const res = await getBill(posBill.amend.billId);
+                const saved = res.data?.bill || res.data;
+                const applied = (saved?.revisions || []).find((r) => amendUncertainRef.current.has(r.idempotencyKey));
+                if (applied) {
+                    const sameAsNow = amendUncertainRef.current.get(applied.idempotencyKey) === currentFingerprint;
+                    finishAmend(posBill, saved, null, applied.idempotencyKey);
+                    if (!sameAsNow) {
+                        appAlert(`Your earlier save to Bill #${saved.billNumber} went through before the connection dropped (update ${applied.number}).\n\nThe changes you made after that were not saved. Check the bill and add anything missing again.`, { title: 'Already saved' });
+                    }
+                    return;
+                }
+            } catch {
+                showToast(message || 'This bill was just changed. Try again.', '⚠');
+                return; // keep the attempt — we still don't know if it went through
+            }
+        }
         amendKeyRef.current = null;
+        amendUncertainRef.current = new Map();
         try {
             const res = await getOpenBillsForCustomer(posBill.customer);
             const fresh = (res.data?.bills || []).find((b) => String(b.billId) === String(posBill.amend.billId));
@@ -1121,6 +1186,32 @@ const EmployeeDashboard = () => {
         } catch {
             showToast(message || 'This bill was just changed. Try again.', '⚠');
         }
+    };
+
+    // The server refused the save. If the bill can't take items any more (not
+    // from today, closing done, fully paid / returned, other customer), switch
+    // this tab back to a normal new bill — the items stay in the cart.
+    const recheckAmendable = async (posBill, message) => {
+        try {
+            const res = await getOpenBillsForCustomer(posBill.customer);
+            const fresh = (res.data?.bills || []).find((b) => String(b.billId) === String(posBill.amend.billId));
+            if (res.data?.canAmend && fresh?.canAmend) {
+                showToast(message || 'Failed to add items to the bill', '⚠'); // still open: a different problem
+                return;
+            }
+            dropAmend(posBill, fresh?.blockedReason || message);
+        } catch {
+            showToast(message || 'Failed to add items to the bill', '⚠');
+        }
+    };
+
+    const dropAmend = (posBill, reason) => {
+        setPosBillAmend(posBill.id, null);
+        resetAmendAttempt();
+        setShowPaymentModal(false);
+        // Backend reasons end with "Make a new bill." — the toast already says that
+        const why = String(reason || "This bill can't take more items now").replace(/\.?\s*Make a new bill\.?\s*$/i, '');
+        showToast(`${why} — this will be a new bill`, '⚠');
     };
 
     const handleAmendSave = async () => {
@@ -1140,17 +1231,27 @@ const EmployeeDashboard = () => {
             if (amount > dueNow + 0.01) { showToast(`Paid amount is more than the due (${formatCurrency(dueNow)})`); return; }
             payment = { amount, method: amendPayMethod };
         }
-        if (!amendKeyRef.current) {
-            amendKeyRef.current = (window.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2, 11)}`);
+        const itemsPayload = [...bill.items].reverse().map(toBillItemPayload); // saved oldest-first, like a new bill
+        const fingerprint = JSON.stringify({ bill: amend.billId, items: itemsPayload, payment: payment || null });
+        // Same bill, items and payment as the last unanswered try → same key, so the
+        // server can tell it's a repeat. Anything changed → a new key.
+        const prev = amendKeyRef.current;
+        if (!prev || prev.billId !== amend.billId || prev.fingerprint !== fingerprint) {
+            amendKeyRef.current = {
+                key: window.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2, 11)}`,
+                fingerprint,
+                billId: amend.billId,
+            };
         }
-        const orderedItems = [...bill.items].reverse(); // saved oldest-first, like a new bill
+        Object.assign(amendKeyRef.current, { payMethod: amendPayMethod, payAmount: amendPayAmount });
+        const { key } = amendKeyRef.current;
         setProcessing(true);
         try {
             const res = await addBillItems(amend.billId, {
                 customer: bill.customer,
                 revision: amend.revision,
-                idempotencyKey: amendKeyRef.current,
-                items: orderedItems.map(toBillItemPayload),
+                idempotencyKey: key,
+                items: itemsPayload,
                 ...(payment ? { payment } : {}),
             });
             finishAmend(bill, res.data?.bill, res.data?.change);
@@ -1158,19 +1259,26 @@ const EmployeeDashboard = () => {
             const status = error.response?.status;
             const data = error.response?.data || {};
             if (status === 409 && data.alreadyApplied && data.bill) {
-                finishAmend(bill, data.bill, null); // this save already went through
+                finishAmend(bill, data.bill, null, key); // this save already went through
             } else if (status === 409) {
-                await reloadAmend(bill, data.message);
+                await reloadAmend(bill, data.message, fingerprint);
             } else if (status === 403) {
                 setPosBillAmend(bill.id, null);
                 setShowPaymentModal(false);
                 showToast(`${data.message || 'Not allowed'} — this will be a new bill`, '⚠');
+            } else if (status === 400 && !data.outOfStock?.length) {
+                amendKeyRef.current = null;
+                await recheckAmendable(bill, data.message);
             } else if (status === 400 && data.outOfStock?.length) {
+                amendKeyRef.current = null;
                 appAlert(`${data.message}\n\n${data.outOfStock.map((o) => `• ${o.name}: needs ${o.requested}, only ${o.available} in stock`).join('\n')}`);
-            } else if (!error.response) {
-                // Network error: keep the key so a retry can't add the items twice
-                showToast('No connection — try again', '⚠');
+            } else if (!error.response || status >= 500) {
+                // No answer (timeout / connection lost): it may have been saved. Keep
+                // the key so saving again is recognised as a repeat.
+                amendUncertainRef.current.set(key, fingerprint);
+                showToast('No answer from the server — save again to retry (it won\'t be added twice)', '⚠');
             } else {
+                amendKeyRef.current = null; // a definite "no": the next try is a new save
                 showToast(data.message || 'Failed to add items to the bill');
             }
         } finally {
@@ -2478,7 +2586,7 @@ const EmployeeDashboard = () => {
                             </div>
                         </div>
                         <div className="space-y-2">
-                            {amendOffer.bills.filter((b) => b.canAmend).map((b) => (
+                            {amendOffer.bills.map((b) => (
                                 <button
                                     key={b.billId}
                                     type="button"
@@ -2494,12 +2602,6 @@ const EmployeeDashboard = () => {
                                         <div className="text-[11px] font-medium text-amber-600 dark:text-d-accent">Add to this bill →</div>
                                     </div>
                                 </button>
-                            ))}
-                            {amendOffer.bills.filter((b) => !b.canAmend).map((b) => (
-                                <div key={b.billId} className="flex items-center justify-between gap-3 px-4 py-2.5 rounded-xl border border-slate-200 dark:border-d-border opacity-60">
-                                    <div className="text-[13px] text-slate-600 dark:text-d-muted">Bill #{b.billNumber} · {new Date(b.createdAt).toLocaleTimeString('en-PK', { hour: 'numeric', minute: '2-digit' })}</div>
-                                    <div className="text-[11px] text-slate-500 dark:text-d-muted text-right">{b.blockedReason}</div>
-                                </div>
                             ))}
                         </div>
                         <button

@@ -6,6 +6,11 @@ import { mergeReceiptItems } from './receiptItems';
 export const PRINTER_NAME_KEY = 'posPrinterName';
 export const PAPER_WIDTH_KEY = 'posPaperWidth'; // chars per line: '32' | '42' | '48'
 
+// The thermal printer uses code page PC437, which has no dashes, arrows or ×:
+// they would print as "?". Swap them for plain characters before printing.
+const PRINTER_SAFE = [[/[\u2014\u2013\u2212]/g, '-'], [/\u2192/g, '->'], [/\u00d7/g, 'x'], [/[\u2018\u2019]/g, "'"], [/[\u201c\u201d]/g, '"'], [/\u2026/g, '...']];
+export const toPrinterText = (text) => PRINTER_SAFE.reduce((t, [re, to]) => t.replace(re, to), String(text ?? ''));
+
 /**
  * Print a receipt via Electron ESC/POS or browser iframe fallback.
  */
@@ -79,8 +84,9 @@ export const printReceipt = (opts) => {
                 totalRefunded, netAmount,
                 creditPayments,
                 receiptFooter, receiptNote,
-                title, updateLine,
-                addedItems: mergeReceiptItems(addedItems).map((it) => ({ name: it.name, qty: it.qty })),
+                title: toPrinterText(title),
+                updateLine: toPrinterText(updateLine),
+                addedItems: mergeReceiptItems(addedItems).map((it) => ({ name: toPrinterText(it.name), qty: it.qty })),
             },
         })
             .then(result => {

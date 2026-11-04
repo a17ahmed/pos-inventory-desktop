@@ -136,6 +136,10 @@ const CustomerLedger = () => {
     const [pageSize, setPageSize] = useState(PAGE_SIZE);
     const tableScrollRef = useRef(null);
     const [error, setError] = useState(null);
+    // Each load gets a number; only the newest answer is used, so a slow older
+    // answer (e.g. search "1" arriving after "12") can't replace newer lines
+    const statementReqRef = useRef(0);
+    const [lastPageTried, setLastPageTried] = useState(1);
 
     // Filters (all applied server-side)
     const [periodPreset, setPeriodPreset] = useState(DEFAULT_PERIOD);
@@ -231,10 +235,13 @@ const CustomerLedger = () => {
     // page 1. Balances are per line from the backend, so every page is correct.
     const fetchStatement = useCallback(async (pageNum = 1) => {
         if (customIncomplete) return;
+        const req = ++statementReqRef.current;
         setLoading(true);
         setError(null);
+        setLastPageTried(pageNum);
         try {
             const data = await loadStatement(id, { ...statementParams, page: pageNum });
+            if (req !== statementReqRef.current) return; // a newer load is on its way
             if (import.meta.env.DEV && data?.period?.preset === 'sinceZero'
                 && Math.abs((data.period.closingBalance || 0) - (data.summary?.amountDue || 0)) > 0.005) {
                 console.warn('[statement] since-last-zero closing', data.period.closingBalance, '≠ amount due', data.summary?.amountDue);
@@ -243,10 +250,11 @@ const CustomerLedger = () => {
             setExpandedRow(null);
             if (tableScrollRef.current) tableScrollRef.current.scrollTop = 0;
         } catch (err) {
+            if (req !== statementReqRef.current) return;
             console.error('Error fetching statement:', err);
             setError(err.response?.data?.message || 'Failed to load ledger');
         } finally {
-            setLoading(false);
+            if (req === statementReqRef.current) setLoading(false);
         }
     }, [id, statementParams, customIncomplete]);
 
@@ -704,8 +712,25 @@ const CustomerLedger = () => {
                     )}
                 </div>
 
+                {/* A reload failed after the first load: say so — the lines below are
+                    from the previous filters, not the ones shown in the chips */}
+                {error && (
+                    <div role="alert" className="mx-4 mb-2 flex items-center gap-3 px-3 py-2 rounded-lg border border-red-200 dark:border-[rgba(255,107,107,0.25)] bg-red-50 dark:bg-[rgba(255,107,107,0.08)] text-[13px] text-red-700 dark:text-d-red">
+                        <FiAlertCircle size={15} className="flex-shrink-0" />
+                        <span className="flex-1 min-w-0">Couldn't load these lines — {error}. The lines below are from before.</span>
+                        <button
+                            type="button"
+                            onClick={() => fetchStatement(lastPageTried)}
+                            disabled={loading}
+                            className="flex-shrink-0 inline-flex items-center gap-1 px-2 py-1 rounded-md font-medium hover:bg-red-100 dark:hover:bg-[rgba(255,107,107,0.12)] disabled:opacity-50"
+                        >
+                            <FiRefreshCw size={13} className={loading ? 'animate-spin' : ''} /> Try again
+                        </button>
+                    </div>
+                )}
+
                 {/* Ledger Table */}
-                <div>
+                <div className={error ? 'opacity-40 pointer-events-none select-none' : undefined} aria-hidden={error ? true : undefined}>
                     {entries.length === 0 ? (
                         <div className="flex flex-col items-center justify-center py-14 text-center">
                             <div className="w-10 h-10 rounded-full bg-slate-100 dark:bg-d-glass flex items-center justify-center text-slate-400 dark:text-d-muted">

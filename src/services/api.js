@@ -136,10 +136,11 @@ api.interceptors.response.use(
                     reportBlocked(refreshError.response.data);
                     return Promise.reject(refreshError);
                 }
-                // The server turned the refresh token down → log out. No answer
-                // (offline) or a server error keeps the session for the next try.
-                const status = refreshError.response?.status;
-                if (status && status < 500) {
+                // Only a 401 means the refresh token is no good → log out. Anything
+                // else keeps the session for the next try: no answer (offline), a
+                // server error, or 429 from the shared login rate limit (several
+                // counters on one connection can hit it with valid tokens).
+                if (refreshError.response?.status === 401) {
                     const refreshRevoked = refreshError.response?.data?.code === 'SESSION_REVOKED';
                     endSession(revoked || refreshRevoked ? 'revoked' : '');
                 }
