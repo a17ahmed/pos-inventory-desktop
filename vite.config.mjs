@@ -36,7 +36,10 @@ export default defineConfig(({ mode }) => {
         build: {
             outDir: 'dist',
             emptyOutDir: true,
-            sourcemap: true,
+            // Only when uploading to Sentry (the plugin deletes the .map files after
+            // upload). Without a token, a .map would ship publicly with the web build
+            // and expose the full source.
+            sourcemap: !!env.SENTRY_AUTH_TOKEN,
         },
         server: {
             port: 5177,
