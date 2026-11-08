@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { isDesktopApp } from '../utils/platform';
 import { NavLink, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useBusiness } from '../context/BusinessContext';
@@ -83,8 +84,10 @@ const Layout = ({ children }) => {
         })
         : [];
 
-    const isMac = navigator.userAgentData?.platform === 'macOS' || /Mac/i.test(navigator.userAgent);
-    const isWin = navigator.userAgentData?.platform === 'Windows' || /Win/i.test(navigator.userAgent);
+    // Only the desktop app has a frameless window (traffic lights / title bar overlay)
+    // that needs safe-area spacing; in a browser tab these stay false.
+    const isMac = isDesktopApp && (navigator.userAgentData?.platform === 'macOS' || /Mac/i.test(navigator.userAgent));
+    const isWin = isDesktopApp && (navigator.userAgentData?.platform === 'Windows' || /Win/i.test(navigator.userAgent));
 
     // Keep Windows title bar overlay colours in sync with dark/light mode
     useEffect(() => {

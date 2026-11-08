@@ -7,6 +7,7 @@ import { useTheme } from '../context/ThemeContext';
 import { buildReceiptHTML } from '../utils/receiptTemplate';
 import { printReceipt as printReceiptUtil, PRINTER_NAME_KEY, PAPER_WIDTH_KEY } from '../utils/printReceipt';
 import { appAlert, appConfirm } from '../components/AppDialog';
+import { isDesktopApp } from '../utils/platform';
 import {
     FiUser,
     FiLogOut,
@@ -142,6 +143,36 @@ const Settings = () => {
             appAlert('Failed to save: ' + (err.response?.data?.message || err.message));
         } finally {
             setSavingBillAmend(false);
+        }
+    };
+
+    // Business-wide: print the receipt automatically after a bill is saved?
+    // Missing = on (backend default). Optimistic: flip now, roll back if the save fails.
+    const [autoPrintOverride, setAutoPrintOverride] = useState(null);
+    const autoPrint = autoPrintOverride ?? (business?.settings?.autoPrint !== false);
+    const [savingAutoPrint, setSavingAutoPrint] = useState(false);
+    const [toast, setToast] = useState(null);
+    const toastTimerRef = useRef(null);
+    const showToast = (message, error = false) => {
+        setToast({ message, error });
+        clearTimeout(toastTimerRef.current);
+        toastTimerRef.current = setTimeout(() => setToast(null), 3000);
+    };
+    useEffect(() => () => clearTimeout(toastTimerRef.current), []);
+    const handleToggleAutoPrint = async () => {
+        const next = !autoPrint;
+        setAutoPrintOverride(next);
+        setSavingAutoPrint(true);
+        try {
+            // Backend merges settings, so only autoPrint is sent.
+            await updateBusinessSettings({ autoPrint: next });
+            await refreshBusiness(); // updates context + cached business so the POS sees it now
+            showToast(next ? 'Auto print turned on' : 'Auto print turned off');
+        } catch (err) {
+            showToast('Failed to save: ' + (err.response?.data?.message || err.message), true);
+        } finally {
+            setAutoPrintOverride(null); // fall back to the saved value (rolls back on failure)
+            setSavingAutoPrint(false);
         }
     };
 
@@ -402,6 +433,33 @@ const Settings = () => {
                         }
                     />
                 )}
+                {isAdmin && (
+                    <SettingItem
+                        icon={FiPrinter}
+                        label="Auto Print Receipt"
+                        value={isDesktopApp
+                            ? 'When on, the receipt prints automatically after a bill is saved. When off, use the Print button to print.'
+                            : 'When on, the receipt prints automatically after a bill is saved (desktop app only — on the web, use the Print button).'}
+                        onClick={savingAutoPrint ? undefined : handleToggleAutoPrint}
+                        color="text-emerald-500"
+                        rightElement={
+                            <div
+                                className="relative inline-flex items-center cursor-pointer"
+                                onClick={(e) => e.stopPropagation()}
+                            >
+                                <input
+                                    type="checkbox"
+                                    className="sr-only peer"
+                                    aria-label="Auto print receipt after a bill is saved"
+                                    checked={autoPrint}
+                                    disabled={savingAutoPrint}
+                                    onChange={handleToggleAutoPrint}
+                                />
+                                <div className="w-11 h-6 bg-slate-200 dark:bg-slate-600 peer-focus:ring-2 peer-focus:ring-primary-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-500 peer-disabled:opacity-50"></div>
+                            </div>
+                        }
+                    />
+                )}
             </Section>
 
             {/* App Settings Section */}
@@ -433,13 +491,16 @@ const Settings = () => {
                     value="Coming soon"
                     color="text-pink-500"
                 />
-                <SettingItem
-                    icon={FiDownload}
-                    label="Check for Updates"
-                    value={updateLabel}
-                    onClick={handleCheckUpdate}
-                    color="text-teal-500"
-                />
+                {/* Desktop only: the web app is always the latest version on refresh */}
+                {isDesktopApp && (
+                    <SettingItem
+                        icon={FiDownload}
+                        label="Check for Updates"
+                        value={updateLabel}
+                        onClick={handleCheckUpdate}
+                        color="text-teal-500"
+                    />
+                )}
                 <SettingItem
                     icon={FiDatabase}
                     label="Data & Storage"
@@ -479,7 +540,7 @@ const Settings = () => {
                 <SettingItem
                     icon={FiInfo}
                     label="About"
-                    value={`Version ${appVersion || '...'}`}
+                    value={isDesktopApp ? `Version ${appVersion || '...'}` : 'Web app'}
                     onClick={() => setActiveModal('about')}
                     color="text-slate-500"
                 />
@@ -696,7 +757,7 @@ const Settings = () => {
                                 <FiBriefcase size={40} className="text-primary-500 dark:text-primary-400" />
                             </div>
                             <h3 className="text-2xl font-bold text-slate-800 dark:text-d-heading mb-2">POS Desktop</h3>
-                            <p className="text-slate-500 dark:text-d-muted mb-4">Version {appVersion || '...'}</p>
+                            <p className="text-slate-500 dark:text-d-muted mb-4">{isDesktopApp ? `Version ${appVersion || '...'}` : 'Web app'}</p>
                             <p className="text-sm text-slate-500 dark:text-d-muted mb-6">
                                 A modern point of sale system for retail businesses.
                             </p>
@@ -1019,6 +1080,11 @@ const Settings = () => {
                             </button>
                         </div>
                     </div>
+                </div>
+            )}
+            {toast && (
+                <div className={`fixed bottom-6 left-1/2 -translate-x-1/2 z-[70] px-5 py-3 rounded-xl text-white text-sm shadow-lg animate-fade-slide-up ${toast.error ? 'bg-red-600' : 'bg-slate-800'}`}>
+                    {toast.message}
                 </div>
             )}
         </div>

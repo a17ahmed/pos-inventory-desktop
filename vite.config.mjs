@@ -24,7 +24,10 @@ export default defineConfig(({ mode }) => {
                     sourcemaps: { filesToDeleteAfterUpload: ['dist/**/*.map'] },
                 }),
         ].filter(Boolean),
-        base: './', // Important for Electron file:// protocol
+        // Electron loads dist over file:// and needs relative paths. The web build
+        // (`vite build --mode web`) uses BrowserRouter, so deep links like
+        // /customers/123 need absolute asset paths.
+        base: mode === 'web' ? '/' : './',
         resolve: {
             alias: {
                 '@': path.resolve(__dirname, './src'),

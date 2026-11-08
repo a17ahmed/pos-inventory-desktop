@@ -946,6 +946,52 @@ const EmployeeDashboard = () => {
         await saveRateForLine(bill, item, unitPrice, { rateDismissed: false, discountAmount: 0, discountSource: 'manual' });
     };
 
+    // Click a line's total to type the price the customer pays for that line.
+    // The difference from the full price becomes the line's discount, through the
+    // same setItemDiscount path (discount cap, bill-discount rules, save-rate prompt).
+    const [lineTotalEdit, setLineTotalEdit] = useState({ itemId: null, value: '' });
+    const lineTotalCancelRef = useRef(false);
+    const [rateOfferFor, setRateOfferFor] = useState(null);
+    // Ask about saving the rate after the new discount is in state (next render).
+    useEffect(() => {
+        if (!rateOfferFor) return;
+        setRateOfferFor(null);
+        offerSaveRate(rateOfferFor);
+    }, [rateOfferFor]);
+
+    const startLineTotalEdit = (item, currentTotal, hasBillDiscount) => {
+        if (hasBillDiscount) {
+            showToast(activeBill?.amend?.discountMode === 'bill'
+                ? `Bill #${activeBill.amend.billNumber} has a bill discount — new items can't have their own`
+                : 'Remove the bill discount to change an item price');
+            return;
+        }
+        lineTotalCancelRef.current = false;
+        setLineTotalEdit({ itemId: item._id, value: String(Math.round(currentTotal * 100) / 100) });
+    };
+
+    const commitLineTotalEdit = (item) => {
+        const { value } = lineTotalEdit;
+        setLineTotalEdit({ itemId: null, value: '' });
+        if (lineTotalCancelRef.current || value.trim() === '') return;
+        const entered = Number(value);
+        const gross = Math.round(item.price * item.qty * 100) / 100;
+        if (!Number.isFinite(entered) || entered < 0) {
+            showToast('Enter a valid amount', '⚠');
+            return;
+        }
+        if (entered > gross) {
+            showToast(`Amount can't be more than the full price ${formatCurrency(gross)}`, '⚠');
+            return;
+        }
+        const discount = Math.round((gross - entered) * 100) / 100;
+        if (discount === Math.round((Number(item.discountAmount) || 0) * 100) / 100) return; // unchanged
+        setItemDiscount(item._id, discount); // caps + shows "Discount capped at …" if too low
+        // Only offer to save the rate for the price the cashier actually typed,
+        // not a capped price they didn't ask for.
+        if (discount <= getItemDiscountCap(item)) setRateOfferFor(item._id);
+    };
+
     // Inline "Update rate" input on a price-changed line.
     const [rateEdit, setRateEdit] = useState({ itemId: null, value: '' });
     const submitRateEdit = async (bill, item) => {
@@ -1142,7 +1188,10 @@ const EmployeeDashboard = () => {
         setShowPaymentModal(false);
         setShowSuccess(true);
         resetAmendAttempt();
-        if (window.electronAPI?.printReceipt && savedBill) printAmendedReceipt(savedBill, last);
+        // Auto print unless the business turned it off (missing = on); the Print button always works.
+        if (business?.settings?.autoPrint !== false) {
+            if (window.electronAPI?.printReceipt && savedBill) printAmendedReceipt(savedBill, last);
+        }
         loadData(false);
     };
 
@@ -1394,8 +1443,11 @@ const EmployeeDashboard = () => {
             setPaymentMethod('cash');
             setShowSuccess(true);
 
-            // Auto-print receipt (only in Electron — browser shows print dialog which is disruptive)
-            if (window.electronAPI?.printReceipt) printReceipt(sData, sData.bill);
+            // Auto-print receipt (only in Electron — browser shows print dialog which is disruptive).
+            // Skipped when the business turned auto print off; the success modal's Print button still works.
+            if (business?.settings?.autoPrint !== false) {
+                if (window.electronAPI?.printReceipt) printReceipt(sData, sData.bill);
+            }
 
             loadData(false);
         } catch (error) {
@@ -1939,9 +1991,56 @@ const EmployeeDashboard = () => {
                                                         +
                                                     </button>
                                                 </div>
-                                                <span className="font-display text-[15px] font-semibold text-amber-600 dark:text-d-accent min-w-[80px] text-right">
-                                                    {formatCurrency(profitInfo.lineAfterItemDiscount)}
-                                                </span>
+                                                {lineTotalEdit.itemId === item._id ? (
+                                                    <input
+                                                        type="number"
+                                                        min="0"
+                                                        step="0.01"
+                                                        autoFocus
+                                                        aria-label={`Price for ${item.qty} × ${item.name}`}
+                                                        title={item.qty > 1 ? `Total for ${item.qty} items` : 'Price for this item'}
+                                                        value={lineTotalEdit.value}
+                                                        onClick={(e) => e.stopPropagation()}
+                                                        onFocus={(e) => e.target.select()}
+                                                        max={Math.round(item.price * item.qty * 100) / 100}
+                                                        onChange={(e) => {
+                                                            // Can't type more than the full price: clamp to it as they type.
+                                                            const gross = Math.round(item.price * item.qty * 100) / 100;
+                                                            let value = e.target.value;
+                                                            if (value !== '' && Number(value) > gross) {
+                                                                value = String(gross);
+                                                                showToast(`Max is the full price ${formatCurrency(gross)}`, '⚠');
+                                                            }
+                                                            setLineTotalEdit({ itemId: item._id, value });
+                                                        }}
+                                                        onBlur={() => commitLineTotalEdit(item)}
+                                                        onKeyDown={(e) => {
+                                                            if (e.key === 'Escape') {
+                                                                e.preventDefault();
+                                                                e.stopPropagation();
+                                                                lineTotalCancelRef.current = true;
+                                                                e.currentTarget.blur();
+                                                                return;
+                                                            }
+                                                            if (e.key !== 'Enter') return;
+                                                            // Blur after this keydown finishes, so the save-rate
+                                                            // prompt doesn't catch this Enter and close as "Not now".
+                                                            e.preventDefault();
+                                                            const el = e.currentTarget;
+                                                            setTimeout(() => el.blur(), 0);
+                                                        }}
+                                                        className="font-display text-[15px] font-semibold w-[100px] text-right px-2 py-1 bg-white dark:bg-d-bg border border-amber-400 dark:border-d-accent rounded-lg text-amber-600 dark:text-d-accent focus:outline-none"
+                                                    />
+                                                ) : (
+                                                    <button
+                                                        type="button"
+                                                        onClick={(e) => { e.stopPropagation(); startLineTotalEdit(item, profitInfo.lineAfterItemDiscount, hasBillDiscount); }}
+                                                        title="Click to change the price — the difference becomes the discount"
+                                                        className="font-display text-[15px] font-semibold text-amber-600 dark:text-d-accent min-w-[80px] text-right px-1.5 py-0.5 rounded-lg border border-dashed border-transparent hover:border-amber-400 dark:hover:border-d-accent cursor-text transition-colors"
+                                                    >
+                                                        {formatCurrency(profitInfo.lineAfterItemDiscount)}
+                                                    </button>
+                                                )}
                                                 <div onClick={(e) => e.stopPropagation()}>
                                                     <button
                                                         onClick={() => removeItem(item._id)}

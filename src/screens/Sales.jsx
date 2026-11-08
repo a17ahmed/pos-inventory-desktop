@@ -21,7 +21,7 @@ import { printReceipt } from '../utils/printReceipt';
 import { appAlert, appConfirm } from '../components/AppDialog';
 
 const Sales = () => {
-    const { business } = useBusiness();
+    const { business, refreshBusiness } = useBusiness();
     const { user } = useAuth();
     const searchRef = useRef(null);
     const cashInputRef = useRef(null);
@@ -93,6 +93,9 @@ const Sales = () => {
     useEffect(() => {
         fetchProducts();
         searchRef.current?.focus();
+        // Business settings (e.g. autoPrint) are cached from login; pull the current
+        // ones so a change made in Settings applies without re-login.
+        refreshBusiness?.().catch(() => {});
     }, []);
 
     const fetchProducts = async () => {
@@ -220,8 +223,11 @@ const Sales = () => {
             setShowPaymentModal(false);
             setShowSuccess(true);
 
-            // Auto-print receipt (only in Electron — browser shows print dialog which is disruptive)
-            if (window.electronAPI?.printReceipt) printReceipt({
+            // Auto-print receipt (only in Electron — browser shows print dialog which is disruptive).
+            // Skipped when the business turned auto print off (missing = on).
+            // On the web there's no direct printing, so treat it as off (modal stays open).
+            const autoPrint = business?.settings?.autoPrint !== false && !!window.electronAPI?.printReceipt;
+            if (autoPrint) printReceipt({
                 store: business,
                 currency: business?.currency || 'Rs.',
                 billNumber: receiptInfo.billNumber || '-',
@@ -242,10 +248,13 @@ const Sales = () => {
 
             clearCart();
 
-            setTimeout(() => {
-                setShowSuccess(false);
-                setSuccessData(null);
-            }, 3000);
+            // With auto print off, keep the success modal open so the cashier can use its Print button.
+            if (autoPrint) {
+                setTimeout(() => {
+                    setShowSuccess(false);
+                    setSuccessData(null);
+                }, 3000);
+            }
         } catch (error) {
             console.error('Error creating receipt:', error);
 
@@ -661,6 +670,12 @@ const Sales = () => {
                         >
                             <FiPrinter size={18} />
                             Print Receipt
+                        </button>
+                        <button
+                            onClick={() => { setShowSuccess(false); setSuccessData(null); }}
+                            className="mt-2 w-full py-3 rounded-xl bg-slate-100 text-slate-600 font-medium hover:bg-slate-200"
+                        >
+                            Close
                         </button>
                     </div>
                 </div>
