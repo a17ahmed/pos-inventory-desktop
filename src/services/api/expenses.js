@@ -16,8 +16,9 @@ export const updateExpense = (id, data) =>
 export const deleteExpense = (id) =>
     api.delete(`/expense/${id}`);
 
-export const approveExpense = (id) =>
-    api.post(`/expense/${id}/approve`);
+// body ({ accountId }) only when the Money Book is on — otherwise no body, as before
+export const approveExpense = (id, body) =>
+    body ? api.post(`/expense/${id}/approve`, body) : api.post(`/expense/${id}/approve`);
 
 export const rejectExpense = (id, reason) =>
     api.post(`/expense/${id}/reject`, { reason });

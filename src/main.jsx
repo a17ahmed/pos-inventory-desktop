@@ -7,6 +7,7 @@ import { isDesktopApp } from './utils/platform';
 import App from './App';
 import { AuthProvider } from './context/AuthContext';
 import { BusinessProvider } from './context/BusinessContext';
+import { MoneyBookProvider } from './context/MoneyBookContext';
 import { ThemeProvider } from './context/ThemeContext';
 import NetworkStatus from './components/NetworkStatus';
 import AppDialogHost from './components/AppDialog';
@@ -34,8 +35,10 @@ ReactDOM.createRoot(document.getElementById('root')).render(
                 <Router>
                     <AuthProvider>
                         <BusinessProvider>
-                            <App />
-                            <AccountStatusHost />
+                            <MoneyBookProvider>
+                                <App />
+                                <AccountStatusHost />
+                            </MoneyBookProvider>
                         </BusinessProvider>
                     </AuthProvider>
                 </Router>

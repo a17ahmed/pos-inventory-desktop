@@ -4,6 +4,10 @@ import { useBusiness } from '../context/BusinessContext';
 import { getExpenses, getExpenseStats, createExpense, updateExpense, deleteExpense, approveExpense, rejectExpense } from '../services/api/expenses';
 import { getCashBalance } from '../services/api/cashbook';
 import { appAlert, appConfirm } from '../components/AppDialog';
+import AccountPicker from '../components/AccountPicker';
+import { useMoneyBook } from '../context/MoneyBookContext';
+import { apiErrorMessage, round2 } from '../utils/moneyBook';
+import { Modal, ErrorBox, btnGhost, btnSolid } from '../components/moneybook/ui';
 import {
     FiPlus,
     FiSearch,
@@ -50,6 +54,11 @@ const Expenses = () => {
     const [rejecting, setRejecting] = useState(false);
     const [cashBalance, setCashBalance] = useState(null);
     const [approvingId, setApprovingId] = useState(null);
+    // Money Book (only when the shop has it on): account paid from, cheque details
+    const { isOn: moneyBookOn, chequeTracking, moneyFields, handleMoneyError } = useMoneyBook();
+    const [moneyForm, setMoneyForm] = useState({ accountId: null, chequeNumber: '', chequeDate: '' });
+    const [accountShort, setAccountShort] = useState(false);
+    const [approveDialog, setApproveDialog] = useState(null); // { expense, accountId, short, error }
     const [formData, setFormData] = useState({
         category: 'supplies',
         amount: '',
@@ -131,6 +140,11 @@ const Expenses = () => {
                 paymentMethod: expense.paymentMethod || 'cash',
                 notes: expense.notes || '',
             });
+            setMoneyForm({
+                accountId: expense.account ? String(expense.account?._id || expense.account) : null,
+                chequeNumber: expense.chequeNumber || '',
+                chequeDate: expense.chequeDate ? toLocalDateStr(expense.chequeDate) : '',
+            });
         } else {
             setEditingExpense(null);
             setFormData({
@@ -142,7 +156,10 @@ const Expenses = () => {
                 notes: '',
             });
         }
-        getCashBalance().then(res => setCashBalance(res.data?.balance ?? null)).catch(() => setCashBalance(null));
+        if (!expense) setMoneyForm({ accountId: null, chequeNumber: '', chequeDate: '' });
+        setAccountShort(false);
+        // Money Book on: the picker shows the chosen account's balance instead
+        if (!moneyBookOn) getCashBalance().then(res => setCashBalance(res.data?.balance ?? null)).catch(() => setCashBalance(null));
         setShowModal(true);
     };
 
@@ -155,14 +172,22 @@ const Expenses = () => {
         if (!formData.description?.trim()) {
             return appAlert('Please enter a description');
         }
-        if (formData.paymentMethod === 'cash' && cashBalance != null && amount > cashBalance) {
+        if (!moneyBookOn && formData.paymentMethod === 'cash' && cashBalance != null && amount > cashBalance) {
             return appAlert(`Insufficient cash. Available balance: ${formatCurrency(cashBalance)}`);
+        }
+        if (moneyBookOn && accountShort) {
+            return appAlert('Not enough money in the selected account. Choose another account or lower the amount.');
         }
         setSubmitting(true);
         try {
+            const isTrackedCheque = formData.paymentMethod === 'cheque' && chequeTracking;
             const data = {
                 ...formData,
                 amount,
+                ...moneyFields({
+                    accountId: moneyForm.accountId,
+                    ...(isTrackedCheque ? { chequeNumber: moneyForm.chequeNumber.trim(), chequeDate: moneyForm.chequeDate } : {}),
+                }),
             };
 
             if (editingExpense) {
@@ -176,13 +201,28 @@ const Expenses = () => {
             fetchStats();
         } catch (error) {
             console.error('Error saving expense:', error);
-            appAlert(error.response?.data?.message || 'Failed to save expense');
+            handleMoneyError(error);
+            appAlert(apiErrorMessage(error, 'Failed to save expense'));
         } finally {
             setSubmitting(false);
         }
     };
 
     const handleApprove = async (expenseId) => {
+        // Money Book on: confirm which account pays it first (the server
+        // refuses approval when that account is short)
+        if (moneyBookOn) {
+            const expense = expenses.find((x) => x._id === expenseId);
+            if (expense) {
+                setApproveDialog({
+                    expense,
+                    accountId: expense.account ? String(expense.account?._id || expense.account) : null,
+                    short: false,
+                    error: '',
+                });
+                return;
+            }
+        }
         setApprovingId(expenseId);
         try {
             await approveExpense(expenseId);
@@ -190,7 +230,29 @@ const Expenses = () => {
             fetchStats();
         } catch (error) {
             console.error('Error approving expense:', error);
-            appAlert('Failed to approve expense');
+            appAlert(apiErrorMessage(error, 'Failed to approve expense'));
+        } finally {
+            setApprovingId(null);
+        }
+    };
+
+    const confirmApprove = async () => {
+        const { expense, accountId, short } = approveDialog;
+        if (short) {
+            setApproveDialog((d) => ({ ...d, error: 'Not enough money in this account. Choose another account.' }));
+            return;
+        }
+        setApprovingId(expense._id);
+        try {
+            const body = moneyFields({ accountId });
+            await approveExpense(expense._id, Object.keys(body).length ? body : undefined);
+            setApproveDialog(null);
+            fetchExpenses(pagination.page);
+            fetchStats();
+        } catch (error) {
+            console.error('Error approving expense:', error);
+            handleMoneyError(error);
+            setApproveDialog((d) => d && ({ ...d, error: apiErrorMessage(error, 'Failed to approve expense') }));
         } finally {
             setApprovingId(null);
         }
@@ -552,13 +614,49 @@ const Expenses = () => {
                                     >
                                         <option value="cash">Cash</option>
                                         <option value="card">Card</option>
+                                        {moneyBookOn && <option value="online">Online</option>}
                                         <option value="bank_transfer">Bank Transfer</option>
-                                        <option value="cheque">Cheque</option>
+                                        {(!moneyBookOn || chequeTracking || formData.paymentMethod === 'cheque') && <option value="cheque">Cheque</option>}
                                     </select>
                                 </div>
                             </div>
 
-                            {formData.paymentMethod === 'cash' && cashBalance != null && (
+                            {moneyBookOn && (
+                                <AccountPicker
+                                    method={formData.paymentMethod}
+                                    value={moneyForm.accountId}
+                                    onChange={(id) => setMoneyForm((m) => ({ ...m, accountId: id }))}
+                                    amount={round2(formData.amount)}
+                                    direction="out"
+                                    pending={formData.paymentMethod === 'cheque' && chequeTracking}
+                                    onInsufficientChange={setAccountShort}
+                                />
+                            )}
+                            {moneyBookOn && chequeTracking && formData.paymentMethod === 'cheque' && (
+                                <div className="grid grid-cols-2 gap-4">
+                                    <div>
+                                        <label className="block text-sm font-medium text-slate-700 dark:text-d-muted mb-1">Cheque number</label>
+                                        <input
+                                            type="text"
+                                            maxLength={50}
+                                            value={moneyForm.chequeNumber}
+                                            onChange={(e) => setMoneyForm((m) => ({ ...m, chequeNumber: e.target.value }))}
+                                            className="w-full px-4 py-2 bg-white dark:bg-d-bg border border-slate-200 dark:border-d-border rounded-xl text-slate-800 dark:text-d-text focus:outline-none focus:border-amber-300 dark:focus:border-d-border-hover"
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="block text-sm font-medium text-slate-700 dark:text-d-muted mb-1">Cheque date</label>
+                                        <input
+                                            type="date"
+                                            value={moneyForm.chequeDate}
+                                            onChange={(e) => setMoneyForm((m) => ({ ...m, chequeDate: e.target.value }))}
+                                            className="w-full px-4 py-2 bg-white dark:bg-d-bg border border-slate-200 dark:border-d-border rounded-xl text-slate-800 dark:text-d-text focus:outline-none focus:border-amber-300 dark:focus:border-d-border-hover"
+                                        />
+                                    </div>
+                                </div>
+                            )}
+
+                            {!moneyBookOn && formData.paymentMethod === 'cash' && cashBalance != null && (
                                 <div className={`flex items-center justify-between p-3 rounded-xl border ${
                                     (Number(formData.amount) || 0) > cashBalance
                                         ? 'bg-red-50 dark:bg-[rgba(239,68,68,0.08)] border-red-200 dark:border-[rgba(239,68,68,0.2)]'
@@ -608,6 +706,37 @@ const Expenses = () => {
                         </form>
                     </div>
                 </div>
+            )}
+            {/* Approve: which account pays (Money Book on) */}
+            {approveDialog && (
+                <Modal title="Approve expense" onClose={() => setApproveDialog(null)}>
+                    <div className="p-5 space-y-4">
+                        <ErrorBox>{approveDialog.error}</ErrorBox>
+                        <p className="text-sm text-slate-600 dark:text-d-text">
+                            {approveDialog.expense.description || getCategoryLabel(approveDialog.expense.category)} · <b>{formatCurrency(approveDialog.expense.amount)}</b>
+                        </p>
+                        <AccountPicker
+                            method={approveDialog.expense.paymentMethod || 'cash'}
+                            value={approveDialog.accountId}
+                            onChange={(id) => setApproveDialog((d) => d && ({ ...d, accountId: id }))}
+                            amount={approveDialog.expense.amount}
+                            direction="out"
+                            pending={approveDialog.expense.paymentMethod === 'cheque' && chequeTracking}
+                            onInsufficientChange={(v) => setApproveDialog((d) => d && ({ ...d, short: v }))}
+                        />
+                        <div className="flex gap-3 pt-2">
+                            <button type="button" onClick={() => setApproveDialog(null)} className={btnGhost}>Cancel</button>
+                            <button
+                                type="button"
+                                onClick={confirmApprove}
+                                disabled={approvingId === approveDialog.expense._id || approveDialog.short}
+                                className={btnSolid('emerald')}
+                            >
+                                {approvingId === approveDialog.expense._id ? 'Approving…' : 'Approve'}
+                            </button>
+                        </div>
+                    </div>
+                </Modal>
             )}
             {/* Reject Reason Modal */}
             {rejectModal.show && (

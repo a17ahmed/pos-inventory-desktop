@@ -47,6 +47,37 @@ const ClosingDetail = () => {
         online: { label: 'Online / UPI', expectedLabel: 'Expected (this period)' },
     };
 
+    // Money Book per-account rows (closings made before it have none → '')
+    const buildAccountRowsHtml = (rows = [], total) => {
+        if (!rows?.length) return '';
+        const esc = (v) => String(v ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+        const td = 'padding:5px 8px;border-top:1px solid #e2e8f0;font-size:11px;';
+        const body = rows.map((r) => {
+            const color = r.reconciled === true ? '#047857' : r.reconciled === false ? '#b91c1c' : '#64748b';
+            return `<tr>
+                <td style="${td}font-weight:600;">${esc(r.name)}</td>
+                <td style="${td}text-align:right;">${fmt(r.opening)}</td>
+                <td style="${td}text-align:right;">${fmt(r.periodIn)}</td>
+                <td style="${td}text-align:right;">${fmt(r.periodOut)}</td>
+                <td style="${td}text-align:right;font-weight:700;">${fmt(r.expected)}</td>
+                <td style="${td}text-align:right;">${r.counted != null ? fmt(r.counted) : '—'}</td>
+                <td style="${td}text-align:right;color:${color};font-weight:700;">${r.variance != null ? fmt(r.variance) : '—'}</td>
+            </tr>`;
+        }).join('');
+        const th = 'padding:5px 8px;font-size:9px;color:#94a3b8;text-transform:uppercase;text-align:right;';
+        return `
+            <div style="border:1px solid #e2e8f0;border-radius:8px;padding:8px 6px;margin-bottom:12px;">
+                <div style="display:flex;justify-content:space-between;padding:0 8px 6px;">
+                    <strong style="font-size:12px;">Money accounts</strong>
+                    ${total != null ? `<span style="font-size:11px;">Total expected: <strong>${fmt(total)}</strong></span>` : ''}
+                </div>
+                <table style="width:100%;border-collapse:collapse;">
+                    <tr><th style="${th}text-align:left;">Account</th><th style="${th}">Opening</th><th style="${th}">In</th><th style="${th}">Out</th><th style="${th}">Expected</th><th style="${th}">Counted</th><th style="${th}">Variance</th></tr>
+                    ${body}
+                </table>
+            </div>`;
+    };
+
     const buildTenderRowsHtml = (tenderReconciliation = {}) => {
         return ['cash', 'card', 'online'].map((key) => {
             const meta = TENDER_PDF_META[key];
@@ -137,6 +168,8 @@ const ClosingDetail = () => {
             </div>
 
             ${closing.countedNote ? `<div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px 14px;margin-bottom:16px;font-size:11px;"><strong>Note:</strong> ${closing.countedNote}</div>` : ''}
+
+            ${buildAccountRowsHtml(closing.accountReconciliation, closing.totalMoneyExpected)}
 
             <!-- Tender Reconciliation — the real check, per verifiable tender -->
             <div style="margin-bottom:12px;">

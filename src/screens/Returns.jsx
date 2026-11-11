@@ -2,6 +2,9 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useBusiness } from '../context/BusinessContext';
 import { getTodaySummary, getReturnByReceipt, getReturnProductByBarcode, createReturn } from '../services/api/returns';
 import { getCashBalance } from '../services/api/cashbook';
+import AccountPicker from '../components/AccountPicker';
+import { useMoneyBook } from '../context/MoneyBookContext';
+import { apiErrorMessage } from '../utils/moneyBook';
 import { getProducts } from '../services/api/products';
 import { searchCustomers, getCustomer } from '../services/api/customers';
 import { mergeReceiptItems } from '../utils/receiptItems';
@@ -67,6 +70,10 @@ const Returns = () => {
 
     // Refund details
     const [refundMethod, setRefundMethod] = useState('cash');
+    // Money Book (only when the shop has it on): account the refund is paid from
+    const { isOn: moneyBookOn, drawerId, moneyFields, handleMoneyError } = useMoneyBook();
+    const [refundAccountId, setRefundAccountId] = useState(null);
+    const [refundShort, setRefundShort] = useState(false);
     const [customerName, setCustomerName] = useState('');
     const [notes, setNotes] = useState('');
 
@@ -463,8 +470,15 @@ const Returns = () => {
 
         // Cash refund validation
         const isCashRefund = linkedBill ? !linkedBill.customer : refundMethod === 'cash';
-        if (isCashRefund && cashBalance != null && totalRefund > cashBalance) {
+        if (!moneyBookOn && isCashRefund && cashBalance != null && totalRefund > cashBalance) {
             setError(`Insufficient cash. Available: ${formatCurrency(cashBalance)}`);
+            return;
+        }
+        // Money Book: the picked account must hold the refund (customer bills
+        // go to their ledger — no money moves, no picker)
+        const paysOut = linkedBill ? !linkedBill.customer : refundMethod !== 'store_credit';
+        if (moneyBookOn && paysOut && refundShort) {
+            setError('Not enough money in the selected account. Choose another account.');
             return;
         }
 
@@ -477,6 +491,7 @@ const Returns = () => {
                     billId: linkedBill._id,
                     items: returnItems.flatMap(splitAcrossLines),
                     notes,
+                    ...(!linkedBill.customer ? moneyFields({ refundAccountId }) : {}),
                 };
             } else {
                 payload = {
@@ -491,6 +506,7 @@ const Returns = () => {
                     refundMethod,
                     customerName: customerName || '',
                     notes,
+                    ...(refundMethod !== 'store_credit' ? moneyFields({ refundAccountId }) : {}),
                 };
             }
 
@@ -525,7 +541,8 @@ const Returns = () => {
             loadTodaySummary();
         } catch (error) {
             console.error('Error processing return:', error);
-            setError(error.response?.data?.message || 'Failed to process return');
+            handleMoneyError(error);
+            setError(apiErrorMessage(error, 'Failed to process return'));
         } finally {
             setProcessing(false);
         }
@@ -545,8 +562,12 @@ const Returns = () => {
         if (!linkedBill || processing) return;
 
         const isCashRefund = !linkedBill.customer;
-        if (isCashRefund && cashBalance != null && fullReturnEstimate > cashBalance) {
+        if (!moneyBookOn && isCashRefund && cashBalance != null && fullReturnEstimate > cashBalance) {
             setFullReturnError(`Insufficient cash. Available: ${formatCurrency(cashBalance)}`);
+            return;
+        }
+        if (moneyBookOn && isCashRefund && refundShort) {
+            setFullReturnError('Not enough money in the selected account. Choose another account.');
             return;
         }
 
@@ -559,6 +580,7 @@ const Returns = () => {
                 fullReturn: true,
                 reason: fullReturnReason,
                 ...(note ? { reasonNote: note } : {}),
+                ...(isCashRefund ? moneyFields({ refundAccountId }) : {}),
             });
             const data = response.data;
             const returnEntry = data.bill?.returns?.slice(-1)[0];
@@ -577,7 +599,8 @@ const Returns = () => {
             loadTodaySummary();
         } catch (err) {
             console.error('Error processing full return:', err);
-            setFullReturnError(err.response?.data?.message || 'Failed to process return');
+            handleMoneyError(err);
+            setFullReturnError(apiErrorMessage(err, 'Failed to process return'));
         } finally {
             setProcessing(false);
         }
@@ -1024,7 +1047,7 @@ const Returns = () => {
                                     <h3 className="text-lg font-semibold text-slate-800 dark:text-d-heading mb-4">
                                         Refund Method
                                     </h3>
-                                    {refundMethod === 'cash' && cashBalance != null && (
+                                    {!moneyBookOn && refundMethod === 'cash' && cashBalance != null && (
                                         <div className={`flex items-center justify-between p-3 rounded-xl border mb-3 ${
                                             totalRefund > cashBalance
                                                 ? 'bg-red-50 dark:bg-[rgba(239,68,68,0.08)] border-red-200 dark:border-[rgba(239,68,68,0.2)]'
@@ -1057,6 +1080,15 @@ const Returns = () => {
                                             </button>
                                         ))}
                                     </div>
+                                    <AccountPicker
+                                        method={refundMethod}
+                                        value={refundAccountId}
+                                        onChange={(id) => setRefundAccountId(id)}
+                                        amount={totalRefund}
+                                        direction="out"
+                                        onInsufficientChange={setRefundShort}
+                                        className="mt-4"
+                                    />
                                 </div>
                             </>
                         )}
@@ -1072,6 +1104,20 @@ const Returns = () => {
                                         ? 'This is a customer bill. The refund will be applied as a ledger adjustment to their account balance.'
                                         : 'This is a walk-in bill. A cash refund will be processed.'}
                                 </p>
+                                {!linkedBill.customer && !showFullReturn && (
+                                    <AccountPicker
+                                        method="cash"
+                                        anyType
+                                        defaultId={drawerId}
+                                        value={refundAccountId}
+                                        onChange={(id) => setRefundAccountId(id)}
+                                        amount={totalRefund}
+                                        direction="out"
+                                        onInsufficientChange={setRefundShort}
+                                        label="Refund from"
+                                        className="mt-4"
+                                    />
+                                )}
                             </div>
                         )}
 
@@ -1196,6 +1242,20 @@ const Returns = () => {
                                     : 'Cash refund.'}{' '}
                                 The final amount is calculated when the return is processed.
                             </p>
+                            {!linkedBill.customer && (
+                                <AccountPicker
+                                    method="cash"
+                                    anyType
+                                    defaultId={drawerId}
+                                    value={refundAccountId}
+                                    onChange={(id) => setRefundAccountId(id)}
+                                    amount={Math.round(fullReturnEstimate * 100) / 100}
+                                    direction="out"
+                                    onInsufficientChange={setRefundShort}
+                                    label="Refund from"
+                                    className="mb-4"
+                                />
+                            )}
 
                             {fullReturnError && (
                                 <div className="mb-4 p-3 bg-[rgba(255,107,107,0.1)] border border-[rgba(255,107,107,0.3)] rounded-xl text-d-red text-sm flex items-center gap-2">

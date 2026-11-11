@@ -4,6 +4,7 @@ import { NavLink, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useBusiness } from '../context/BusinessContext';
 import { useTheme } from '../context/ThemeContext';
+import { useMoneyBook } from '../context/MoneyBookContext';
 import { PaymentDueBanner, usePaymentDueVisible } from './AccountStatus';
 import {
     FiHome,
@@ -30,6 +31,8 @@ const Layout = ({ children }) => {
     const { user, logout, isAdmin, isEmployee, permissions } = useAuth();
     const { business, config } = useBusiness();
     const { isDark, toggleTheme } = useTheme();
+    const { isOn: moneyBookOn, canViewBook } = useMoneyBook();
+    const cashBookLabel = moneyBookOn && canViewBook ? 'Money Book' : 'Cash Book';
     const navigate = useNavigate();
     const [sidebarExpanded, setSidebarExpanded] = useState(false);
     const showPaymentDue = usePaymentDueVisible();
@@ -48,7 +51,7 @@ const Layout = ({ children }) => {
         { path: '/receipts', icon: FiFileText, label: 'Receipts', module: 'pos' },
         { path: '/returns', icon: FiRotateCcw, label: 'Returns', module: 'returns' },
         { path: '/expenses', icon: FiDollarSign, label: 'Expenses', module: 'expenses' },
-        { path: '/cashbook', icon: FiBook, label: 'Cash Book', module: 'cashbook' },
+        { path: '/cashbook', icon: FiBook, label: cashBookLabel, module: 'cashbook' },
         { path: '/vendors', icon: FiTruck, label: 'Vendors', module: 'vendors' },
         { path: '/inventory', icon: FiLayers, label: 'Inventory', module: 'products' },
         { path: '/reports', icon: FiPieChart, label: 'Reports', module: 'reports' },
@@ -66,7 +69,7 @@ const Layout = ({ children }) => {
         { path: '/receipts', icon: FiFileText, label: 'Receipts', module: 'pos' },
         { path: '/returns', icon: FiRotateCcw, label: 'Returns', module: 'returns' },
         { path: '/expenses', icon: FiDollarSign, label: 'Expenses', module: 'expenses' },
-        { path: '/cashbook', icon: FiBook, label: 'Cash Book', module: 'cashbook' },
+        { path: '/cashbook', icon: FiBook, label: cashBookLabel, module: 'cashbook' },
         { path: '/vendors', icon: FiTruck, label: 'Vendors', module: 'vendors' },
         { path: '/inventory', icon: FiLayers, label: 'Inventory', module: 'products' },
         { path: '/reports', icon: FiPieChart, label: 'Reports', module: 'reports' },

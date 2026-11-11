@@ -6,6 +6,10 @@ import { getVendor, getVendorLedger, payVendor } from '../services/api/vendors';
 import { paySupply, getSupplies } from '../services/api/supplies';
 import { getCashBalance } from '../services/api/cashbook';
 import html2pdf from 'html2pdf.js';
+import AccountPicker from '../components/AccountPicker';
+import ChequeFields from '../components/moneybook/ChequeFields';
+import { useMoneyBook } from '../context/MoneyBookContext';
+import { apiErrorMessage, round2 } from '../utils/moneyBook';
 import {
     FiArrowLeft,
     FiDownload,
@@ -79,6 +83,10 @@ const VendorLedger = () => {
     const [submittingPayment, setSubmittingPayment] = useState(false);
     const [cashInHand, setCashInHand] = useState(null);
     const [paymentError, setPaymentError] = useState('');
+    // Money Book (only when the shop has it on): account paid from, cheque details
+    const { isOn: moneyBookOn, chequeTracking, moneyFields, handleMoneyError } = useMoneyBook();
+    const [payMoney, setPayMoney] = useState({ accountId: null, chequeNumber: '', chequeDate: '' });
+    const [payShort, setPayShort] = useState(false);
     const [pendingSupplies, setPendingSupplies] = useState([]); // [{ supplyId, supplyNumber, due }]
     const [toast, setToast] = useState('');
 
@@ -259,7 +267,13 @@ const VendorLedger = () => {
             reference: '',
         });
         setPaymentError('');
+        setPayMoney({ accountId: null, chequeNumber: '', chequeDate: '' });
+        setPayShort(false);
         setShowPaymentModal(true);
+        if (moneyBookOn) {
+            setCashInHand(null); // the picker shows the chosen account's balance
+            return;
+        }
         try {
             const res = await getCashBalance();
             setCashInHand(res.data?.balance ?? null);
@@ -277,10 +291,20 @@ const VendorLedger = () => {
             return;
         }
 
-        if (paymentForm.method === 'cash' && cashInHand != null && amount > cashInHand) {
+        if (!moneyBookOn && paymentForm.method === 'cash' && cashInHand != null && amount > cashInHand) {
             setPaymentError(`Insufficient cash. Available: ${formatCurrency(cashInHand)}`);
             return;
         }
+        if (moneyBookOn && payShort) {
+            setPaymentError('Not enough money in the selected account. Choose another account.');
+            return;
+        }
+        const moneyExtra = moneyFields({
+            accountId: payMoney.accountId,
+            ...(paymentForm.method === 'cheque' && chequeTracking
+                ? { chequeNumber: payMoney.chequeNumber.trim(), chequeDate: payMoney.chequeDate }
+                : {}),
+        });
 
         setSubmittingPayment(true);
         try {
@@ -296,6 +320,7 @@ const VendorLedger = () => {
                     method: paymentForm.method,
                     note: paymentForm.note,
                     reference: paymentForm.reference,
+                    ...moneyExtra,
                 });
                 // Vendor credit (from returns) is used before the cash
                 const moves = res.data?.creditApplied || [];
@@ -311,13 +336,15 @@ const VendorLedger = () => {
                     method: paymentForm.method,
                     note: paymentForm.note,
                     reference: paymentForm.reference,
+                    ...moneyExtra,
                 });
             }
             setShowPaymentModal(false);
             fetchLedger();
         } catch (err) {
             console.error('Payment error:', err);
-            setPaymentError(err.response?.data?.message || 'Failed to record payment');
+            handleMoneyError(err);
+            setPaymentError(apiErrorMessage(err, 'Failed to record payment'));
         } finally {
             setSubmittingPayment(false);
         }
@@ -1241,7 +1268,7 @@ const VendorLedger = () => {
                                             { id: 'online', label: 'Online' },
                                             { id: 'cheque', label: 'Cheque' },
                                             { id: 'card', label: 'Card' },
-                                        ].map((m) => (
+                                        ].filter((m) => m.id !== 'cheque' || !moneyBookOn || chequeTracking).map((m) => (
                                             <button
                                                 key={m.id}
                                                 type="button"
@@ -1256,6 +1283,25 @@ const VendorLedger = () => {
                                             </button>
                                         ))}
                                     </div>
+                                    <AccountPicker
+                                        method={paymentForm.method}
+                                        value={payMoney.accountId}
+                                        onChange={(accId) => setPayMoney((p) => ({ ...p, accountId: accId }))}
+                                        amount={round2(paymentForm.amount)}
+                                        direction="out"
+                                        pending={paymentForm.method === 'cheque' && chequeTracking}
+                                        onInsufficientChange={setPayShort}
+                                        compact
+                                        className="mt-3"
+                                    />
+                                    {moneyBookOn && paymentForm.method === 'cheque' && chequeTracking && (
+                                        <ChequeFields
+                                            className="mt-3"
+                                            number={payMoney.chequeNumber}
+                                            date={payMoney.chequeDate}
+                                            onChange={({ number, date }) => setPayMoney((p) => ({ ...p, chequeNumber: number, chequeDate: date }))}
+                                        />
+                                    )}
                                 </div>
 
                                 {/* Reference */}

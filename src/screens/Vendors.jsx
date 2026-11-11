@@ -8,6 +8,10 @@ import { getCashBalance } from '../services/api/cashbook';
 import { getProducts } from '../services/api/products';
 import ProductFormModal from '../components/ProductFormModal';
 import { appAlert, appConfirm } from '../components/AppDialog';
+import AccountPicker from '../components/AccountPicker';
+import ChequeFields from '../components/moneybook/ChequeFields';
+import { useMoneyBook } from '../context/MoneyBookContext';
+import { apiErrorMessage, round2 } from '../utils/moneyBook';
 import {
     FiPlus,
     FiSearch,
@@ -146,6 +150,19 @@ const Vendors = () => {
     const [payingSupply, setPayingSupply] = useState(null);
     const [payAmount, setPayAmount] = useState('');
     const [payMethod, setPayMethod] = useState('cash');
+
+    // ── Money Book (only when the shop has it on) ────────────────────────────
+    const { isOn: moneyBookOn, chequeTracking, moneyFields, handleMoneyError } = useMoneyBook();
+    // Cheque only with cheque tracking once the Money Book is on; unchanged otherwise
+    const payMethods = PAY_METHODS.filter((m) => m.id !== 'cheque' || !moneyBookOn || chequeTracking);
+    const emptyMoneyPay = { method: 'cash', accountId: null, chequeNumber: '', chequeDate: '' };
+    const [supplyPay, setSupplyPay] = useState(emptyMoneyPay); // supply create: initial payment
+    const [supplyShort, setSupplyShort] = useState(false);
+    const [payMoney, setPayMoney] = useState(emptyMoneyPay);   // pay modal (method lives in payMethod)
+    const [payShort, setPayShort] = useState(false);
+    const chequeFor = (method, m) => (method === 'cheque' && chequeTracking
+        ? { chequeNumber: m.chequeNumber.trim(), chequeDate: m.chequeDate }
+        : {});
 
     // ── Return modal ─────────────────────────────────────────────────────────
     const [returningSupply, setReturningSupply] = useState(null);
@@ -311,7 +328,9 @@ const Vendors = () => {
             setSupplyItems([defaultItem()]);
         }
         setReceiptFile(null);
-        getCashBalance().then(res => setCashBalance(res.data?.balance ?? null)).catch(() => setCashBalance(null));
+        setSupplyPay(emptyMoneyPay);
+        setSupplyShort(false);
+        if (!moneyBookOn) getCashBalance().then(res => setCashBalance(res.data?.balance ?? null)).catch(() => setCashBalance(null));
         setShowSupplyModal(true);
         // Refresh products in case new ones were added
         fetchProducts();
@@ -399,8 +418,12 @@ const Vendors = () => {
         }
 
         // Validate: cannot pay more cash than available
-        if (paid > 0 && supplyCashBalance != null && paid > supplyCashBalance) {
+        if (!moneyBookOn && paid > 0 && supplyCashBalance != null && paid > supplyCashBalance) {
             appAlert(`Insufficient cash. Available balance: ${formatCurrency(supplyCashBalance)}`);
+            return;
+        }
+        if (moneyBookOn && paid > 0 && supplyShort) {
+            appAlert('Not enough money in the selected account. Choose another account or pay less now.');
             return;
         }
 
@@ -414,6 +437,15 @@ const Vendors = () => {
             // Paid amount can't be edited (server returns 400) — only sent on create
             if (!editingSupply) formData.append('paidAmount', supplyForm.paidAmount || 0);
             formData.append('notes', supplyForm.notes);
+            // Money Book on: how the paid-now part was paid and from which account
+            if (!editingSupply && paid > 0) {
+                const extra = moneyFields({
+                    paymentMethod: supplyPay.method,
+                    paymentAccountId: supplyPay.accountId,
+                    ...chequeFor(supplyPay.method, supplyPay),
+                });
+                Object.entries(extra).forEach(([k, v]) => formData.append(k, v));
+            }
             if (!itemsLocked) {
                 formData.append(
                     'items',
@@ -441,7 +473,8 @@ const Vendors = () => {
             fetchStats();
         } catch (err) {
             console.error('Error saving supply:', err);
-            appAlert(supplyErrorMessage(err, 'Failed to save supply'));
+            handleMoneyError(err);
+            appAlert(err.response?.data?.code ? apiErrorMessage(err, 'Failed to save supply') : supplyErrorMessage(err, 'Failed to save supply'));
         } finally {
             setSubmitting(false);
         }
@@ -467,17 +500,24 @@ const Vendors = () => {
         setPayingSupply(supply);
         setPayAmount('');
         setPayMethod('cash');
+        setPayMoney(emptyMoneyPay);
+        setPayShort(false);
         setShowPayModal(true);
     };
 
     const handlePay = async (e) => {
         e.preventDefault();
         if (!payAmount || Number(payAmount) <= 0) return;
+        if (moneyBookOn && payShort) {
+            appAlert('Not enough money in the selected account. Choose another account.');
+            return;
+        }
         setPaying(true);
         try {
             await paySupply(payingSupply._id, {
                 amount: Number(payAmount),
                 method: payMethod,
+                ...moneyFields({ accountId: payMoney.accountId, ...chequeFor(payMethod, payMoney) }),
             });
             setShowPayModal(false);
             setPayingSupply(null);
@@ -485,7 +525,8 @@ const Vendors = () => {
             fetchStats();
         } catch (err) {
             console.error('Error recording payment:', err);
-            appAlert(err.response?.data?.message || 'Failed to record payment');
+            handleMoneyError(err);
+            appAlert(apiErrorMessage(err, 'Failed to record payment'));
         } finally {
             setPaying(false);
         }
@@ -1366,7 +1407,7 @@ const Vendors = () => {
                                         <label className="block text-sm font-medium text-slate-700 dark:text-d-text">
                                             Paid Amount
                                         </label>
-                                        {!editingSupply && supplyCashBalance != null && (
+                                        {!moneyBookOn && !editingSupply && supplyCashBalance != null && (
                                             <span className={`text-xs font-medium ${
                                                 (Number(supplyForm.paidAmount) || 0) > supplyCashBalance
                                                     ? 'text-red-500 dark:text-d-red'
@@ -1387,7 +1428,7 @@ const Vendors = () => {
                                         readOnly={!!editingSupply}
                                         placeholder="0"
                                         className={`w-full px-4 py-2 bg-white dark:bg-d-bg border rounded-xl focus:ring-2 focus:ring-primary-500 dark:focus:border-d-border-hover focus:outline-none text-slate-800 dark:text-d-text placeholder-slate-400 dark:placeholder-d-faint read-only:opacity-60 read-only:cursor-not-allowed read-only:focus:ring-0 ${
-                                            !editingSupply && (Number(supplyForm.paidAmount) || 0) > supplyCashBalance && supplyCashBalance != null
+                                            !moneyBookOn && !editingSupply && (Number(supplyForm.paidAmount) || 0) > supplyCashBalance && supplyCashBalance != null
                                                 ? 'border-red-400 dark:border-red-500'
                                                 : 'border-slate-200 dark:border-d-border'
                                         }`}
@@ -1397,6 +1438,47 @@ const Vendors = () => {
                                     )}
                                 </div>
                             </div>
+
+                            {/* Money Book on: how the paid-now part is paid */}
+                            {moneyBookOn && !editingSupply && (Number(supplyForm.paidAmount) || 0) > 0 && (
+                                <div className="space-y-3 p-4 rounded-xl border border-slate-200 dark:border-d-border">
+                                    <div>
+                                        <label className="block text-sm font-medium text-slate-700 dark:text-d-text mb-1">Paid by</label>
+                                        <div className="flex flex-wrap gap-1.5">
+                                            {payMethods.map((m) => (
+                                                <button
+                                                    key={m.id}
+                                                    type="button"
+                                                    onClick={() => setSupplyPay((p) => ({ ...p, method: m.id }))}
+                                                    className={`px-3 py-2 rounded-lg text-xs font-semibold transition-colors ${
+                                                        supplyPay.method === m.id
+                                                            ? 'bg-primary-500 dark:bg-d-accent text-white dark:text-d-card'
+                                                            : 'bg-slate-50 dark:bg-d-bg border border-slate-200 dark:border-d-border text-slate-600 dark:text-d-muted hover:border-slate-300'
+                                                    }`}
+                                                >
+                                                    {m.label}
+                                                </button>
+                                            ))}
+                                        </div>
+                                    </div>
+                                    <AccountPicker
+                                        method={supplyPay.method}
+                                        value={supplyPay.accountId}
+                                        onChange={(id) => setSupplyPay((p) => ({ ...p, accountId: id }))}
+                                        amount={round2(supplyForm.paidAmount)}
+                                        direction="out"
+                                        pending={supplyPay.method === 'cheque' && chequeTracking}
+                                        onInsufficientChange={setSupplyShort}
+                                    />
+                                    {supplyPay.method === 'cheque' && chequeTracking && (
+                                        <ChequeFields
+                                            number={supplyPay.chequeNumber}
+                                            date={supplyPay.chequeDate}
+                                            onChange={({ number, date }) => setSupplyPay((p) => ({ ...p, chequeNumber: number, chequeDate: date }))}
+                                        />
+                                    )}
+                                </div>
+                            )}
 
                             {/* Items Section */}
                             <div>
@@ -1624,7 +1706,7 @@ const Vendors = () => {
                                     Method
                                 </label>
                                 <div className="grid grid-cols-5 gap-1.5">
-                                    {PAY_METHODS.map((m) => (
+                                    {payMethods.map((m) => (
                                         <button
                                             key={m.id}
                                             type="button"
@@ -1640,6 +1722,23 @@ const Vendors = () => {
                                     ))}
                                 </div>
                             </div>
+
+                            <AccountPicker
+                                method={payMethod}
+                                value={payMoney.accountId}
+                                onChange={(id) => setPayMoney((p) => ({ ...p, accountId: id }))}
+                                amount={round2(payAmount)}
+                                direction="out"
+                                pending={payMethod === 'cheque' && chequeTracking}
+                                onInsufficientChange={setPayShort}
+                            />
+                            {moneyBookOn && payMethod === 'cheque' && chequeTracking && (
+                                <ChequeFields
+                                    number={payMoney.chequeNumber}
+                                    date={payMoney.chequeDate}
+                                    onChange={({ number, date }) => setPayMoney((p) => ({ ...p, chequeNumber: number, chequeDate: date }))}
+                                />
+                            )}
 
                             <div className="flex gap-3">
                                 <button

@@ -4,6 +4,7 @@ import { useBusiness } from '../context/BusinessContext';
 import { getEmployees, getEmployeePrefix, createEmployee, updateEmployee, deleteEmployee, reactivateEmployee } from '../services/api/employees';
 import { getEmployeeAccess, updateEmployeeAccess } from '../services/api/access';
 import { appAlert, appConfirm } from '../components/AppDialog';
+import { useMoneyBook } from '../context/MoneyBookContext';
 import {
     FiPlus,
     FiSearch,
@@ -64,6 +65,7 @@ const ACTION_LABELS = {
     resume: 'Resume', cancel: 'Cancel', viewProfit: 'View Profit',
     saveCustomerRates: 'Save Customer Rates', sellBeyondLimit: 'Sell Beyond Discount Limit',
     cancelBill: 'Cancel Bills', amendBill: "Add to today's bill",
+    manage: 'Deposit / Withdraw', transfer: 'Transfer between accounts',
 };
 
 // Actions the backend treats as ON unless explicitly turned off (missing = allowed)
@@ -72,8 +74,14 @@ const isDefaultOn = (module, action) => (DEFAULT_ON_ACTIONS[module] || []).inclu
 const permissionOn = (perms, module, action) =>
     isDefaultOn(module, action) ? perms[module]?.[action] !== false : !!perms[module]?.[action];
 
+// Shown only when the shop has the Money Book on (shops without it keep the
+// editor exactly as before)
+const MONEY_BOOK_MODULE = { key: 'cashbook', label: 'Money Book', actions: ['view', 'manage', 'transfer'] };
+
 const Employees = () => {
     const { config } = useBusiness();
+    const { isOn: moneyBookOn } = useMoneyBook();
+    const accessModules = moneyBookOn ? [...ACCESS_MODULES, MONEY_BOOK_MODULE] : ACCESS_MODULES;
     const businessType = getBusinessType(config);
     const isService = businessType === 'service';
 
@@ -775,7 +783,7 @@ const Employees = () => {
                                 </div>
                             ) : (
                                 <div className="space-y-4">
-                                    {ACCESS_MODULES.map(mod => {
+                                    {accessModules.map(mod => {
                                         const allEnabled = mod.actions.every(a => permissionOn(permissions, mod.key, a));
                                         const someEnabled = mod.actions.some(a => permissionOn(permissions, mod.key, a));
 

@@ -11,6 +11,9 @@ import { printReceipt as printReceiptUtil } from '../utils/printReceipt';
 import { appAlert, appConfirm, appChoose } from '../components/AppDialog';
 import { searchCustomers, saveCustomerRate } from '../services/api/customers';
 import { getCreditPayments, getPrimaryPaymentMethod } from '../utils/billCredit';
+import { useMoneyBook } from '../context/MoneyBookContext';
+import AccountPicker from '../components/AccountPicker';
+import { apiErrorMessage } from '../utils/moneyBook';
 import {
     buildRateMap,
     getRateStatus,
@@ -144,6 +147,10 @@ const EmployeeDashboard = () => {
     const [amendOffer, setAmendOffer] = useState(null); // { posBillId, customerName, bills }
     const [amendPayMethod, setAmendPayMethod] = useState('credit'); // credit | cash | card | online
     const [amendPayAmount, setAmendPayAmount] = useState('');
+    // Money Book: the account a payment lands in (only when the shop has it on)
+    const { isOn: moneyBookOn, moneyFields, handleMoneyError } = useMoneyBook();
+    const [posAccountId, setPosAccountId] = useState(null);
+    const [amendAccountId, setAmendAccountId] = useState(null);
     // The current "add to bill" save attempt: { key, fingerprint, billId, payMethod, payAmount }.
     // Kept until the server gives a definite answer, so closing and reopening the
     // payment window and saving the same thing again reuses the same idempotency key.
@@ -1116,6 +1123,7 @@ const EmployeeDashboard = () => {
             if (pending && pending.billId === bill.amend.billId) {
                 setAmendPayMethod(pending.payMethod);
                 setAmendPayAmount(pending.payAmount);
+                setAmendAccountId(pending.payAccount || null);
             } else {
                 setAmendPayMethod('credit');
                 setAmendPayAmount('');
@@ -1278,7 +1286,7 @@ const EmployeeDashboard = () => {
             const amount = Math.round((parseFloat(amendPayAmount) || 0) * 100) / 100;
             if (!(amount > 0)) { showToast('Enter the amount paid now, or choose Leave as credit'); return; }
             if (amount > dueNow + 0.01) { showToast(`Paid amount is more than the due (${formatCurrency(dueNow)})`); return; }
-            payment = { amount, method: amendPayMethod };
+            payment = { amount, method: amendPayMethod, ...moneyFields({ accountId: amendAccountId }) };
         }
         const itemsPayload = [...bill.items].reverse().map(toBillItemPayload); // saved oldest-first, like a new bill
         const fingerprint = JSON.stringify({ bill: amend.billId, items: itemsPayload, payment: payment || null });
@@ -1292,7 +1300,7 @@ const EmployeeDashboard = () => {
                 billId: amend.billId,
             };
         }
-        Object.assign(amendKeyRef.current, { payMethod: amendPayMethod, payAmount: amendPayAmount });
+        Object.assign(amendKeyRef.current, { payMethod: amendPayMethod, payAmount: amendPayAmount, payAccount: amendAccountId });
         const { key } = amendKeyRef.current;
         setProcessing(true);
         try {
@@ -1315,6 +1323,11 @@ const EmployeeDashboard = () => {
                 setPosBillAmend(bill.id, null);
                 setShowPaymentModal(false);
                 showToast(`${data.message || 'Not allowed'} — this will be a new bill`, '⚠');
+            } else if (status === 400 && data.code && /^(INSUFFICIENT_BALANCE|ACCOUNT_|MONEY_BOOK_NOT_READY)/.test(data.code)) {
+                // Money Book account problem: keep the window open, fresh account list
+                amendKeyRef.current = null;
+                handleMoneyError(error);
+                showToast(apiErrorMessage(error, 'Failed to add items to the bill'));
             } else if (status === 400 && !data.outOfStock?.length) {
                 amendKeyRef.current = null;
                 await recheckAmendable(bill, data.message);
@@ -1397,6 +1410,11 @@ const EmployeeDashboard = () => {
                 amountPaid,
                 cashGiven: paymentMethod === 'cash' ? parseFloat(cashGiven || 0) : 0,
                 idempotencyKey,
+                // Money Book on + an account chosen: the payment as payments[] (the
+                // only place POST /bill takes an accountId). Otherwise exactly as before.
+                ...(moneyBookOn && posAccountId && amountPaid > 0
+                    ? { payments: [{ amount: amountPaid, method: backendPaymentMethod, ...moneyFields({ accountId: posAccountId }) }] }
+                    : {}),
             });
 
 
@@ -1456,7 +1474,8 @@ const EmployeeDashboard = () => {
                 showToast('Bill already paid');
                 deleteBill(bill.id);
             } else {
-                showToast(error.response?.data?.message || 'Failed to complete sale');
+                handleMoneyError(error);
+                showToast(apiErrorMessage(error, 'Failed to complete sale'));
             }
         } finally {
             setProcessing(false);
@@ -2490,6 +2509,14 @@ const EmployeeDashboard = () => {
                                     {amount > dueNow + 0.01 && (
                                         <p className="mt-1.5 text-[12px] text-red-500 dark:text-d-red">More than the due ({formatCurrency(dueNow)})</p>
                                     )}
+                                    <AccountPicker
+                                        method={amendPayMethod}
+                                        value={amendAccountId}
+                                        onChange={(id) => setAmendAccountId(id)}
+                                        direction="in"
+                                        compact
+                                        className="mt-3"
+                                    />
                                 </div>
                             )}
 
@@ -2564,6 +2591,15 @@ const EmployeeDashboard = () => {
                                     Attach a customer first to use credit.
                                 </p>
                             )}
+                            {/* Credit: only the part paid now (cash) lands in an account */}
+                            <AccountPicker
+                                method={paymentMethod === 'upi' ? 'online' : paymentMethod === 'credit' ? (parseFloat(creditPaidNow || 0) > 0 ? 'cash' : null) : paymentMethod}
+                                value={posAccountId}
+                                onChange={(id) => setPosAccountId(id)}
+                                direction="in"
+                                compact
+                                className="mt-3"
+                            />
                         </div>
 
                         {paymentMethod === 'credit' && activeBill?.customer && (
@@ -2857,6 +2893,8 @@ const AdminDashboard = () => {
     const [deadStockData, setDeadStockData] = useState({ products: [], summary: {} });
     const [lowStockData, setLowStockData] = useState([]);
     const [cashInHand, setCashInHand] = useState(0);
+    // Money Book total (null when the shop doesn't have it on — server sends null)
+    const [moneyPosition, setMoneyPosition] = useState(null);
     const [insightsLoading, setInsightsLoading] = useState(true);
 
     // Employee & Payment data
@@ -2943,6 +2981,7 @@ const AdminDashboard = () => {
                 });
                 setLowStockData(Array.isArray(data.lowStock) ? data.lowStock : []);
                 setCashInHand(data.cashBalance?.balance ?? 0);
+                setMoneyPosition(data.moneyBook || null);
                 setEmployeeCount(data.employeeCount || 0);
                 setSupplyStats(data.supplyStats || null);
                 insightsLoadedRef.current = true;
@@ -3208,6 +3247,24 @@ const AdminDashboard = () => {
                             <span className="text-[9px] font-bold tracking-[0.1em] uppercase text-slate-500 dark:text-d-faint">Cash in Hand</span>
                         </div>
                         <div className="font-bebas text-[28px] leading-none text-[#c084fc]">{currency} {formatCurrency(cashInHand)}</div>
+                        {moneyPosition && (
+                            <div className="mt-2 pt-2 border-t border-slate-200 dark:border-[rgba(255,255,255,0.06)]">
+                                <div className="flex justify-between items-baseline">
+                                    <span className="text-[9px] font-bold tracking-[0.1em] uppercase text-slate-500 dark:text-d-faint">Total money</span>
+                                    <span className={`font-mono-dm text-[12px] font-semibold ${moneyPosition.total < 0 ? 'text-d-red' : 'text-slate-700 dark:text-d-text'}`}>
+                                        {currency} {formatCurrency(moneyPosition.total)}
+                                    </span>
+                                </div>
+                                <div className="mt-1 space-y-0.5 font-mono-dm text-[10px]">
+                                    {(moneyPosition.accounts || []).map((a) => (
+                                        <div key={a._id} className="flex justify-between gap-2">
+                                            <span className="truncate text-slate-500 dark:text-d-faint">{a.name}</span>
+                                            <span className={a.balance < 0 ? 'text-d-red' : 'text-slate-600 dark:text-d-muted'}>{formatCurrency(a.balance)}</span>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
                     </div>
 
                     {/* P&L Mini */}

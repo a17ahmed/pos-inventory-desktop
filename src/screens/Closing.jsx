@@ -45,6 +45,8 @@ const Closing = () => {
     const [countedCash, setCountedCash] = useState('');
     const [countedCard, setCountedCard] = useState('');
     const [countedOnline, setCountedOnline] = useState('');
+    // Money Book: counted / statement balance per account { [accountId]: '123' }
+    const [accountCounts, setAccountCounts] = useState({});
     const [preview, setPreview] = useState(null);
     const [loadingPreview, setLoadingPreview] = useState(true);
     const [previewError, setPreviewError] = useState(null);
@@ -92,6 +94,15 @@ const Closing = () => {
 
     const toNumOrUndefined = (v) => (v !== '' && !isNaN(Number(v)) ? Number(v) : undefined);
 
+    // Only accounts the closer actually typed a figure for (sent only when the
+    // preview has per-account rows, i.e. the Money Book is on)
+    const accountCountList = () => Object.entries(accountCounts)
+        .map(([accountId, v]) => ({ accountId, counted: toNumOrUndefined(v) }))
+        .filter((c) => c.counted !== undefined);
+    const hasAccountRows = (preview?.accountReconciliation?.length || 0) > 0;
+    // The drawer is counted in the account table → no separate cash input
+    const drawerCountedByAccount = hasAccountRows && preview.accountReconciliation.some((r) => r.systemKey === 'cash_drawer');
+
     const fetchPreview = useCallback(async () => {
         setLoadingPreview(true);
         setPreviewError(null);
@@ -105,6 +116,8 @@ const Closing = () => {
             if (cash !== undefined) params.countedCash = cash;
             if (card !== undefined) params.countedCard = card;
             if (online !== undefined) params.countedOnline = online;
+            const counts = accountCountList();
+            if (counts.length) params.accountCounts = counts.map((c) => `${c.accountId}:${c.counted}`).join(',');
             const res = await getClosingPreview(params);
             setPreview(res.data);
             setAcknowledgeMismatch(false);
@@ -115,7 +128,7 @@ const Closing = () => {
         } finally {
             setLoadingPreview(false);
         }
-    }, [overrideStart, overrideEnd, countedCash, countedCard, countedOnline]);
+    }, [overrideStart, overrideEnd, countedCash, countedCard, countedOnline, accountCounts]);
 
     useEffect(() => {
         const handle = setTimeout(() => {
@@ -123,7 +136,7 @@ const Closing = () => {
         }, 400);
         return () => clearTimeout(handle);
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [overrideStart, overrideEnd, countedCash, countedCard, countedOnline]);
+    }, [overrideStart, overrideEnd, countedCash, countedCard, countedOnline, accountCounts]);
 
     // =========================================================================
     // Period-edit modal handlers
@@ -206,7 +219,8 @@ const Closing = () => {
             const res = await createClosing({
                 periodStart: preview.periodStart,
                 periodEnd: preview.periodEnd,
-                countedCash: toNumOrUndefined(countedCash),
+                countedCash: drawerCountedByAccount ? undefined : toNumOrUndefined(countedCash),
+                ...(hasAccountRows && accountCountList().length ? { accountCounts: accountCountList() } : {}),
                 countedCard: toNumOrUndefined(countedCard),
                 countedOnline: toNumOrUndefined(countedOnline),
                 countedNote: countedNote || undefined,
@@ -316,7 +330,9 @@ const Closing = () => {
                                     const cashExpected = preview?.tenderReconciliation?.cash?.expected ?? 0;
                                     const cashNegative = cashExpected < 0;
                                     return {
-                                    cash: cashNegative ? (
+                                    cash: drawerCountedByAccount ? (
+                                        <div className="text-xs text-slate-500 dark:text-d-muted">Count the drawer in the Money accounts table above.</div>
+                                    ) : cashNegative ? (
                                         <div className="w-full px-3 py-2 bg-red-50 dark:bg-[rgba(255,107,107,0.08)] border border-red-200 dark:border-[rgba(255,107,107,0.2)] rounded-lg text-xs text-red-600 dark:text-d-red font-medium">
                                             Reconcile cash first — expected is negative
                                         </div>
@@ -352,6 +368,22 @@ const Closing = () => {
                                     ),
                                 }; })()
                                 : null
+                        }
+                        accountEditors={
+                            canCreate && hasAccountRows
+                                ? Object.fromEntries(preview.accountReconciliation.map((r) => [
+                                    String(r.account),
+                                    <input
+                                        key={String(r.account)}
+                                        type="number"
+                                        step="0.01"
+                                        value={accountCounts[String(r.account)] ?? ''}
+                                        onChange={(e) => setAccountCounts((c) => ({ ...c, [String(r.account)]: e.target.value }))}
+                                        placeholder="0.00"
+                                        className="w-full px-2 py-1 text-right bg-slate-50 dark:bg-d-bg border border-slate-200 dark:border-d-border rounded-lg text-sm font-bold text-slate-800 dark:text-d-heading focus:outline-none focus:ring-2 focus:ring-primary-500"
+                                    />,
+                                ]))
+                                : undefined
                         }
                     />
 

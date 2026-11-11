@@ -37,6 +37,9 @@ import {
 } from '../utils/specialRates';
 import { addBillPayment } from '../services/api/bills';
 import { appAlert, appConfirm } from '../components/AppDialog';
+import AccountPicker from '../components/AccountPicker';
+import { useMoneyBook } from '../context/MoneyBookContext';
+import { apiErrorMessage } from '../utils/moneyBook';
 import {
     FiArrowLeft,
     FiDownload,
@@ -176,6 +179,9 @@ const CustomerLedger = () => {
         note: '',
     });
     const [submittingPayment, setSubmittingPayment] = useState(false);
+    // Money Book: account the collected money lands in (only when the shop has it on)
+    const { moneyFields, handleMoneyError, accountsById } = useMoneyBook();
+    const [paymentAccountId, setPaymentAccountId] = useState(null);
 
     const currency = business?.currency || 'Rs.';
     const formatNumber = (amount) => Math.abs(amount || 0).toLocaleString(undefined, { maximumFractionDigits: 2 });
@@ -324,7 +330,9 @@ const CustomerLedger = () => {
         }
 
         // Confirm the exact amount before saving.
-        const methodLabel = { cash: 'cash', card: 'card', online: 'online' }[paymentForm.method] || paymentForm.method;
+        const methodName = { cash: 'cash', card: 'card', online: 'online' }[paymentForm.method] || paymentForm.method;
+        const intoAccount = paymentAccountId ? accountsById.get(String(paymentAccountId))?.name : '';
+        const methodLabel = intoAccount ? `${methodName} → ${intoAccount}` : methodName;
         const target = paymentMode === 'fifo'
             ? 'applied to the oldest unpaid bills first'
             : `on Bill #${outstandingBills.find((b) => String(b.billId) === String(paymentForm.billId))?.billNumber ?? ''}`;
@@ -342,12 +350,14 @@ const CustomerLedger = () => {
                     amount,
                     method: paymentForm.method,
                     note: paymentForm.note,
+                    ...moneyFields({ accountId: paymentAccountId }),
                 });
             } else {
                 res = await addBillPayment(paymentForm.billId, {
                     amount,
                     method: paymentForm.method,
                     note: paymentForm.note,
+                    ...moneyFields({ accountId: paymentAccountId }),
                 });
             }
             setShowPaymentModal(false);
@@ -363,7 +373,8 @@ const CustomerLedger = () => {
             }
         } catch (err) {
             console.error('Payment error:', err);
-            appAlert(err.response?.data?.message || 'Failed to record payment');
+            handleMoneyError(err);
+            appAlert(apiErrorMessage(err, 'Failed to record payment'));
         } finally {
             setSubmittingPayment(false);
         }
@@ -1345,6 +1356,14 @@ const CustomerLedger = () => {
                                             </button>
                                         ))}
                                     </div>
+                                    <AccountPicker
+                                        method={paymentForm.method}
+                                        value={paymentAccountId}
+                                        onChange={(accId) => setPaymentAccountId(accId)}
+                                        direction="in"
+                                        compact
+                                        className="mt-3"
+                                    />
                                 </div>
 
                                 {/* Note */}

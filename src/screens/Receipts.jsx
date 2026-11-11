@@ -8,6 +8,7 @@ import { getCreditPayments, getPrimaryPaymentMethod, formatPaymentMethod } from 
 import { printReceipt } from '../utils/printReceipt';
 import { downloadReceipt } from '../utils/downloadReceipt';
 import { mergeReceiptItems } from '../utils/receiptItems';
+import { useMoneyBook } from '../context/MoneyBookContext';
 import {
     FiSearch,
     FiFileText,
@@ -57,6 +58,8 @@ const dateRangeParams = (filter) => {
 
 const Receipts = () => {
     const { business } = useBusiness();
+    // Money Book: account names for payments that carry one
+    const { accountsById } = useMoneyBook();
     const { permissions, isAdmin } = useAuth();
     // Admins bypass all permission checks (permissions is null for them).
     const canViewProfit = !permissions || permissions.pos?.viewProfit === true;
@@ -385,7 +388,12 @@ const Receipts = () => {
         try {
             const res = await cancelBill(cancelTarget._id, reason);
             const cash = Number(res.data?.cashReversed) || 0;
-            setToast(`${res.data?.message || 'Bill cancelled'}${cash > 0 ? ` — ${formatCurrency(cash)} taken out of the cash book` : ''}`);
+            // Money Book servers say which account each part came back from
+            const reversed = (res.data?.reversed || []).filter((x) => Number(x.amount) > 0);
+            const moneyText = reversed.length
+                ? ` — ${reversed.map((x) => `${formatCurrency(x.amount)} back from ${x.name}`).join(', ')}`
+                : cash > 0 ? ` — ${formatCurrency(cash)} taken out of the cash book` : '';
+            setToast(`${res.data?.message || 'Bill cancelled'}${moneyText}`);
             setTimeout(() => setToast(''), 5000);
             setCancelTarget(null);
             setShowDetail(null);
@@ -941,6 +949,11 @@ const Receipts = () => {
                                                     <span className={`font-medium text-slate-700 dark:text-d-text ${p.creditFrom || p.method === 'store_credit' ? '' : 'capitalize'}`}>
                                                         {p.creditFrom || p.method === 'store_credit' ? `Paid by credit (from Bill #${p.creditFromBillNumber ?? ''})` : formatPaymentMethod(p)}
                                                     </span>
+                                                    {p.account && accountsById.get(String(p.account?._id || p.account)) && (
+                                                        <span className="text-xs px-1.5 py-0.5 rounded bg-slate-100 dark:bg-d-elevated text-slate-500 dark:text-d-muted">
+                                                            → {accountsById.get(String(p.account?._id || p.account)).name}
+                                                        </span>
+                                                    )}
                                                     {p.reference && <span className="text-xs text-slate-400 dark:text-d-faint font-mono">Ref: {p.reference}</span>}
                                                     {/* A store-credit payment's note just repeats "Credit from Bill #X". */}
                                                     {p.note && !(p.creditFrom || p.method === 'store_credit') && <span className="text-xs text-slate-400 dark:text-d-faint">({p.note})</span>}

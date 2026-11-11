@@ -1,9 +1,12 @@
+/* Fonts — @import must come before everything else in CSS, or browsers
+   (and the production build) drop it and the app falls back to system fonts. */
+@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@500;600;700&family=Outfit:wght@300;400;500;600;700&display=swap');
+/* Bebas Neue / DM Mono for dashboard numbers */
+@import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Mono:wght@300;400;500&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
-
-/* Import premium fonts */
-@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@500;600;700&family=Outfit:wght@300;400;500;600;700&display=swap');
 
 /* Premium POS Theme Variables */
 :root {
@@ -377,9 +380,6 @@ button:focus {
 .animate-fade-in {
     animation: fadeInQuick 0.2s ease;
 }
-
-/* Bebas Neue font for dashboard numbers */
-@import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Mono:wght@300;400;500&display=swap');
 
 .font-bebas {
     font-family: 'Bebas Neue', sans-serif;

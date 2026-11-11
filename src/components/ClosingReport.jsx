@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useBusiness } from '../context/BusinessContext';
+import AccountReconciliation from './moneybook/AccountReconciliation';
 import {
     FiChevronDown,
     FiChevronRight,
@@ -30,7 +31,7 @@ const TENDER_META = {
     online: { label: 'Online / UPI', icon: FiSmartphone, iconColor: 'text-purple-500', expectedLabel: 'Expected (this period)', hint: 'Check gateway/bank statement' },
 };
 
-const ClosingReport = ({ data, meta, tenderEditors }) => {
+const ClosingReport = ({ data, meta, tenderEditors, accountEditors }) => {
     const navigate = useNavigate();
     const { business } = useBusiness();
     const [expandedBill, setExpandedBill] = useState(null);
@@ -52,6 +53,8 @@ const ClosingReport = ({ data, meta, tenderEditors }) => {
         settlementTotal, costPlusProfit, reconciled, reconciliationDifference,
         collectionsReceived, outstandingReceivable,
         tenderReconciliation = {},
+        accountReconciliation = [],
+        totalMoneyExpected = null,
         bills = [],
     } = data;
 
@@ -106,6 +109,15 @@ const ClosingReport = ({ data, meta, tenderEditors }) => {
                     )}
                 </div>
             )}
+
+            {/* Money Book: per-account counted vs expected (closings made
+                before the Money Book have no rows and skip this) */}
+            <AccountReconciliation
+                rows={accountReconciliation}
+                totalMoneyExpected={totalMoneyExpected}
+                fmt={fmt}
+                editors={accountEditors}
+            />
 
             {/* Tender Reconciliation — the real check: does each externally-verifiable
                 tender match what the books say? Cash/Card/Online are independent —

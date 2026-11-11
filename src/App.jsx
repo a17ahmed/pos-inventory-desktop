@@ -60,6 +60,8 @@ import Customers from './screens/Customers';
 import CustomerLedger from './screens/CustomerLedger';
 import VendorLedger from './screens/VendorLedger';
 import CashBook from './screens/CashBook';
+import MoneyBook from './screens/MoneyBook';
+import { useMoneyBook } from './context/MoneyBookContext';
 import Inventory from './screens/Inventory';
 import EmployeeAnalytics from './screens/EmployeeAnalytics';
 import Closing from './screens/Closing';
@@ -104,6 +106,13 @@ const PermissionRoute = ({ module, children }) => {
         return <Navigate to="/dashboard" replace />;
     }
     return children;
+};
+
+// /cashbook: the Money Book once the shop has it, else the old Cash Book (unchanged)
+const CashBookRoute = () => {
+    const { mode, canViewBook } = useMoneyBook();
+    if (mode === 'loading') return <Loading />;
+    return mode === 'on' && canViewBook ? <MoneyBook /> : <CashBook />;
 };
 
 // Public route - redirect to dashboard if already logged in
@@ -340,7 +349,7 @@ function AppContent() {
                     <ProtectedRoute>
                         <PermissionRoute module="cashbook">
                             <Layout>
-                                <CashBook />
+                                <CashBookRoute />
                             </Layout>
                         </PermissionRoute>
                     </ProtectedRoute>
