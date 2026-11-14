@@ -1,4 +1,8 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { PageSkeleton } from '../components/ui/PageSkeleton';
+import { cn, Tabs, DataTable, Dash, Select, StatusChip, IconButton, Button, StateCard } from '../components/ui';
+import { PageHeader } from '../components/ui/PageHeader';
+import { DialogShell } from '../components/ui/Dialog';
 import { useBusiness } from '../context/BusinessContext';
 import { useAuth } from '../context/AuthContext';
 import {
@@ -38,6 +42,7 @@ import {
     updateStock,
 } from '../services/api/products';
 import { appAlert } from '../components/AppDialog';
+import { stockLevel, needsRestock } from '../utils/stock';
 
 // ── Tabs ─────────────────────────────────────────────────────
 const TABS = [
@@ -88,15 +93,18 @@ const Inventory = () => {
     const fmt = (n) => `${currency} ${(n || 0).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}`;
 
     // ── Fetch data ─────────────────────────────────────────────
+    const [loadError, setLoadError] = useState(null);
     const fetchProducts = useCallback(async () => {
+        setLoadError(null);
         try {
             const res = await getProducts();
             setAllProducts(res.data || []);
             // Derive low stock from products
-            const low = (res.data || []).filter(p => p.trackStock !== false && (p.stockQuantity ?? 0) <= (p.lowStockAlert || 10));
+            const low = (res.data || []).filter(needsRestock);
             setLowStockProducts(low);
         } catch (err) {
             console.error('Error fetching products:', err);
+            setLoadError(err.response?.data?.message || (!navigator.onLine ? 'You seem to be offline.' : 'The server didn\'t answer.'));
         }
     }, []);
 
@@ -254,28 +262,132 @@ const Inventory = () => {
     // ── Movement type label & color ────────────────────────────
     const movementLabel = (type) => {
         const map = {
-            supply_in: { label: 'Supply In', color: 'text-emerald-600 dark:text-d-green bg-emerald-50 dark:bg-emerald-500/10' },
-            supply_update_reverse: { label: 'Supply Reversed', color: 'text-orange-600 dark:text-orange-400 bg-orange-50 dark:bg-orange-500/10' },
-            supply_update_add: { label: 'Supply Added', color: 'text-emerald-600 dark:text-d-green bg-emerald-50 dark:bg-emerald-500/10' },
-            supply_delete: { label: 'Supply Deleted', color: 'text-red-600 dark:text-d-red bg-red-50 dark:bg-red-500/10' },
-            supply_return: { label: 'Supply Return', color: 'text-orange-600 dark:text-orange-400 bg-orange-50 dark:bg-orange-500/10' },
-            bill_sold: { label: 'Sold', color: 'text-blue-600 dark:text-d-blue bg-blue-50 dark:bg-blue-500/10' },
-            bill_return: { label: 'Customer Return', color: 'text-purple-600 dark:text-purple-400 bg-purple-50 dark:bg-purple-500/10' },
-            bill_cancel: { label: 'Bill Cancelled', color: 'text-slate-600 dark:text-slate-300 bg-slate-200 dark:bg-slate-500/15' },
-            manual_adjustment: { label: 'Manual Adjust', color: 'text-slate-600 dark:text-d-muted bg-slate-100 dark:bg-white/5' },
+            supply_in: { label: 'Supply In', color: 'text-success bg-success-chip' },
+            supply_update_reverse: { label: 'Supply Reversed', color: 'text-warning-chip-foreground bg-warning-chip' },
+            supply_update_add: { label: 'Supply Added', color: 'text-success bg-success-chip' },
+            supply_delete: { label: 'Supply Deleted', color: 'text-destructive bg-destructive-chip' },
+            supply_return: { label: 'Supply Return', color: 'text-warning-chip-foreground bg-warning-chip' },
+            bill_sold: { label: 'Sold', color: 'text-info bg-info-chip' },
+            bill_return: { label: 'Customer Return', color: 'text-primary bg-accent' },
+            bill_cancel: { label: 'Bill Cancelled', color: 'text-muted-foreground bg-muted' },
+            manual_adjustment: { label: 'Manual Adjust', color: 'text-muted-foreground bg-muted' },
         };
-        return map[type] || { label: type, color: 'text-slate-600 dark:text-d-muted bg-slate-100 dark:bg-white/5' };
+        return map[type] || { label: type, color: 'text-muted-foreground bg-muted' };
     };
+    const MOVEMENT_TONE = {
+        supply_in: 'success', supply_update_add: 'success', supply_update_reverse: 'warning', supply_return: 'warning',
+        supply_delete: 'destructive', bill_sold: 'info', bill_return: 'accent', bill_cancel: 'neutral', manual_adjustment: 'neutral',
+    };
+
+    const movementColumns = [
+        {
+            id: 'date',
+            header: 'Date',
+            accessorFn: (m) => new Date(m.createdAt).getTime() || 0,
+            cell: ({ row: { original: m } }) => (
+                <span className="whitespace-nowrap">
+                    {new Date(m.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                    <span className="text-muted-foreground ml-1 text-body-sm">{new Date(m.createdAt).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}</span>
+                </span>
+            ),
+        },
+        { id: 'product', header: 'Product', accessorFn: (m) => m.productName || '', cell: ({ getValue }) => <span className="font-medium">{getValue()}</span> },
+        {
+            id: 'type',
+            header: 'Type',
+            accessorFn: (m) => movementLabel(m.type).label,
+            cell: ({ row: { original: m } }) => <StatusChip size="sm" shape="tag" tone={MOVEMENT_TONE[m.type] || 'neutral'} label={movementLabel(m.type).label} />,
+        },
+        {
+            id: 'qty',
+            header: 'Qty',
+            accessorFn: (m) => m.quantity || 0,
+            meta: { align: 'right' },
+            cell: ({ getValue }) => {
+                const q = getValue();
+                return (
+                    <span className={cn('inline-flex items-center justify-end gap-1 font-medium', q > 0 ? 'text-success' : 'text-destructive')}>
+                        {q > 0 ? <FiArrowUp size={12} aria-hidden="true" /> : <FiArrowDown size={12} aria-hidden="true" />}
+                        {q > 0 ? '+' : ''}
+                        {q}
+                    </span>
+                );
+            },
+        },
+        { id: 'before', header: 'Before', accessorFn: (m) => m.previousStock ?? 0, meta: { align: 'right' }, cell: ({ getValue }) => <span className="text-muted-foreground">{getValue()}</span> },
+        { id: 'after', header: 'After', accessorFn: (m) => m.newStock ?? 0, meta: { align: 'right' }, cell: ({ getValue }) => <span className="font-medium">{getValue()}</span> },
+        { id: 'ref', header: 'Reference', accessorFn: (m) => m.referenceNumber || '', meta: { mono: true }, cell: ({ getValue }) => getValue() || <Dash /> },
+        {
+            id: 'reason',
+            header: 'Reason / By',
+            enableSorting: false,
+            meta: { cellClassName: 'max-w-[280px] text-body-sm' },
+            cell: ({ row: { original: m } }) => (
+                <>
+                    {m.type === 'manual_adjustment' && m.adjustmentReason ? (
+                        <>
+                            <div className="font-medium">{adjustReasonLabel(m.adjustmentReason)}</div>
+                            {m.note && <div className="text-muted-foreground break-words">{m.note}</div>}
+                        </>
+                    ) : m.reason ? (
+                        <div className="text-muted-foreground break-words">{m.reason}</div>
+                    ) : null}
+                    {m.performedBy && <div className="text-muted-foreground">by {m.performedBy}</div>}
+                    {!m.reason && !m.adjustmentReason && !m.performedBy && <Dash />}
+                </>
+            ),
+        },
+    ];
+
+    const productInfoColumns = [
+        {
+            id: 'name',
+            header: 'Product',
+            accessorFn: (p) => p.name || '',
+            cell: ({ row: { original: p } }) => (
+                <div>
+                    <p className="font-medium">{p.name}</p>
+                    {p.sku && <p className="font-mono text-mono-xs text-muted-foreground">{p.sku}</p>}
+                </div>
+            ),
+        },
+        { id: 'category', header: 'Category', accessorFn: (p) => p.category || '', cell: ({ getValue }) => (getValue() ? <span className="text-muted-foreground">{getValue()}</span> : <Dash />) },
+    ];
+    const lowStockColumns = [
+        ...productInfoColumns,
+        {
+            id: 'stock',
+            header: 'Current stock',
+            accessorFn: (p) => p.stockQuantity ?? 0,
+            meta: { align: 'right' },
+            cell: ({ getValue }) => (
+                <span className="inline-flex items-center gap-2 justify-end">
+                    <span className={cn('font-semibold', getValue() === 0 ? 'text-destructive' : 'text-warning-chip-foreground')}>{getValue()}</span>
+                    {getValue() === 0 && <StatusChip size="xs" shape="tag" tone="destructive" label="Out" />}
+                </span>
+            ),
+        },
+        { id: 'alert', header: 'Alert level', accessorFn: (p) => p.lowStockAlert || 10, meta: { align: 'right' }, cell: ({ getValue }) => <span className="text-muted-foreground">{getValue()}</span> },
+        { id: 'cost', header: 'Cost price', accessorFn: (p) => Number(p.costPrice) || 0, meta: { align: 'right' }, cell: ({ getValue }) => fmt(getValue()) },
+        { id: 'sell', header: 'Sell price', accessorFn: (p) => Number(p.sellingPrice) || 0, meta: { align: 'right' }, cell: ({ getValue }) => fmt(getValue()) },
+    ];
+    const deadStockColumns = [
+        ...productInfoColumns,
+        { id: 'stock', header: 'Stock', accessorFn: (p) => p.stockQuantity ?? 0, meta: { align: 'right' }, cell: ({ getValue }) => <span className="font-medium">{getValue()}</span> },
+        {
+            id: 'costValue',
+            header: 'Cost value',
+            accessorFn: (p) => (p.costPrice || 0) * (p.stockQuantity || 0),
+            meta: { align: 'right' },
+            cell: ({ getValue }) => <span className="text-destructive">{fmt(getValue())}</span>,
+        },
+        { id: 'retail', header: 'Retail value', accessorFn: (p) => (p.sellingPrice || 0) * (p.stockQuantity || 0), meta: { align: 'right' }, cell: ({ getValue }) => fmt(getValue()) },
+    ];
 
     // ── Loading state ──────────────────────────────────────────
     if (loading) {
         return (
-            <div className="flex items-center justify-center h-full bg-slate-50 dark:bg-d-bg">
-                <div className="flex flex-col items-center gap-4">
-                    <div className="w-12 h-12 border-4 border-amber-500 dark:border-d-accent border-t-transparent rounded-full animate-spin" />
-                    <p className="text-slate-500 dark:text-d-muted">Loading inventory...</p>
-                </div>
-            </div>
+            <PageSkeleton cards={4} columns={6} />
         );
     }
 
@@ -284,51 +396,51 @@ const Inventory = () => {
     // ══════════════════════════════════════════════════════════
     if (showPrintView) {
         return (
-            <div className="fixed inset-0 z-50 bg-white overflow-auto print-static print:bg-white print:z-auto">
+            <div className="fixed inset-0 z-50 bg-card overflow-auto print-static print:bg-card print:z-auto">
                 <div className="max-w-[900px] mx-auto p-8">
                     {/* Print header */}
                     <div className="flex items-center justify-between mb-6 no-print">
-                        <h2 className="text-xl font-bold text-slate-800">Inventory Stock Sheet</h2>
-                        <button onClick={() => setShowPrintView(false)} className="p-2 hover:bg-slate-100 rounded-lg">
+                        <h2 className="text-xl font-bold text-foreground">Inventory Stock Sheet</h2>
+                        <button onClick={() => setShowPrintView(false)} className="p-2 hover:bg-[var(--hover-overlay)] rounded-lg">
                             <FiX size={20} />
                         </button>
                     </div>
 
                     <div className="text-center mb-6">
-                        <h1 className="text-2xl font-bold text-slate-900">{business?.name || 'Business'}</h1>
-                        <p className="text-slate-500 text-sm mt-1">
+                        <h1 className="text-2xl font-bold text-foreground">{business?.name || 'Business'}</h1>
+                        <p className="text-muted-foreground text-sm mt-1">
                             Inventory Stock Sheet — {new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}
                         </p>
                     </div>
 
                     {/* Summary */}
-                    <div className="grid grid-cols-3 gap-4 mb-6 border border-slate-200 rounded-lg p-4">
+                    <div className="grid grid-cols-3 gap-4 mb-6 border border-hairline rounded-lg p-4">
                         <div className="text-center">
-                            <p className="text-xs text-slate-500 uppercase">Total Products</p>
-                            <p className="text-lg font-bold text-slate-800">{grandTotal.products}</p>
+                            <p className="text-xs text-muted-foreground uppercase">Total Products</p>
+                            <p className="text-lg font-bold text-foreground">{grandTotal.products}</p>
                         </div>
                         <div className="text-center">
-                            <p className="text-xs text-slate-500 uppercase">Total Items in Stock</p>
-                            <p className="text-lg font-bold text-slate-800">{grandTotal.qty.toLocaleString()}</p>
+                            <p className="text-xs text-muted-foreground uppercase">Total Items in Stock</p>
+                            <p className="text-lg font-bold text-foreground">{grandTotal.qty.toLocaleString()}</p>
                         </div>
                         <div className="text-center">
-                            <p className="text-xs text-slate-500 uppercase">Total Stock Value (Cost)</p>
-                            <p className="text-lg font-bold text-slate-800">{fmt(grandTotal.cost)}</p>
+                            <p className="text-xs text-muted-foreground uppercase">Total Stock Value (Cost)</p>
+                            <p className="text-lg font-bold text-foreground">{fmt(grandTotal.cost)}</p>
                         </div>
                     </div>
 
                     {/* Category tables */}
                     {groupedProducts.map((cat) => (
                         <div key={cat.category} className="mb-6 break-inside-avoid">
-                            <div className="flex items-center justify-between bg-slate-100 px-4 py-2 rounded-t-lg">
-                                <span className="font-semibold text-slate-800">{cat.category}</span>
-                                <span className="text-sm text-slate-500">
+                            <div className="flex items-center justify-between bg-muted px-4 py-2 rounded-t-lg">
+                                <span className="font-semibold text-foreground">{cat.category}</span>
+                                <span className="text-sm text-muted-foreground">
                                     {cat.products.length} products | {cat.totalQty} items
                                 </span>
                             </div>
-                            <table className="w-full text-sm border border-slate-200 border-t-0">
+                            <table className="w-full text-sm border border-hairline border-t-0">
                                 <thead>
-                                    <tr className="bg-slate-50 text-slate-600">
+                                    <tr className="bg-muted/40 text-muted-foreground">
                                         <th className="text-left py-2 px-3 font-medium">Product</th>
                                         <th className="text-right py-2 px-3 font-medium">Quantity</th>
                                         <th className="text-right py-2 px-3 font-medium">Cost Price</th>
@@ -341,24 +453,24 @@ const Inventory = () => {
                                         const stock = p.stockQuantity ?? 0;
                                         const margin = p.sellingPrice > 0 ? ((p.sellingPrice - (p.costPrice || 0)) / p.sellingPrice * 100) : 0;
                                         return (
-                                            <tr key={p._id} className="border-t border-slate-100">
-                                                <td className="py-2 px-3 text-slate-800">{p.name}</td>
-                                                <td className={`py-2 px-3 text-right font-medium ${stock === 0 ? 'text-red-600' : 'text-slate-800'}`}>
+                                            <tr key={p._id} className="border-t border-hairline">
+                                                <td className="py-2 px-3 text-foreground">{p.name}</td>
+                                                <td className={`py-2 px-3 text-right font-medium ${stock === 0 ? 'text-destructive' : 'text-foreground'}`}>
                                                     {stock}
                                                 </td>
-                                                <td className="py-2 px-3 text-right text-slate-600">{fmt(p.costPrice)}</td>
-                                                <td className="py-2 px-3 text-right text-slate-600">{fmt(p.sellingPrice)}</td>
-                                                <td className="py-2 px-3 text-right text-slate-600">{margin.toFixed(1)}%</td>
+                                                <td className="py-2 px-3 text-right text-muted-foreground">{fmt(p.costPrice)}</td>
+                                                <td className="py-2 px-3 text-right text-muted-foreground">{fmt(p.sellingPrice)}</td>
+                                                <td className="py-2 px-3 text-right text-muted-foreground">{margin.toFixed(1)}%</td>
                                             </tr>
                                         );
                                     })}
                                     {/* Category Total */}
-                                    <tr className="border-t-2 border-slate-300 bg-slate-50 font-semibold">
-                                        <td className="py-2 px-3 text-slate-800">{cat.category} Total</td>
-                                        <td className="py-2 px-3 text-right text-slate-800">{cat.totalQty}</td>
-                                        <td className="py-2 px-3 text-right text-slate-800">{fmt(cat.totalCost)}</td>
-                                        <td className="py-2 px-3 text-right text-slate-800">{fmt(cat.totalRetail)}</td>
-                                        <td className="py-2 px-3 text-right text-slate-600">
+                                    <tr className="border-t-2 border-border bg-muted/40 font-semibold">
+                                        <td className="py-2 px-3 text-foreground">{cat.category} Total</td>
+                                        <td className="py-2 px-3 text-right text-foreground">{cat.totalQty}</td>
+                                        <td className="py-2 px-3 text-right text-foreground">{fmt(cat.totalCost)}</td>
+                                        <td className="py-2 px-3 text-right text-foreground">{fmt(cat.totalRetail)}</td>
+                                        <td className="py-2 px-3 text-right text-muted-foreground">
                                             {cat.totalRetail > 0 ? ((cat.totalRetail - cat.totalCost) / cat.totalRetail * 100).toFixed(1) : 0}%
                                         </td>
                                     </tr>
@@ -368,26 +480,26 @@ const Inventory = () => {
                     ))}
 
                     {/* Grand total */}
-                    <div className="border-t-2 border-slate-800 mt-4 pt-3">
-                        <div className="flex justify-between text-base font-bold text-slate-800">
+                    <div className="border-t-2 border-border mt-4 pt-3">
+                        <div className="flex justify-between text-base font-bold text-foreground">
                             <span>GRAND TOTAL</span>
                             <span>{grandTotal.qty.toLocaleString()} items</span>
                         </div>
                         <div className="flex justify-between text-sm mt-1">
-                            <span className="text-slate-600">Total Stock Value (at Cost):</span>
-                            <span className="font-bold text-slate-800">{fmt(grandTotal.cost)}</span>
+                            <span className="text-muted-foreground">Total Stock Value (at Cost):</span>
+                            <span className="font-bold text-foreground">{fmt(grandTotal.cost)}</span>
                         </div>
                         <div className="flex justify-between text-sm mt-1">
-                            <span className="text-slate-600">Total Retail Value:</span>
-                            <span className="font-bold text-slate-800">{fmt(grandTotal.retail)}</span>
+                            <span className="text-muted-foreground">Total Retail Value:</span>
+                            <span className="font-bold text-foreground">{fmt(grandTotal.retail)}</span>
                         </div>
                         <div className="flex justify-between text-sm mt-1">
-                            <span className="text-slate-600">Potential Profit:</span>
-                            <span className="font-bold text-emerald-700">{fmt(grandTotal.retail - grandTotal.cost)}</span>
+                            <span className="text-muted-foreground">Potential Profit:</span>
+                            <span className="font-bold text-success">{fmt(grandTotal.retail - grandTotal.cost)}</span>
                         </div>
                     </div>
 
-                    <p className="text-xs text-slate-400 text-center mt-8">
+                    <p className="text-xs text-muted-foreground text-center mt-8">
                         Generated on {new Date().toLocaleString()} | {business?.name}
                     </p>
                 </div>
@@ -399,58 +511,45 @@ const Inventory = () => {
     // MAIN RENDER
     // ══════════════════════════════════════════════════════════
     return (
-        <div className="h-full bg-slate-50 dark:bg-d-bg overflow-auto">
+        <div className="h-full overflow-auto">
             <div className="p-6 animate-fade-slide-up">
                 {/* Header */}
-                <div className="flex items-center justify-between mb-6">
-                    <div>
-                        <h1 className="text-2xl font-bold text-slate-800 dark:text-d-heading">Inventory</h1>
-                        <p className="text-slate-500 dark:text-d-muted">Stock management & valuation</p>
-                    </div>
-                    <div className="flex items-center gap-3">
-                        <button
-                            onClick={() => { fetchProducts(); fetchOverview(); }}
-                            className="flex items-center gap-2 px-4 py-2.5 text-slate-500 dark:text-d-muted hover:text-slate-800 dark:hover:text-d-text hover:bg-slate-100 dark:hover:bg-d-glass rounded-xl transition-all"
-                        >
-                            <FiRefreshCw size={18} />
-                            Refresh
-                        </button>
-                        <button
-                            onClick={handlePrintSheet}
-                            className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-amber-400 to-amber-500 dark:from-d-accent dark:to-d-accent-s text-white dark:text-d-card rounded-xl font-semibold hover:shadow-md dark:hover:shadow-[0_4px_20px_rgba(255,210,100,0.4)] transition-all"
-                        >
-                            <FiDownload size={18} />
-                            Download Sheet
-                        </button>
-                    </div>
-                </div>
+                <PageHeader
+                    title="Inventory"
+                    subtitle="Stock levels, movements and what your stock is worth."
+                    actions={
+                        <>
+                            <Button variant="ghost" onClick={() => { fetchProducts(); fetchOverview(); }}>
+                                <FiRefreshCw aria-hidden="true" />
+                                Refresh
+                            </Button>
+                            <Button onClick={handlePrintSheet}>
+                                <FiDownload aria-hidden="true" />
+                                Download sheet
+                            </Button>
+                        </>
+                    }
+                />
+
+                {loadError ? (
+                    <StateCard kind="error" className="mb-5" title="Couldn't load your products" onRetry={() => { fetchProducts(); fetchOverview(); }}>
+                        {loadError} Stock figures below may be missing.
+                    </StateCard>
+                ) : null}
 
                 {/* Tabs */}
-                <div className="flex items-center gap-1 bg-white dark:bg-d-card rounded-xl p-1 border border-slate-200 dark:border-d-border mb-6 overflow-x-auto">
-                    {TABS.map((tab) => {
-                        const Icon = tab.icon;
-                        const isActive = activeTab === tab.key;
-                        return (
-                            <button
-                                key={tab.key}
-                                onClick={() => setActiveTab(tab.key)}
-                                className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium whitespace-nowrap transition-all ${
-                                    isActive
-                                        ? 'bg-amber-500 dark:bg-d-accent text-white dark:text-d-card'
-                                        : 'text-slate-500 dark:text-d-muted hover:text-slate-800 dark:hover:text-d-text hover:bg-slate-50 dark:hover:bg-d-glass'
-                                }`}
-                            >
-                                <Icon size={16} />
-                                {tab.label}
-                                {tab.key === 'lowstock' && lowStockProducts.length > 0 && (
-                                    <span className={`ml-1 px-1.5 py-0.5 rounded-full text-xs font-bold ${isActive ? 'bg-white/20' : 'bg-red-100 dark:bg-red-500/20 text-red-600 dark:text-d-red'}`}>
-                                        {lowStockProducts.length}
-                                    </span>
-                                )}
-                            </button>
-                        );
-                    })}
-                </div>
+                <Tabs
+                    className="mb-6"
+                    label="Inventory sections"
+                    value={activeTab}
+                    onChange={setActiveTab}
+                    items={TABS.map((t) => ({
+                        value: t.key,
+                        label: t.label,
+                        icon: t.icon,
+                        count: t.key === 'lowstock' && lowStockProducts.length > 0 ? lowStockProducts.length : undefined,
+                    }))}
+                />
 
                 {/* ── OVERVIEW TAB ────────────────────────────────────── */}
                 {activeTab === 'overview' && valuation && (
@@ -458,63 +557,63 @@ const Inventory = () => {
                         {/* Summary Cards */}
                         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
                             {[
-                                { label: 'Total Products', value: valuation.summary?.totalProducts || 0, icon: FiPackage, color: 'text-blue-600 dark:text-d-blue', bg: 'bg-blue-50 dark:bg-blue-500/10' },
-                                { label: 'Total Items in Stock', value: (valuation.summary?.totalItems || 0).toLocaleString(), icon: FiArchive, color: 'text-emerald-600 dark:text-d-green', bg: 'bg-emerald-50 dark:bg-emerald-500/10' },
-                                { label: 'Total Cost Value', value: fmt(valuation.summary?.totalCostValue), icon: FiDollarSign, color: 'text-amber-600 dark:text-amber-400', bg: 'bg-amber-50 dark:bg-amber-500/10' },
-                                { label: 'Total Retail Value', value: fmt(valuation.summary?.totalRetailValue), icon: FiTrendingUp, color: 'text-purple-600 dark:text-purple-400', bg: 'bg-purple-50 dark:bg-purple-500/10' },
+                                { label: 'Total Products', value: valuation.summary?.totalProducts || 0, icon: FiPackage, color: 'text-info', bg: 'bg-info-chip' },
+                                { label: 'Total Items in Stock', value: (valuation.summary?.totalItems || 0).toLocaleString(), icon: FiArchive, color: 'text-success', bg: 'bg-success-chip' },
+                                { label: 'Total Cost Value', value: fmt(valuation.summary?.totalCostValue), icon: FiDollarSign, color: 'text-primary', bg: 'bg-accent' },
+                                { label: 'Total Retail Value', value: fmt(valuation.summary?.totalRetailValue), icon: FiTrendingUp, color: 'text-primary', bg: 'bg-accent' },
                             ].map((card, i) => (
-                                <div key={i} className="bg-white dark:bg-d-card rounded-2xl border border-slate-200 dark:border-d-border p-5">
+                                <div key={i} className="bg-card rounded-2xl border border-hairline p-5">
                                     <div className="flex items-center gap-3 mb-3">
                                         <div className={`w-10 h-10 ${card.bg} rounded-xl flex items-center justify-center`}>
                                             <card.icon size={20} className={card.color} />
                                         </div>
                                     </div>
-                                    <p className="text-sm text-slate-500 dark:text-d-muted">{card.label}</p>
-                                    <p className="text-2xl font-bold text-slate-800 dark:text-d-heading mt-1">{card.value}</p>
+                                    <p className="text-sm text-muted-foreground">{card.label}</p>
+                                    <p className="text-2xl font-bold text-foreground mt-1">{card.value}</p>
                                 </div>
                             ))}
                         </div>
 
                         {/* Potential Profit & Margin */}
                         <div className="grid grid-cols-2 gap-4">
-                            <div className="bg-white dark:bg-d-card rounded-2xl border border-slate-200 dark:border-d-border p-5">
-                                <p className="text-sm text-slate-500 dark:text-d-muted mb-1">Potential Profit (if all sold)</p>
-                                <p className="text-2xl font-bold text-emerald-600 dark:text-d-green">{fmt(valuation.summary?.totalPotentialProfit)}</p>
-                                <p className="text-xs text-slate-400 dark:text-d-faint mt-1">Retail Value - Cost Value</p>
+                            <div className="bg-card rounded-2xl border border-hairline p-5">
+                                <p className="text-sm text-muted-foreground mb-1">Potential Profit (if all sold)</p>
+                                <p className="text-2xl font-bold text-success">{fmt(valuation.summary?.totalPotentialProfit)}</p>
+                                <p className="text-xs text-muted-foreground mt-1">Retail Value - Cost Value</p>
                             </div>
-                            <div className="bg-white dark:bg-d-card rounded-2xl border border-slate-200 dark:border-d-border p-5">
-                                <p className="text-sm text-slate-500 dark:text-d-muted mb-1">Average Margin</p>
-                                <p className="text-2xl font-bold text-amber-600 dark:text-amber-400">{(valuation.summary?.avgMargin || 0).toFixed(1)}%</p>
-                                <p className="text-xs text-slate-400 dark:text-d-faint mt-1">Across all products</p>
+                            <div className="bg-card rounded-2xl border border-hairline p-5">
+                                <p className="text-sm text-muted-foreground mb-1">Average Margin</p>
+                                <p className="text-2xl font-bold text-primary">{(valuation.summary?.avgMargin || 0).toFixed(1)}%</p>
+                                <p className="text-xs text-muted-foreground mt-1">Across all products</p>
                             </div>
                         </div>
 
                         {/* Category Breakdown */}
                         {valuation.byCategory && valuation.byCategory.length > 0 && (
-                            <div className="bg-white dark:bg-d-card rounded-2xl border border-slate-200 dark:border-d-border overflow-hidden">
-                                <div className="px-6 py-4 border-b border-slate-200 dark:border-d-border">
-                                    <h3 className="font-semibold text-slate-800 dark:text-d-heading">Valuation by Category</h3>
+                            <div className="bg-card rounded-2xl border border-hairline overflow-hidden">
+                                <div className="px-6 py-4 border-b border-hairline">
+                                    <h3 className="font-semibold text-foreground">Valuation by Category</h3>
                                 </div>
                                 <table className="w-full">
-                                    <thead className="bg-slate-50 dark:bg-d-glass">
-                                        <tr>
-                                            <th className="text-left py-3 px-6 text-sm font-medium text-slate-500 dark:text-d-muted">Category</th>
-                                            <th className="text-right py-3 px-6 text-sm font-medium text-slate-500 dark:text-d-muted">Products</th>
-                                            <th className="text-right py-3 px-6 text-sm font-medium text-slate-500 dark:text-d-muted">Items</th>
-                                            <th className="text-right py-3 px-6 text-sm font-medium text-slate-500 dark:text-d-muted">Cost Value</th>
-                                            <th className="text-right py-3 px-6 text-sm font-medium text-slate-500 dark:text-d-muted">Retail Value</th>
-                                            <th className="text-right py-3 px-6 text-sm font-medium text-slate-500 dark:text-d-muted">Profit</th>
+                                    <thead>
+                                                    <tr className="bg-muted/30 shadow-[inset_0_-1px_0_var(--border)]">
+                                            <th className="h-[var(--head-h)] px-4 text-left font-mono text-th uppercase font-medium text-muted-foreground whitespace-nowrap">Category</th>
+                                            <th className="h-[var(--head-h)] px-4 text-right font-mono text-th uppercase font-medium text-muted-foreground whitespace-nowrap">Products</th>
+                                            <th className="h-[var(--head-h)] px-4 text-right font-mono text-th uppercase font-medium text-muted-foreground whitespace-nowrap">Items</th>
+                                            <th className="h-[var(--head-h)] px-4 text-right font-mono text-th uppercase font-medium text-muted-foreground whitespace-nowrap">Cost Value</th>
+                                            <th className="h-[var(--head-h)] px-4 text-right font-mono text-th uppercase font-medium text-muted-foreground whitespace-nowrap">Retail Value</th>
+                                            <th className="h-[var(--head-h)] px-4 text-right font-mono text-th uppercase font-medium text-muted-foreground whitespace-nowrap">Profit</th>
                                         </tr>
                                     </thead>
                                     <tbody>
                                         {valuation.byCategory.map((cat, i) => (
-                                            <tr key={i} className="border-t border-slate-100 dark:border-d-border hover:bg-slate-50 dark:hover:bg-white/5 transition-colors">
-                                                <td className="py-3 px-6 font-medium text-slate-800 dark:text-d-text">{cat._id || cat.category || 'Uncategorized'}</td>
-                                                <td className="py-3 px-6 text-right text-slate-600 dark:text-d-muted">{cat.productCount}</td>
-                                                <td className="py-3 px-6 text-right text-slate-600 dark:text-d-muted">{(cat.itemCount || 0).toLocaleString()}</td>
-                                                <td className="py-3 px-6 text-right text-slate-600 dark:text-d-muted">{fmt(cat.costValue)}</td>
-                                                <td className="py-3 px-6 text-right font-medium text-slate-800 dark:text-d-text">{fmt(cat.retailValue)}</td>
-                                                <td className="py-3 px-6 text-right font-medium text-emerald-600 dark:text-d-green">{fmt(cat.potentialProfit)}</td>
+                                            <tr key={i} className="h-[var(--row-h)] shadow-[inset_0_1px_0_var(--hairline)] hover:bg-[var(--hover-overlay)]">
+                                                <td className="py-1.5 px-4 font-medium text-foreground">{cat._id || cat.category || 'Uncategorized'}</td>
+                                                <td className="py-1.5 px-4 text-right text-muted-foreground">{cat.productCount}</td>
+                                                <td className="py-1.5 px-4 text-right text-muted-foreground">{(cat.itemCount || 0).toLocaleString()}</td>
+                                                <td className="py-1.5 px-4 text-right text-muted-foreground">{fmt(cat.costValue)}</td>
+                                                <td className="py-1.5 px-4 text-right font-medium text-foreground">{fmt(cat.retailValue)}</td>
+                                                <td className="py-1.5 px-4 text-right font-medium text-success">{fmt(cat.potentialProfit)}</td>
                                             </tr>
                                         ))}
                                     </tbody>
@@ -524,23 +623,23 @@ const Inventory = () => {
 
                         {/* Low stock preview */}
                         {lowStockProducts.length > 0 && (
-                            <div className="bg-white dark:bg-d-card rounded-2xl border border-red-200 dark:border-red-500/20 overflow-hidden">
-                                <div className="px-6 py-4 border-b border-red-200 dark:border-red-500/20 bg-red-50 dark:bg-red-500/5 flex items-center gap-2">
-                                    <FiAlertTriangle className="text-red-500 dark:text-d-red" size={18} />
-                                    <h3 className="font-semibold text-red-700 dark:text-d-red">Low Stock Alert — {lowStockProducts.length} products</h3>
+                            <div className="bg-card rounded-2xl border border-destructive/30 overflow-hidden">
+                                <div className="px-6 py-4 border-b border-destructive/30 bg-destructive-chip flex items-center gap-2">
+                                    <FiAlertTriangle className="text-destructive" size={18} />
+                                    <h3 className="font-semibold text-destructive">Low Stock Alert — {lowStockProducts.length} products</h3>
                                 </div>
-                                <div className="divide-y divide-slate-100 dark:divide-d-border">
+                                <div className="divide-y divide-[var(--hairline)]">
                                     {lowStockProducts.slice(0, 5).map((p) => (
                                         <div key={p._id} className="px-6 py-3 flex items-center justify-between">
                                             <div>
-                                                <p className="font-medium text-slate-800 dark:text-d-text">{p.name}</p>
-                                                <p className="text-xs text-slate-400 dark:text-d-faint">{p.category}</p>
+                                                <p className="font-medium text-foreground">{p.name}</p>
+                                                <p className="text-xs text-muted-foreground">{p.category}</p>
                                             </div>
                                             <div className="text-right">
-                                                <p className={`font-bold ${(p.stockQuantity || 0) === 0 ? 'text-red-600 dark:text-d-red' : 'text-orange-500'}`}>
+                                                <p className={`font-bold ${(p.stockQuantity || 0) === 0 ? 'text-destructive' : 'text-warning-chip-foreground'}`}>
                                                     {p.stockQuantity ?? 0} left
                                                 </p>
-                                                <p className="text-xs text-slate-400 dark:text-d-faint">Alert at {p.lowStockAlert || 10}</p>
+                                                <p className="text-xs text-muted-foreground">Alert at {p.lowStockAlert || 10}</p>
                                             </div>
                                         </div>
                                     ))}
@@ -548,7 +647,7 @@ const Inventory = () => {
                                         <div className="px-6 py-3 text-center">
                                             <button
                                                 onClick={() => setActiveTab('lowstock')}
-                                                className="text-sm text-amber-600 dark:text-d-accent hover:underline"
+                                                className="text-sm text-primary hover:underline"
                                             >
                                                 View all {lowStockProducts.length} low stock items
                                             </button>
@@ -565,24 +664,24 @@ const Inventory = () => {
                     <div className="space-y-4">
                         {/* Search */}
                         <div className="relative max-w-md">
-                            <FiSearch className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 dark:text-d-faint" />
+                            <FiSearch className="absolute left-4 top-1/2 -translate-y-1/2 text-muted-foreground" />
                             <input
                                 type="text"
                                 value={searchQuery}
                                 onChange={(e) => setSearchQuery(e.target.value)}
                                 placeholder="Search products..."
-                                className="w-full pl-12 pr-4 py-3 bg-white dark:bg-d-card border border-slate-200 dark:border-d-border rounded-xl text-slate-800 dark:text-d-text placeholder-slate-400 dark:placeholder-d-faint focus:outline-none focus:border-amber-300 dark:focus:border-d-border-hover transition-colors"
+                                className="w-full pl-12 pr-4 py-3 bg-card border border-hairline rounded-xl text-foreground placeholder:text-placeholder focus:outline-none focus:border-primary/30 transition-colors"
                             />
                         </div>
 
                         {/* Grand total bar */}
-                        <div className="bg-white dark:bg-d-card rounded-2xl border border-slate-200 dark:border-d-border p-4 flex items-center justify-between">
-                            <span className="font-semibold text-slate-800 dark:text-d-heading">
+                        <div className="bg-card rounded-2xl border border-hairline p-4 flex items-center justify-between">
+                            <span className="font-semibold text-foreground">
                                 {grandTotal.products} Products | {grandTotal.qty.toLocaleString()} Items in Stock
                             </span>
                             <div className="text-sm">
-                                <span className="text-slate-500 dark:text-d-muted">Total Stock Value: </span>
-                                <strong className="text-slate-800 dark:text-d-text">{fmt(grandTotal.cost)}</strong>
+                                <span className="text-muted-foreground">Total Stock Value: </span>
+                                <strong className="text-foreground">{fmt(grandTotal.cost)}</strong>
                             </div>
                         </div>
 
@@ -590,66 +689,64 @@ const Inventory = () => {
                         {groupedProducts.length > 0 ? (
                             <div className="space-y-5">
                                 {groupedProducts.map((cat, catIdx) => {
-                                    const COLORS = ['border-l-amber-500', 'border-l-blue-500', 'border-l-emerald-500', 'border-l-purple-500', 'border-l-rose-500', 'border-l-cyan-500', 'border-l-orange-500', 'border-l-pink-500'];
+                                    const COLORS = ['border-l-chart-1', 'border-l-chart-2', 'border-l-chart-3', 'border-l-chart-4', 'border-l-chart-5', 'border-l-chart-6'];
                                     const accent = COLORS[catIdx % COLORS.length];
                                     return (
-                                        <div key={cat.category} className={`bg-white dark:bg-d-card rounded-2xl border border-slate-200 dark:border-d-border overflow-hidden border-l-4 ${accent}`}>
+                                        <div key={cat.category} className={`bg-card rounded-2xl border border-hairline overflow-hidden border-l-4 ${accent}`}>
                                             {/* Category header */}
-                                            <div className="px-6 py-4 border-b border-slate-200 dark:border-d-border flex items-center justify-between">
+                                            <div className="px-6 py-4 border-b border-hairline flex items-center justify-between">
                                                 <div className="flex items-center gap-3">
-                                                    <h3 className="text-lg font-bold text-slate-800 dark:text-d-heading">{cat.category}</h3>
-                                                    <span className="text-xs font-medium text-slate-400 dark:text-d-faint bg-slate-100 dark:bg-d-glass px-2.5 py-1 rounded-full">
+                                                    <h3 className="text-lg font-bold text-foreground">{cat.category}</h3>
+                                                    <span className="text-xs font-medium text-muted-foreground bg-muted px-2.5 py-1 rounded-full">
                                                         {cat.products.length} {cat.products.length === 1 ? 'product' : 'products'}
                                                     </span>
                                                 </div>
-                                                <div className="text-sm text-slate-500 dark:text-d-muted">
-                                                    {cat.totalQty} items | Stock Value: <strong className="text-slate-800 dark:text-d-text">{fmt(cat.totalCost)}</strong>
+                                                <div className="text-sm text-muted-foreground">
+                                                    {cat.totalQty} items | Stock Value: <strong className="text-foreground">{fmt(cat.totalCost)}</strong>
                                                 </div>
                                             </div>
 
                                             {/* Products table */}
-                                            <table className="w-full text-sm">
-                                                <thead className="bg-slate-50/80 dark:bg-d-glass">
+                                            <div className="overflow-auto max-h-[max(320px,calc(100vh-300px))] print:max-h-none print:overflow-visible">
+<table className="w-full text-sm">
+                                                <thead>
                                                     <tr>
-                                                        <th className="text-left py-2.5 px-6 font-medium text-slate-500 dark:text-d-muted">Product</th>
-                                                        <th className="text-right py-2.5 px-6 font-medium text-slate-500 dark:text-d-muted">Quantity</th>
-                                                        <th className="text-right py-2.5 px-6 font-medium text-slate-500 dark:text-d-muted">Cost Price</th>
-                                                        <th className="text-right py-2.5 px-6 font-medium text-slate-500 dark:text-d-muted">Sell Price</th>
-                                                        <th className="text-right py-2.5 px-6 font-medium text-slate-500 dark:text-d-muted">Margin</th>
-                                                        {canAdjustStock && <th className="text-center py-2.5 px-6 font-medium text-slate-500 dark:text-d-muted no-print w-16">Adjust</th>}
+                                                        <th className="sticky top-0 z-[1] bg-[color-mix(in_oklab,var(--muted)_45%,var(--card))] shadow-[inset_0_-1px_0_var(--border)] h-[var(--head-h)] px-4 text-left font-mono text-th uppercase font-medium text-muted-foreground whitespace-nowrap">Product</th>
+                                                        <th className="sticky top-0 z-[1] bg-[color-mix(in_oklab,var(--muted)_45%,var(--card))] shadow-[inset_0_-1px_0_var(--border)] h-[var(--head-h)] px-4 text-right font-mono text-th uppercase font-medium text-muted-foreground whitespace-nowrap">Quantity</th>
+                                                        <th className="sticky top-0 z-[1] bg-[color-mix(in_oklab,var(--muted)_45%,var(--card))] shadow-[inset_0_-1px_0_var(--border)] h-[var(--head-h)] px-4 text-right font-mono text-th uppercase font-medium text-muted-foreground whitespace-nowrap">Cost Price</th>
+                                                        <th className="sticky top-0 z-[1] bg-[color-mix(in_oklab,var(--muted)_45%,var(--card))] shadow-[inset_0_-1px_0_var(--border)] h-[var(--head-h)] px-4 text-right font-mono text-th uppercase font-medium text-muted-foreground whitespace-nowrap">Sell Price</th>
+                                                        <th className="sticky top-0 z-[1] bg-[color-mix(in_oklab,var(--muted)_45%,var(--card))] shadow-[inset_0_-1px_0_var(--border)] h-[var(--head-h)] px-4 text-right font-mono text-th uppercase font-medium text-muted-foreground whitespace-nowrap">Margin</th>
+                                                        {canAdjustStock && <th className="sticky top-0 z-[1] bg-[color-mix(in_oklab,var(--muted)_45%,var(--card))] shadow-[inset_0_-1px_0_var(--border)] h-[var(--head-h)] px-4 text-center font-mono text-th uppercase font-medium text-muted-foreground whitespace-nowrap no-print w-16">Adjust</th>}
                                                     </tr>
                                                 </thead>
                                                 <tbody>
                                                     {cat.products.map((p) => {
                                                         const stock = p.stockQuantity ?? 0;
                                                         const margin = p.sellingPrice > 0 ? ((p.sellingPrice - (p.costPrice || 0)) / p.sellingPrice * 100) : 0;
-                                                        const isLow = stock <= (p.lowStockAlert || 10);
-                                                        const isOut = stock === 0;
+                                                        const level = stockLevel(p);
+                                                        const isLow = level === 'low';
+                                                        const isOut = level === 'out';
                                                         return (
-                                                            <tr key={p._id} className="border-t border-slate-100 dark:border-d-border hover:bg-slate-50 dark:hover:bg-white/5 transition-colors">
-                                                                <td className="py-3 px-6">
-                                                                    <p className="font-medium text-slate-800 dark:text-d-text">{p.name}</p>
-                                                                    {p.sku && <p className="text-xs text-slate-400 dark:text-d-faint font-mono">{p.sku}</p>}
+                                                            <tr key={p._id} className="h-[var(--row-h)] shadow-[inset_0_1px_0_var(--hairline)] hover:bg-[var(--hover-overlay)]">
+                                                                <td className="py-1.5 px-4">
+                                                                    <p className="font-medium text-foreground">{p.name}</p>
+                                                                    {p.sku && <p className="text-xs text-muted-foreground font-mono">{p.sku}</p>}
                                                                 </td>
-                                                                <td className="py-3 px-6 text-right">
-                                                                    <span className={`font-semibold ${isOut ? 'text-red-600 dark:text-d-red' : isLow ? 'text-orange-500' : 'text-slate-800 dark:text-d-text'}`}>
+                                                                <td className="py-1.5 px-4 text-right">
+                                                                    <span className={`font-semibold tabular-nums ${isOut ? 'text-destructive' : isLow ? 'text-warning-chip-foreground' : ''}`}>
                                                                         {stock}
                                                                     </span>
-                                                                    {isOut && <span className="ml-2 text-xs bg-red-100 dark:bg-red-500/20 text-red-600 dark:text-d-red px-1.5 py-0.5 rounded font-medium">OUT</span>}
-                                                                    {!isOut && isLow && <span className="ml-2 text-xs bg-orange-100 dark:bg-orange-500/20 text-orange-600 px-1.5 py-0.5 rounded font-medium">LOW</span>}
+                                                                    {isOut && <StatusChip className="ml-2" size="xs" shape="tag" tone="destructive" label="Out" />}
+                                                                    {!isOut && isLow && <StatusChip className="ml-2" size="xs" shape="tag" tone="warning" label="Low" />}
                                                                 </td>
-                                                                <td className="py-3 px-6 text-right text-slate-600 dark:text-d-muted">{fmt(p.costPrice)}</td>
-                                                                <td className="py-3 px-6 text-right text-slate-600 dark:text-d-muted">{fmt(p.sellingPrice)}</td>
-                                                                <td className="py-3 px-6 text-right text-slate-600 dark:text-d-muted">{margin.toFixed(1)}%</td>
+                                                                <td className="py-1.5 px-4 text-right text-muted-foreground">{fmt(p.costPrice)}</td>
+                                                                <td className="py-1.5 px-4 text-right text-muted-foreground">{fmt(p.sellingPrice)}</td>
+                                                                <td className="py-1.5 px-4 text-right text-muted-foreground">{margin.toFixed(1)}%</td>
                                                                 {canAdjustStock && (
-                                                                <td className="py-3 px-6 text-center no-print">
-                                                                    <button
-                                                                        onClick={() => openAdjust(p)}
-                                                                        className="p-1.5 text-slate-400 dark:text-d-faint hover:text-amber-500 dark:hover:text-d-accent hover:bg-amber-50 dark:hover:bg-amber-500/10 rounded-lg transition-colors"
-                                                                        title="Adjust stock"
-                                                                    >
-                                                                        <FiActivity size={16} />
-                                                                    </button>
+                                                                <td className="py-1.5 px-4 text-center no-print">
+                                                                    <IconButton label="Adjust stock" size="xs" onClick={() => openAdjust(p)}>
+                                                                        <FiActivity />
+                                                                    </IconButton>
                                                                 </td>
                                                                 )}
                                                             </tr>
@@ -658,45 +755,46 @@ const Inventory = () => {
                                                 </tbody>
                                                 {/* Category total footer */}
                                                 <tfoot>
-                                                    <tr className="border-t-2 border-slate-200 dark:border-d-faint bg-slate-50 dark:bg-white/[0.03]">
-                                                        <td className="py-3 px-6 font-semibold text-slate-700 dark:text-d-heading">{cat.category} Total</td>
-                                                        <td className="py-3 px-6 text-right font-semibold text-slate-700 dark:text-d-heading">{cat.totalQty}</td>
-                                                        <td className="py-3 px-6 text-right font-semibold text-slate-700 dark:text-d-heading">{fmt(cat.totalCost)}</td>
-                                                        <td className="py-3 px-6 text-right font-semibold text-slate-700 dark:text-d-heading">{fmt(cat.totalRetail)}</td>
-                                                        <td className="py-3 px-6 text-right font-semibold text-slate-700 dark:text-d-heading">
+                                                    <tr className="bg-muted/50 shadow-[inset_0_1px_0_var(--border)]">
+                                                        <td className="py-1.5 px-4 font-semibold text-foreground">{cat.category} Total</td>
+                                                        <td className="py-1.5 px-4 text-right font-semibold text-foreground">{cat.totalQty}</td>
+                                                        <td className="py-1.5 px-4 text-right font-semibold text-foreground">{fmt(cat.totalCost)}</td>
+                                                        <td className="py-1.5 px-4 text-right font-semibold text-foreground">{fmt(cat.totalRetail)}</td>
+                                                        <td className="py-1.5 px-4 text-right font-semibold text-foreground">
                                                             {cat.totalRetail > 0 ? ((cat.totalRetail - cat.totalCost) / cat.totalRetail * 100).toFixed(1) : 0}%
                                                         </td>
                                                         <td className="no-print"></td>
                                                     </tr>
                                                 </tfoot>
                                             </table>
+                                            </div>
                                         </div>
                                     );
                                 })}
 
                                 {/* Grand Total card */}
-                                <div className="bg-slate-800 dark:bg-d-elevated rounded-2xl border border-slate-700 dark:border-d-border p-5 flex items-center justify-between">
+                                <div className="bg-foreground rounded-2xl border border-border p-5 flex items-center justify-between">
                                     <div>
-                                        <p className="text-sm text-slate-400 dark:text-d-muted uppercase tracking-wider font-medium">Grand Total</p>
-                                        <p className="text-2xl font-bold text-white dark:text-d-heading mt-1">{fmt(grandTotal.cost)}</p>
-                                        <p className="text-xs text-slate-400 dark:text-d-faint mt-0.5">Total stock value at cost price</p>
+                                        <p className="text-sm text-muted-foreground uppercase tracking-wider font-medium">Grand Total</p>
+                                        <p className="text-2xl font-bold text-white mt-1">{fmt(grandTotal.cost)}</p>
+                                        <p className="text-xs text-muted-foreground mt-0.5">Total stock value at cost price</p>
                                     </div>
                                     <div className="flex items-center gap-8 text-right">
                                         <div>
-                                            <p className="text-xs text-slate-400 dark:text-d-muted uppercase">Products</p>
-                                            <p className="text-xl font-bold text-white dark:text-d-heading">{grandTotal.products}</p>
+                                            <p className="text-xs text-muted-foreground uppercase">Products</p>
+                                            <p className="text-xl font-bold text-white">{grandTotal.products}</p>
                                         </div>
                                         <div>
-                                            <p className="text-xs text-slate-400 dark:text-d-muted uppercase">Items</p>
-                                            <p className="text-xl font-bold text-white dark:text-d-heading">{grandTotal.qty.toLocaleString()}</p>
+                                            <p className="text-xs text-muted-foreground uppercase">Items</p>
+                                            <p className="text-xl font-bold text-white">{grandTotal.qty.toLocaleString()}</p>
                                         </div>
                                         <div>
-                                            <p className="text-xs text-slate-400 dark:text-d-muted uppercase">Retail Value</p>
-                                            <p className="text-xl font-bold text-white dark:text-d-heading">{fmt(grandTotal.retail)}</p>
+                                            <p className="text-xs text-muted-foreground uppercase">Retail Value</p>
+                                            <p className="text-xl font-bold text-white">{fmt(grandTotal.retail)}</p>
                                         </div>
                                         <div>
-                                            <p className="text-xs text-slate-400 dark:text-d-muted uppercase">Avg Margin</p>
-                                            <p className="text-xl font-bold text-emerald-400 dark:text-d-green">
+                                            <p className="text-xs text-muted-foreground uppercase">Avg Margin</p>
+                                            <p className="text-xl font-bold text-success">
                                                 {grandTotal.retail > 0 ? ((grandTotal.retail - grandTotal.cost) / grandTotal.retail * 100).toFixed(1) : 0}%
                                             </p>
                                         </div>
@@ -704,9 +802,9 @@ const Inventory = () => {
                                 </div>
                             </div>
                         ) : (
-                            <div className="flex flex-col items-center justify-center py-20 bg-white dark:bg-d-card rounded-2xl border border-slate-200 dark:border-d-border">
-                                <FiPackage size={48} className="text-slate-300 dark:text-d-faint" />
-                                <p className="mt-4 text-slate-500 dark:text-d-muted">No products found</p>
+                            <div className="flex flex-col items-center justify-center py-20 bg-card rounded-2xl border border-hairline">
+                                <FiPackage size={48} className="text-placeholder" />
+                                <p className="mt-4 text-muted-foreground">No products found</p>
                             </div>
                         )}
                     </div>
@@ -714,17 +812,20 @@ const Inventory = () => {
 
                 {/* ── MOVEMENTS TAB ───────────────────────────────────── */}
                 {activeTab === 'movements' && (
-                    <div className="space-y-4">
-                        {/* Filter */}
-                        <div className="flex items-center gap-3">
-                            <div className="flex items-center gap-2">
-                                <FiFilter className="text-slate-400 dark:text-d-faint" size={16} />
-                                <select
+                    <DataTable
+                        caption="Stock movements"
+                        data={movements}
+                        columns={movementColumns}
+                        getRowId={(m) => m._id}
+                        filters={
+                            <>
+                                <Select
+                                    className="w-[200px]"
+                                    aria-label="Movement type"
                                     value={movementType}
                                     onChange={(e) => { setMovementType(e.target.value); setMovementPage(1); }}
-                                    className="px-4 py-2.5 bg-white dark:bg-d-card border border-slate-200 dark:border-d-border rounded-xl text-sm text-slate-700 dark:text-d-text focus:outline-none focus:border-amber-300 dark:focus:border-d-border-hover"
                                 >
-                                    <option value="">All Types</option>
+                                    <option value="">All types</option>
                                     <option value="supply_in">Supply In</option>
                                     <option value="bill_sold">Sold</option>
                                     <option value="bill_return">Customer Return</option>
@@ -734,174 +835,47 @@ const Inventory = () => {
                                     <option value="supply_update_reverse">Supply Reversed</option>
                                     <option value="supply_update_add">Supply Added</option>
                                     <option value="supply_delete">Supply Deleted</option>
-                                </select>
+                                </Select>
                                 {movementType === 'manual_adjustment' && (
-                                    <select
+                                    <Select
+                                        className="w-[180px]"
+                                        aria-label="Adjustment reason"
                                         value={movementReason}
                                         onChange={(e) => { setMovementReason(e.target.value); setMovementPage(1); }}
-                                        aria-label="Adjustment reason"
-                                        className="px-4 py-2.5 bg-white dark:bg-d-card border border-slate-200 dark:border-d-border rounded-xl text-sm text-slate-700 dark:text-d-text focus:outline-none focus:border-amber-300 dark:focus:border-d-border-hover"
                                     >
                                         <option value="">All reasons</option>
-                                        {ADJUST_REASONS.map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
-                                    </select>
+                                        {ADJUST_REASONS.map((r) => (
+                                            <option key={r.value} value={r.value}>
+                                                {r.label}
+                                            </option>
+                                        ))}
+                                    </Select>
                                 )}
-                            </div>
-                            <span className="text-sm text-slate-400 dark:text-d-faint">{movementsMeta.total} records</span>
-                        </div>
-
-                        {/* Movements table */}
-                        <div className="bg-white dark:bg-d-card rounded-2xl border border-slate-200 dark:border-d-border overflow-hidden">
-                            <table className="w-full text-sm">
-                                <thead className="bg-slate-50 dark:bg-d-glass">
-                                    <tr>
-                                        <th className="text-left py-3 px-5 font-medium text-slate-500 dark:text-d-muted">Date</th>
-                                        <th className="text-left py-3 px-5 font-medium text-slate-500 dark:text-d-muted">Product</th>
-                                        <th className="text-left py-3 px-5 font-medium text-slate-500 dark:text-d-muted">Type</th>
-                                        <th className="text-right py-3 px-5 font-medium text-slate-500 dark:text-d-muted">Qty</th>
-                                        <th className="text-right py-3 px-5 font-medium text-slate-500 dark:text-d-muted">Before</th>
-                                        <th className="text-right py-3 px-5 font-medium text-slate-500 dark:text-d-muted">After</th>
-                                        <th className="text-left py-3 px-5 font-medium text-slate-500 dark:text-d-muted">Reference</th>
-                                        <th className="text-left py-3 px-5 font-medium text-slate-500 dark:text-d-muted">Reason / By</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    {movements.map((m, i) => {
-                                        const ml = movementLabel(m.type);
-                                        const isPositive = (m.quantity || 0) > 0;
-                                        return (
-                                            <tr key={m._id || i} className="border-t border-slate-100 dark:border-d-border hover:bg-slate-50 dark:hover:bg-white/5 transition-colors">
-                                                <td className="py-3 px-5 text-slate-600 dark:text-d-muted whitespace-nowrap">
-                                                    {new Date(m.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
-                                                    <span className="text-slate-400 dark:text-d-faint ml-1 text-xs">
-                                                        {new Date(m.createdAt).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}
-                                                    </span>
-                                                </td>
-                                                <td className="py-3 px-5 font-medium text-slate-800 dark:text-d-text">{m.productName}</td>
-                                                <td className="py-3 px-5">
-                                                    <span className={`inline-flex items-center px-2 py-1 rounded-lg text-xs font-medium ${ml.color}`}>
-                                                        {ml.label}
-                                                    </span>
-                                                </td>
-                                                <td className="py-3 px-5 text-right">
-                                                    <span className={`font-semibold flex items-center justify-end gap-1 ${isPositive ? 'text-emerald-600 dark:text-d-green' : 'text-red-600 dark:text-d-red'}`}>
-                                                        {isPositive ? <FiArrowUp size={12} /> : <FiArrowDown size={12} />}
-                                                        {isPositive ? '+' : ''}{m.quantity}
-                                                    </span>
-                                                </td>
-                                                <td className="py-3 px-5 text-right text-slate-500 dark:text-d-muted">{m.previousStock}</td>
-                                                <td className="py-3 px-5 text-right font-medium text-slate-800 dark:text-d-text">{m.newStock}</td>
-                                                <td className="py-3 px-5 text-slate-500 dark:text-d-muted font-mono text-xs">{m.referenceNumber || '-'}</td>
-                                                <td className="py-3 px-5 text-xs max-w-[280px]">
-                                                    {m.type === 'manual_adjustment' && m.adjustmentReason ? (
-                                                        <>
-                                                            <div className="font-medium text-slate-700 dark:text-d-text">{adjustReasonLabel(m.adjustmentReason)}</div>
-                                                            {m.note && <div className="text-slate-500 dark:text-d-muted break-words">{m.note}</div>}
-                                                        </>
-                                                    ) : m.reason ? (
-                                                        <div className="text-slate-600 dark:text-d-muted break-words">{m.reason}</div>
-                                                    ) : null}
-                                                    {m.performedBy && <div className="text-slate-400 dark:text-d-faint">by {m.performedBy}</div>}
-                                                    {!m.reason && !m.adjustmentReason && !m.performedBy && <span className="text-slate-300 dark:text-d-faint">-</span>}
-                                                </td>
-                                            </tr>
-                                        );
-                                    })}
-                                    {movements.length === 0 && (
-                                        <tr>
-                                            <td colSpan={8} className="py-20 text-center text-slate-400 dark:text-d-faint">
-                                                <FiActivity size={36} className="mx-auto mb-3 opacity-40" />
-                                                <p className="text-slate-500 dark:text-d-muted">No stock movements found</p>
-                                            </td>
-                                        </tr>
-                                    )}
-                                </tbody>
-                            </table>
-                        </div>
-
-                        {/* Pagination */}
-                        {movementsMeta.totalPages > 1 && (
-                            <div className="flex items-center justify-center gap-2">
-                                <button
-                                    onClick={() => setMovementPage(p => Math.max(1, p - 1))}
-                                    disabled={movementsMeta.page <= 1}
-                                    className="px-4 py-2 rounded-lg border border-slate-200 dark:border-d-border text-sm text-slate-600 dark:text-d-muted hover:bg-slate-50 dark:hover:bg-d-glass disabled:opacity-40 transition-colors"
-                                >
-                                    Previous
-                                </button>
-                                <span className="text-sm text-slate-500 dark:text-d-muted">
-                                    Page {movementsMeta.page} of {movementsMeta.totalPages}
-                                </span>
-                                <button
-                                    onClick={() => setMovementPage(p => Math.min(movementsMeta.totalPages, p + 1))}
-                                    disabled={movementsMeta.page >= movementsMeta.totalPages}
-                                    className="px-4 py-2 rounded-lg border border-slate-200 dark:border-d-border text-sm text-slate-600 dark:text-d-muted hover:bg-slate-50 dark:hover:bg-d-glass disabled:opacity-40 transition-colors"
-                                >
-                                    Next
-                                </button>
-                            </div>
-                        )}
-                    </div>
+                            </>
+                        }
+                        isFiltered={!!movementType}
+                        onClearFilters={() => {
+                            setMovementType('');
+                            setMovementReason('');
+                            setMovementPage(1);
+                        }}
+                        empty={{ icon: FiActivity, title: 'No stock movements yet', description: 'Supplies, sales, returns and adjustments show here.' }}
+                        server={{ page: movementsMeta.page || 1, pageSize: 30, total: movementsMeta.total || 0, onPageChange: setMovementPage, noun: 'movements' }}
+                    />
                 )}
 
                 {/* ── LOW STOCK TAB ───────────────────────────────────── */}
                 {activeTab === 'lowstock' && (
-                    <div className="space-y-4">
-                        {lowStockProducts.length === 0 ? (
-                            <div className="flex flex-col items-center justify-center py-20 bg-white dark:bg-d-card rounded-2xl border border-slate-200 dark:border-d-border">
-                                <div className="w-16 h-16 bg-emerald-50 dark:bg-emerald-500/10 rounded-full flex items-center justify-center mb-4">
-                                    <FiPackage size={28} className="text-emerald-500 dark:text-d-green" />
-                                </div>
-                                <p className="text-lg font-semibold text-slate-800 dark:text-d-heading">All stocked up!</p>
-                                <p className="text-slate-500 dark:text-d-muted mt-1">No products are below their low stock threshold.</p>
-                            </div>
-                        ) : (
-                            <div className="bg-white dark:bg-d-card rounded-2xl border border-slate-200 dark:border-d-border overflow-hidden">
-                                <div className="px-6 py-4 border-b border-slate-200 dark:border-d-border flex items-center justify-between">
-                                    <div className="flex items-center gap-2">
-                                        <FiAlertTriangle className="text-red-500 dark:text-d-red" size={18} />
-                                        <h3 className="font-semibold text-slate-800 dark:text-d-heading">{lowStockProducts.length} Products Need Restocking</h3>
-                                    </div>
-                                </div>
-                                <table className="w-full text-sm">
-                                    <thead className="bg-slate-50 dark:bg-d-glass">
-                                        <tr>
-                                            <th className="text-left py-3 px-6 font-medium text-slate-500 dark:text-d-muted">Product</th>
-                                            <th className="text-left py-3 px-6 font-medium text-slate-500 dark:text-d-muted">Category</th>
-                                            <th className="text-right py-3 px-6 font-medium text-slate-500 dark:text-d-muted">Current Stock</th>
-                                            <th className="text-right py-3 px-6 font-medium text-slate-500 dark:text-d-muted">Alert Level</th>
-                                            <th className="text-right py-3 px-6 font-medium text-slate-500 dark:text-d-muted">Cost Price</th>
-                                            <th className="text-right py-3 px-6 font-medium text-slate-500 dark:text-d-muted">Sell Price</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                                        {lowStockProducts.map((p) => {
-                                            const stock = p.stockQuantity ?? 0;
-                                            const isOut = stock === 0;
-                                            return (
-                                                <tr key={p._id} className="border-t border-slate-100 dark:border-d-border hover:bg-slate-50 dark:hover:bg-white/5 transition-colors">
-                                                    <td className="py-3 px-6">
-                                                        <p className="font-medium text-slate-800 dark:text-d-text">{p.name}</p>
-                                                        {p.sku && <p className="text-xs text-slate-400 dark:text-d-faint font-mono">{p.sku}</p>}
-                                                    </td>
-                                                    <td className="py-3 px-6 text-slate-500 dark:text-d-muted">{p.category || '-'}</td>
-                                                    <td className="py-3 px-6 text-right">
-                                                        <span className={`font-bold ${isOut ? 'text-red-600 dark:text-d-red' : 'text-orange-500'}`}>
-                                                            {stock}
-                                                        </span>
-                                                        {isOut && <span className="ml-2 text-xs bg-red-100 dark:bg-red-500/20 text-red-600 dark:text-d-red px-1.5 py-0.5 rounded font-medium">OUT</span>}
-                                                    </td>
-                                                    <td className="py-3 px-6 text-right text-slate-500 dark:text-d-muted">{p.lowStockAlert || 10}</td>
-                                                    <td className="py-3 px-6 text-right text-slate-600 dark:text-d-muted">{fmt(p.costPrice)}</td>
-                                                    <td className="py-3 px-6 text-right text-slate-600 dark:text-d-muted">{fmt(p.sellingPrice)}</td>
-                                                </tr>
-                                            );
-                                        })}
-                                    </tbody>
-                                </table>
-                            </div>
-                        )}
-                    </div>
+                    <DataTable
+                        id="inventory-lowstock"
+                        caption="Products that need restocking"
+                        data={lowStockProducts}
+                        columns={lowStockColumns}
+                        getRowId={(p) => p._id}
+                        empty={{ icon: FiPackage, title: 'All stocked up!', description: 'No products are below their low stock threshold.' }}
+                        rowTone={(p) => ((p.stockQuantity ?? 0) === 0 ? null : 'attention')}
+                        initialSort={[{ id: 'stock', desc: false }]}
+                    />
                 )}
 
                 {/* ── DEAD STOCK TAB ──────────────────────────────────── */}
@@ -909,82 +883,56 @@ const Inventory = () => {
                     <div className="space-y-4">
                         {/* Days filter */}
                         <div className="flex items-center gap-3">
-                            <FiCalendar className="text-slate-400 dark:text-d-faint" size={16} />
-                            <span className="text-sm text-slate-600 dark:text-d-muted">Not sold in last</span>
-                            <select
-                                value={deadStockDays}
-                                onChange={(e) => setDeadStockDays(Number(e.target.value))}
-                                className="px-4 py-2.5 bg-white dark:bg-d-card border border-slate-200 dark:border-d-border rounded-xl text-sm text-slate-700 dark:text-d-text focus:outline-none focus:border-amber-300 dark:focus:border-d-border-hover"
-                            >
+                            <FiCalendar className="text-muted-foreground" size={16} />
+                            <span className="text-sm text-muted-foreground">Not sold in last</span>
+                            <Select className="w-[120px]" aria-label="Days without a sale" value={deadStockDays} onChange={(e) => setDeadStockDays(Number(e.target.value))}>
                                 <option value={7}>7 days</option>
                                 <option value={14}>14 days</option>
                                 <option value={30}>30 days</option>
                                 <option value={60}>60 days</option>
                                 <option value={90}>90 days</option>
-                            </select>
+                            </Select>
                         </div>
 
                         {deadStockData && (
                             <>
                                 {/* Summary */}
                                 <div className="grid grid-cols-3 gap-4">
-                                    <div className="bg-white dark:bg-d-card rounded-2xl border border-slate-200 dark:border-d-border p-5">
-                                        <p className="text-sm text-slate-500 dark:text-d-muted">Dead Stock Products</p>
-                                        <p className="text-2xl font-bold text-slate-800 dark:text-d-heading mt-1">{deadStockData.summary?.deadProducts || 0}</p>
-                                        <p className="text-xs text-slate-400 dark:text-d-faint mt-1">
+                                    <div className="bg-card rounded-2xl border border-hairline p-5">
+                                        <p className="text-sm text-muted-foreground">Dead Stock Products</p>
+                                        <p className="text-2xl font-bold text-foreground mt-1">{deadStockData.summary?.deadProducts || 0}</p>
+                                        <p className="text-xs text-muted-foreground mt-1">
                                             of {deadStockData.summary?.totalProducts || 0} total ({(deadStockData.summary?.deadPercentage || 0).toFixed(1)}%)
                                         </p>
                                     </div>
-                                    <div className="bg-white dark:bg-d-card rounded-2xl border border-slate-200 dark:border-d-border p-5">
-                                        <p className="text-sm text-slate-500 dark:text-d-muted">Capital Locked</p>
-                                        <p className="text-2xl font-bold text-red-600 dark:text-d-red mt-1">{fmt(deadStockData.summary?.totalDeadCostValue || deadStockData.summary?.totalDeadValue)}</p>
-                                        <p className="text-xs text-slate-400 dark:text-d-faint mt-1">At cost price</p>
+                                    <div className="bg-card rounded-2xl border border-hairline p-5">
+                                        <p className="text-sm text-muted-foreground">Capital Locked</p>
+                                        <p className="text-2xl font-bold text-destructive mt-1">{fmt(deadStockData.summary?.totalDeadCostValue || deadStockData.summary?.totalDeadValue)}</p>
+                                        <p className="text-xs text-muted-foreground mt-1">At cost price</p>
                                     </div>
-                                    <div className="bg-white dark:bg-d-card rounded-2xl border border-slate-200 dark:border-d-border p-5">
-                                        <p className="text-sm text-slate-500 dark:text-d-muted">Retail Value</p>
-                                        <p className="text-2xl font-bold text-amber-600 dark:text-amber-400 mt-1">{fmt(deadStockData.summary?.totalDeadRetailValue)}</p>
-                                        <p className="text-xs text-slate-400 dark:text-d-faint mt-1">If sold at full price</p>
+                                    <div className="bg-card rounded-2xl border border-hairline p-5">
+                                        <p className="text-sm text-muted-foreground">Retail Value</p>
+                                        <p className="text-2xl font-bold text-primary mt-1">
+                                            {fmt(
+                                                deadStockData.summary?.totalDeadRetailValue ??
+                                                    // The server sends the list as `deadStock` and no retail total — add it up here
+                                                    (deadStockData.deadStock || deadStockData.products || []).reduce((sum, p) => sum + (p.sellingPrice || 0) * (p.stockQuantity || 0), 0)
+                                            )}
+                                        </p>
+                                        <p className="text-xs text-muted-foreground mt-1">If sold at full price</p>
                                     </div>
                                 </div>
 
                                 {/* Dead stock table */}
-                                {(deadStockData.products || []).length > 0 ? (
-                                    <div className="bg-white dark:bg-d-card rounded-2xl border border-slate-200 dark:border-d-border overflow-hidden">
-                                        <table className="w-full text-sm">
-                                            <thead className="bg-slate-50 dark:bg-d-glass">
-                                                <tr>
-                                                    <th className="text-left py-3 px-6 font-medium text-slate-500 dark:text-d-muted">Product</th>
-                                                    <th className="text-left py-3 px-6 font-medium text-slate-500 dark:text-d-muted">Category</th>
-                                                    <th className="text-right py-3 px-6 font-medium text-slate-500 dark:text-d-muted">Stock</th>
-                                                    <th className="text-right py-3 px-6 font-medium text-slate-500 dark:text-d-muted">Cost Value</th>
-                                                    <th className="text-right py-3 px-6 font-medium text-slate-500 dark:text-d-muted">Retail Value</th>
-                                                </tr>
-                                            </thead>
-                                            <tbody>
-                                                {(deadStockData.products || []).map((p) => (
-                                                    <tr key={p._id} className="border-t border-slate-100 dark:border-d-border hover:bg-slate-50 dark:hover:bg-white/5 transition-colors">
-                                                        <td className="py-3 px-6">
-                                                            <p className="font-medium text-slate-800 dark:text-d-text">{p.name}</p>
-                                                            {p.sku && <p className="text-xs text-slate-400 dark:text-d-faint font-mono">{p.sku}</p>}
-                                                        </td>
-                                                        <td className="py-3 px-6 text-slate-500 dark:text-d-muted">{p.category || '-'}</td>
-                                                        <td className="py-3 px-6 text-right font-medium text-slate-800 dark:text-d-text">{p.stockQuantity ?? 0}</td>
-                                                        <td className="py-3 px-6 text-right text-red-600 dark:text-d-red">{fmt((p.costPrice || 0) * (p.stockQuantity || 0))}</td>
-                                                        <td className="py-3 px-6 text-right text-slate-600 dark:text-d-muted">{fmt((p.sellingPrice || 0) * (p.stockQuantity || 0))}</td>
-                                                    </tr>
-                                                ))}
-                                            </tbody>
-                                        </table>
-                                    </div>
-                                ) : (
-                                    <div className="flex flex-col items-center justify-center py-20 bg-white dark:bg-d-card rounded-2xl border border-slate-200 dark:border-d-border">
-                                        <div className="w-16 h-16 bg-emerald-50 dark:bg-emerald-500/10 rounded-full flex items-center justify-center mb-4">
-                                            <FiArchive size={28} className="text-emerald-500 dark:text-d-green" />
-                                        </div>
-                                        <p className="text-lg font-semibold text-slate-800 dark:text-d-heading">No dead stock!</p>
-                                        <p className="text-slate-500 dark:text-d-muted mt-1">All products have been sold within the last {deadStockDays} days.</p>
-                                    </div>
-                                )}
+                                <DataTable
+                                    id="inventory-deadstock"
+                                    caption="Dead stock"
+                                    data={deadStockData.deadStock || deadStockData.products || []}
+                                    columns={deadStockColumns}
+                                    getRowId={(p) => p._id}
+                                    empty={{ icon: FiArchive, title: 'No dead stock!', description: `All products have been sold within the last ${deadStockDays} days.` }}
+                                    initialSort={[{ id: 'costValue', desc: true }]}
+                                />
                             </>
                         )}
                     </div>
@@ -996,27 +944,26 @@ const Inventory = () => {
                 const after = stockAfterAdjust(adjustCurrent, adjustOp, adjustQty);
                 const change = after === null ? null : after - adjustCurrent;
                 const reasonDef = ADJUST_REASONS.find((r) => r.value === adjustReason);
-                const field = 'w-full h-10 px-3 bg-white dark:bg-d-bg border border-slate-200 dark:border-d-border rounded-lg text-sm text-slate-800 dark:text-d-text placeholder-slate-400 dark:placeholder-d-faint focus:outline-none focus:border-amber-400 dark:focus:border-d-border-hover';
-                const label = 'block mb-1.5 text-xs font-medium text-slate-500 dark:text-d-muted';
+                const field = 'w-full h-10 px-3 bg-card border border-hairline rounded-lg text-sm text-foreground placeholder:text-placeholder focus:outline-none focus:border-primary';
+                const label = 'block mb-1.5 text-xs font-medium text-muted-foreground';
                 return (
-                    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-                        <div className="bg-white dark:bg-d-card border border-slate-200 dark:border-d-border rounded-2xl w-full max-w-md shadow-xl animate-pop-in max-h-[90vh] overflow-y-auto">
+                    <DialogShell size="md" className="max-h-[90vh] overflow-y-auto">
                             {/* Header: product + current stock */}
-                            <div className="flex items-start justify-between gap-3 px-5 pt-5 pb-4 border-b border-slate-200 dark:border-d-border">
+                            <div className="flex items-start justify-between gap-3 px-5 pt-5 pb-4 border-b border-hairline">
                                 <div className="min-w-0">
-                                    <h3 className="text-base font-semibold text-slate-900 dark:text-d-heading">Adjust stock</h3>
-                                    <p className="mt-0.5 text-sm text-slate-500 dark:text-d-muted truncate">
-                                        {adjustModal.name} · <span className="tabular-nums">In stock: <b className="font-semibold text-slate-800 dark:text-d-text">{adjustCurrent}</b></span>
+                                    <h3 className="text-base font-semibold text-foreground">Adjust stock</h3>
+                                    <p className="mt-0.5 text-sm text-muted-foreground truncate">
+                                        {adjustModal.name} · <span className="tabular-nums">In stock: <b className="font-semibold text-foreground">{adjustCurrent}</b></span>
                                     </p>
                                 </div>
-                                <button onClick={() => setAdjustModal(null)} aria-label="Close" className="p-1.5 -mr-1.5 hover:bg-slate-100 dark:hover:bg-d-glass rounded-lg text-slate-400 dark:text-d-muted">
+                                <button data-dialog-close onClick={() => setAdjustModal(null)} aria-label="Close" className="p-1.5 -mr-1.5 hover:bg-[var(--hover-overlay)] rounded-lg text-muted-foreground">
                                     <FiX size={18} />
                                 </button>
                             </div>
 
                             <div className="px-5 py-4 space-y-4">
                                 {/* Operation — compact segmented control */}
-                                <div className="grid grid-cols-3 p-1 rounded-lg bg-slate-100 dark:bg-d-bg border border-slate-200 dark:border-d-border">
+                                <div className="grid grid-cols-3 p-1 rounded-lg bg-muted border border-hairline">
                                     {[
                                         { value: 'subtract', label: 'Subtract', icon: FiArrowDown },
                                         { value: 'add', label: 'Add', icon: FiArrowUp },
@@ -1028,8 +975,8 @@ const Inventory = () => {
                                             onClick={() => changeAdjustOp(op.value)}
                                             className={`h-8 flex items-center justify-center gap-1.5 rounded-md text-sm font-medium transition-colors ${
                                                 adjustOp === op.value
-                                                    ? 'bg-white dark:bg-d-elevated text-slate-900 dark:text-d-heading shadow-sm'
-                                                    : 'text-slate-500 dark:text-d-muted hover:text-slate-800 dark:hover:text-d-text'
+                                                    ? 'bg-card text-foreground shadow-sm'
+                                                    : 'text-muted-foreground hover:text-foreground'
                                             }`}
                                         >
                                             <op.icon size={13} />
@@ -1057,16 +1004,16 @@ const Inventory = () => {
                                     </div>
                                     <div>
                                         <p className={label}>{adjustOp === 'set' ? 'Change' : 'New stock'}</p>
-                                        <div className="h-10 px-3 flex items-center rounded-lg bg-slate-50 dark:bg-white/[0.03] border border-dashed border-slate-200 dark:border-d-border text-sm tabular-nums">
+                                        <div className="h-10 px-3 flex items-center rounded-lg bg-muted/40 border border-dashed border-hairline text-sm tabular-nums">
                                             {after === null ? (
-                                                <span className="text-slate-400 dark:text-d-faint">—</span>
+                                                <span className="text-muted-foreground">—</span>
                                             ) : adjustOp === 'set' ? (
-                                                <b className={`font-semibold ${change > 0 ? 'text-emerald-600 dark:text-d-green' : change < 0 ? 'text-red-600 dark:text-d-red' : 'text-slate-500 dark:text-d-muted'}`}>
+                                                <b className={`font-semibold ${change > 0 ? 'text-success' : change < 0 ? 'text-destructive' : 'text-muted-foreground'}`}>
                                                     {change > 0 ? '+' : ''}{change}
                                                 </b>
                                             ) : (
-                                                <span className="text-slate-500 dark:text-d-muted">
-                                                    {adjustCurrent} → <b className={`font-semibold ${after < 0 ? 'text-red-600 dark:text-d-red' : 'text-slate-900 dark:text-d-heading'}`}>{after}</b>
+                                                <span className="text-muted-foreground">
+                                                    {adjustCurrent} → <b className={`font-semibold ${after < 0 ? 'text-destructive' : 'text-foreground'}`}>{after}</b>
                                                 </span>
                                             )}
                                         </div>
@@ -1075,20 +1022,20 @@ const Inventory = () => {
 
                                 {/* Reason — dropdown; "Other" lets them type it */}
                                 <div>
-                                    <label htmlFor="adjust-reason" className={label}>Reason <span className="text-red-500">*</span></label>
+                                    <label htmlFor="adjust-reason" className={label}>Reason <span className="text-destructive">*</span></label>
                                     <div className="relative">
                                         <select
                                             id="adjust-reason"
                                             value={adjustReason}
                                             onChange={(e) => setAdjustReason(e.target.value)}
-                                            className={`${field} appearance-none pr-9 ${adjustReason ? '' : 'text-slate-400 dark:text-d-faint'}`}
+                                            className={`${field} appearance-none pr-9 ${adjustReason ? '' : 'text-muted-foreground'}`}
                                         >
                                             <option value="" disabled>Select a reason…</option>
                                             {reasonsForOperation(adjustOp).map((r) => (
-                                                <option key={r.value} value={r.value} className="text-slate-800">{r.label}</option>
+                                                <option key={r.value} value={r.value} className="text-foreground">{r.label}</option>
                                             ))}
                                         </select>
-                                        <FiChevronDown className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 dark:text-d-muted" size={15} />
+                                        <FiChevronDown className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground" size={15} />
                                     </div>
                                 </div>
 
@@ -1096,7 +1043,7 @@ const Inventory = () => {
                                 {adjustReason && (
                                     <div>
                                         <label htmlFor="adjust-note" className={label}>
-                                            {reasonDef?.noteRequired ? <>Type the reason <span className="text-red-500">*</span></> : <>Note <span className="font-normal text-slate-400 dark:text-d-faint">(optional)</span></>}
+                                            {reasonDef?.noteRequired ? <>Type the reason <span className="text-destructive">*</span></> : <>Note <span className="font-normal text-muted-foreground">(optional)</span></>}
                                         </label>
                                         <input
                                             id="adjust-note"
@@ -1113,34 +1060,33 @@ const Inventory = () => {
                                             className={field}
                                         />
                                         {adjustNote.length > NOTE_MAX - 40 && (
-                                            <p className="mt-1 text-right text-[11px] text-slate-400 dark:text-d-faint">{adjustNote.length}/{NOTE_MAX}</p>
+                                            <p className="mt-1 text-right text-caption text-muted-foreground">{adjustNote.length}/{NOTE_MAX}</p>
                                         )}
                                     </div>
                                 )}
 
                                 {adjustError && (adjustQty !== '' || adjustReason) && (
-                                    <p className="text-[13px] text-red-600 dark:text-d-red">{adjustError}</p>
+                                    <p className="text-body text-destructive">{adjustError}</p>
                                 )}
                             </div>
 
                             {/* Footer */}
-                            <div className="flex justify-end gap-2 px-5 py-4 border-t border-slate-200 dark:border-d-border">
+                            <div className="flex justify-end gap-2 px-5 py-4 border-t border-hairline">
                                 <button
                                     onClick={() => setAdjustModal(null)}
-                                    className="h-10 px-4 rounded-lg text-sm font-medium text-slate-600 dark:text-d-muted hover:bg-slate-100 dark:hover:bg-d-glass transition-colors"
+                                    className="h-10 px-4 rounded-lg text-sm font-medium text-muted-foreground hover:bg-[var(--hover-overlay)] transition-colors"
                                 >
                                     Cancel
                                 </button>
                                 <button
                                     onClick={handleAdjustStock}
                                     disabled={!!adjustError || adjustSaving}
-                                    className="h-10 px-5 rounded-lg text-sm font-semibold bg-amber-500 hover:bg-amber-600 dark:bg-d-accent dark:hover:brightness-110 text-white dark:text-d-card transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                                    className="h-10 px-5 rounded-lg text-sm font-semibold bg-primary hover:bg-primary/90 text-white transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                                 >
                                     {adjustSaving ? 'Saving…' : 'Update stock'}
                                 </button>
                             </div>
-                        </div>
-                    </div>
+                        </DialogShell>
                 );
             })()}
         </div>

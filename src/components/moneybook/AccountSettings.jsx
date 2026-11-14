@@ -8,6 +8,7 @@ import {
 import { appAlert, appConfirm } from '../AppDialog';
 import { ACCOUNT_TYPES, ACCOUNT_TYPE_LABELS, METHOD_LABELS, apiErrorMessage, round2, todayKey } from '../../utils/moneyBook';
 import { Modal, Field, ErrorBox, Spinner, inputCls, btnGhost, btnSolid } from './ui';
+import { cn, Button, IconButton, StatusChip, TABLE_CARD, TABLE_ROW, TABLE_TD } from '../ui';
 
 const EMPTY_FORM = {
     name: '', type: 'bank', bankName: '', accountTitle: '', accountTail: '', walletNumber: '', note: '', openingBalance: '', date: todayKey(),
@@ -185,60 +186,70 @@ const AccountSettings = ({ fmt, onChanged }) => {
     return (
         <div className="space-y-6">
             {/* Accounts */}
-            <div className="bg-white dark:bg-d-card border border-slate-200 dark:border-d-border rounded-2xl overflow-hidden">
-                <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100 dark:border-d-border">
+            <section className={TABLE_CARD} aria-labelledby="mb-accounts-title">
+                <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 border-b border-hairline">
                     <div>
-                        <h3 className="font-bold text-slate-800 dark:text-d-heading">Accounts</h3>
-                        <p className="text-xs text-slate-500 dark:text-d-muted">The order here is the tab order. Only last digits of account numbers are stored.</p>
+                        <h3 id="mb-accounts-title" className="font-heading text-h4 text-foreground">Accounts</h3>
+                        <p className="text-body-sm text-muted-foreground">The order here is the tab order. Only last digits of account numbers are stored.</p>
                     </div>
                     <div className="flex items-center gap-3">
-                        <label className="flex items-center gap-2 text-sm text-slate-600 dark:text-d-muted">
-                            <input type="checkbox" checked={showArchived} onChange={(e) => setShowArchived(e.target.checked)} />
+                        <label className="inline-flex items-center gap-2 text-body text-muted-foreground cursor-pointer">
+                            <input type="checkbox" className="w-4 h-4 accent-[var(--primary)]" checked={showArchived} onChange={(e) => setShowArchived(e.target.checked)} />
                             Show archived
                         </label>
-                        <button onClick={() => openForm('new')} className="flex items-center gap-2 px-3 py-2 bg-emerald-500 hover:bg-emerald-600 text-white rounded-xl text-sm font-medium">
-                            <FiPlus size={15} /> Add account
-                        </button>
+                        <Button onClick={() => openForm('new')}>
+                            <FiPlus aria-hidden="true" /> Add account
+                        </Button>
                     </div>
                 </div>
-                <table className="w-full text-sm">
+                <table className="w-full border-collapse">
                     <tbody>
                         {visible.map((a) => {
                             const idx = active.findIndex((x) => String(x._id) === String(a._id));
                             return (
-                                <tr key={a._id} className={`border-b border-slate-50 dark:border-d-border/50 ${a.isActive ? '' : 'opacity-60'}`}>
-                                    <td className="px-4 py-3 w-16">
+                                <tr key={a._id} className={cn(TABLE_ROW, !a.isActive && 'opacity-60')}>
+                                    <td className={cn(TABLE_TD, 'w-14')}>
                                         {a.isActive && (
                                             <div className="flex flex-col">
-                                                <button disabled={idx <= 0} onClick={() => move(idx, -1)} className="text-slate-400 hover:text-slate-700 dark:hover:text-d-text disabled:opacity-20" aria-label="Move up"><FiArrowUp size={14} /></button>
-                                                <button disabled={idx >= active.length - 1} onClick={() => move(idx, 1)} className="text-slate-400 hover:text-slate-700 dark:hover:text-d-text disabled:opacity-20" aria-label="Move down"><FiArrowDown size={14} /></button>
+                                                <IconButton label="Move up" size="2xs" disabled={idx <= 0} onClick={() => move(idx, -1)}>
+                                                    <FiArrowUp />
+                                                </IconButton>
+                                                <IconButton label="Move down" size="2xs" disabled={idx >= active.length - 1} onClick={() => move(idx, 1)}>
+                                                    <FiArrowDown />
+                                                </IconButton>
                                             </div>
                                         )}
                                     </td>
-                                    <td className="px-4 py-3">
-                                        <p className="font-semibold text-slate-800 dark:text-d-heading">
+                                    <td className={cn(TABLE_TD, 'py-2.5')}>
+                                        <p className="font-medium flex flex-wrap items-center gap-1.5">
                                             {a.name}
-                                            {a.systemKey && <span className="ml-2 text-[10px] uppercase font-semibold text-slate-400">built-in</span>}
-                                            {!a.isActive && <span className="ml-2 text-[10px] uppercase font-semibold text-slate-400">archived</span>}
+                                            {a.systemKey && <StatusChip size="xs" shape="tag" tone="neutral" label="Built-in" />}
+                                            {!a.isActive && <StatusChip size="xs" shape="tag" tone="neutral" label="Archived" />}
                                         </p>
-                                        <p className="text-xs text-slate-500 dark:text-d-muted">
+                                        <p className="text-body-sm text-muted-foreground">
                                             {ACCOUNT_TYPE_LABELS[a.type] || a.type}
                                             {detailsLine(a) ? ` · ${detailsLine(a)}` : ''}
                                         </p>
                                         {a.methods?.length > 0 && (
-                                            <p className="text-[11px] text-slate-400 dark:text-d-faint">Receives: {a.methods.map((m) => METHOD_LABELS[m] || m).join(', ')}</p>
+                                            <p className="text-body-sm text-muted-foreground">Receives: {a.methods.map((m) => METHOD_LABELS[m] || m).join(', ')}</p>
                                         )}
                                     </td>
-                                    <td className={`px-4 py-3 text-right font-bold ${a.balance < 0 ? 'text-d-red' : 'text-slate-800 dark:text-d-heading'}`}>{fmt(a.balance)}</td>
-                                    <td className="px-4 py-3 text-right whitespace-nowrap">
+                                    <td className={cn(TABLE_TD, 'text-right tabular-nums font-semibold', a.balance < 0 && 'text-destructive')}>{fmt(a.balance)}</td>
+                                    <td className={cn(TABLE_TD, 'text-right whitespace-nowrap w-28')}>
                                         <div className="inline-flex gap-1">
-                                            <button onClick={() => openForm(a)} title="Edit" className="p-2 rounded-lg text-slate-500 hover:bg-slate-100 dark:hover:bg-d-glass"><FiEdit2 size={14} /></button>
+                                            <IconButton label="Edit" size="xs" onClick={() => openForm(a)}>
+                                                <FiEdit2 />
+                                            </IconButton>
                                             {a.isActive ? (
                                                 a.systemKey !== 'cash_drawer' && (
-                                                    <button onClick={() => archive(a)} title="Archive" className="p-2 rounded-lg text-slate-500 hover:bg-slate-100 dark:hover:bg-d-glass"><FiArchive size={14} /></button>
+                                                    <IconButton label="Archive" size="xs" onClick={() => archive(a)}>
+                                                        <FiArchive />
+                                                    </IconButton>
                                                 )
                                             ) : (
-                                                <button onClick={() => restore(a)} title="Restore" className="p-2 rounded-lg text-slate-500 hover:bg-slate-100 dark:hover:bg-d-glass"><FiRotateCcw size={14} /></button>
+                                                <IconButton label="Restore" size="xs" onClick={() => restore(a)}>
+                                                    <FiRotateCcw />
+                                                </IconButton>
                                             )}
                                         </div>
                                     </td>
@@ -247,21 +258,21 @@ const AccountSettings = ({ fmt, onChanged }) => {
                         })}
                     </tbody>
                 </table>
-            </div>
+            </section>
 
             {/* Mapping */}
-            <div className="bg-white dark:bg-d-card border border-slate-200 dark:border-d-border rounded-2xl overflow-hidden">
-                <div className="px-5 py-4 border-b border-slate-100 dark:border-d-border">
-                    <h3 className="font-bold text-slate-800 dark:text-d-heading">Payment method → account</h3>
-                    <p className="text-xs text-slate-500 dark:text-d-muted">Where each payment method lands by default. Cashiers can still pick another matching account.</p>
+            <div className="bg-card text-card-foreground border border-hairline rounded-2xl shadow-1 overflow-hidden">
+                <div className="px-5 pt-4 pb-3">
+                    <h3 className="font-heading text-h4 text-foreground">Payment method → account</h3>
+                    <p className="mt-0.5 text-caption text-muted-foreground">Where each payment method lands by default. Cashiers can still pick another matching account.</p>
                 </div>
-                <div className="p-5 space-y-3">
+                <div className="px-5 pb-5 space-y-3">
                     {methods.map((m) => {
                         const allowed = compatibility[m];
                         const options = active.filter((a) => !Array.isArray(allowed) || allowed.includes(a.type));
                         return (
                             <div key={m} className="grid grid-cols-3 items-center gap-3">
-                                <span className="text-sm font-medium text-slate-700 dark:text-d-text">{METHOD_LABELS[m] || m}</span>
+                                <span className="text-body font-medium text-foreground">{METHOD_LABELS[m] || m}</span>
                                 <select
                                     value={mapping[m] || ''}
                                     onChange={(e) => setMapping((prev) => ({ ...prev, [m]: e.target.value }))}
@@ -274,7 +285,7 @@ const AccountSettings = ({ fmt, onChanged }) => {
                         );
                     })}
                     <div className="flex justify-end pt-2">
-                        <button onClick={saveMapping} disabled={mappingSaving} className="flex items-center gap-2 px-4 py-2.5 bg-blue-500 hover:bg-blue-600 text-white rounded-xl text-sm font-medium disabled:opacity-60">
+                        <button onClick={saveMapping} disabled={mappingSaving} className={btnSolid('emerald', false)}>
                             <FiSave size={15} /> {mappingSaving ? 'Saving…' : 'Save mapping'}
                         </button>
                     </div>

@@ -1,0 +1,783 @@
+{
+  "_meta": {
+    "source": "src/styles/index.css (:root and .dark)",
+    "note": "Authoritative values are the OKLCH strings; hex is sRGB, computed from them (gamut-clipped). color-mix tokens are resolved in oklab.",
+    "darkSwitch": "class=\"dark\" on <html> (next-themes attribute=\"class\"); Tailwind: @custom-variant dark (&:is(.dark *))"
+  },
+  "tokens": {
+    "hover-overlay": {
+      "light": {
+        "css": "color-mix(in oklab, var(--foreground) 6%, transparent)",
+        "hex": "#19242e0f"
+      },
+      "dark": {
+        "css": "color-mix(in oklab, var(--foreground) 9%, transparent)",
+        "hex": "#e8f2fa17"
+      }
+    },
+    "press-overlay": {
+      "light": {
+        "css": "color-mix(in oklab, var(--foreground) 11%, transparent)",
+        "hex": "#19242e1c"
+      },
+      "dark": {
+        "css": "color-mix(in oklab, var(--foreground) 15%, transparent)",
+        "hex": "#e8f2fa26"
+      }
+    },
+    "background": {
+      "light": {
+        "css": "oklch(0.978 0.008 245)",
+        "hex": "#f3f8fd"
+      },
+      "dark": {
+        "css": "oklch(0.19 0.0088 245)",
+        "hex": "#111418"
+      }
+    },
+    "foreground": {
+      "light": {
+        "css": "oklch(0.255 0.024 245)",
+        "hex": "#19242e"
+      },
+      "dark": {
+        "css": "oklch(0.955 0.016 245)",
+        "hex": "#e8f2fa"
+      }
+    },
+    "card": {
+      "light": {
+        "css": "oklch(0.994 0.004 245)",
+        "hex": "#fbfdff"
+      },
+      "dark": {
+        "css": "oklch(0.238 0.0104 245)",
+        "hex": "#1b1f23"
+      }
+    },
+    "card-foreground": {
+      "light": {
+        "css": "oklch(0.255 0.024 245)",
+        "hex": "#19242e"
+      },
+      "dark": {
+        "css": "oklch(0.955 0.016 245)",
+        "hex": "#e8f2fa"
+      }
+    },
+    "popover": {
+      "light": {
+        "css": "oklch(0.995 0.0032 245)",
+        "hex": "#fcfeff"
+      },
+      "dark": {
+        "css": "oklch(0.272 0.0104 245)",
+        "hex": "#23282c"
+      }
+    },
+    "popover-foreground": {
+      "light": {
+        "css": "oklch(0.255 0.024 245)",
+        "hex": "#19242e"
+      },
+      "dark": {
+        "css": "oklch(0.955 0.016 245)",
+        "hex": "#e8f2fa"
+      }
+    },
+    "muted": {
+      "light": {
+        "css": "oklch(0.943 0.0176 245)",
+        "hex": "#e3eef7"
+      },
+      "dark": {
+        "css": "oklch(0.295 0.0128 245)",
+        "hex": "#272d33"
+      }
+    },
+    "muted-foreground": {
+      "light": {
+        "css": "oklch(0.513 0.0176 245)",
+        "hex": "#5f6871"
+      },
+      "dark": {
+        "css": "oklch(0.6733 0.0176 245)",
+        "hex": "#8e98a1"
+      }
+    },
+    "placeholder": {
+      "light": {
+        "css": "oklch(0.62 0.0176 245)",
+        "hex": "#7e8890"
+      },
+      "dark": {
+        "css": "oklch(0.57 0.0176 245)",
+        "hex": "#6f7981"
+      }
+    },
+    "border": {
+      "light": {
+        "css": "oklch(0.6395 0.016 245)",
+        "hex": "#848d95"
+      },
+      "dark": {
+        "css": "oklch(0.53 0.016 245)",
+        "hex": "#646d75"
+      }
+    },
+    "hairline": {
+      "light": {
+        "css": "color-mix(in oklab, var(--border) 50%, transparent)",
+        "hex": "#848d9580"
+      },
+      "dark": {
+        "css": "color-mix(in oklab, var(--border) 70%, transparent)",
+        "hex": "#646d75b3"
+      }
+    },
+    "input": {
+      "light": {
+        "css": "oklch(0.5545 0.0192 245)",
+        "hex": "#6a747e"
+      },
+      "dark": {
+        "css": "oklch(0.63 0.0192 245)",
+        "hex": "#808b94"
+      }
+    },
+    "ring": {
+      "light": {
+        "css": "oklch(0.545 0.125 242)",
+        "hex": "#0f77b2"
+      },
+      "dark": {
+        "css": "oklch(0.72 0.135 242)",
+        "hex": "#4aaef1"
+      }
+    },
+    "primary": {
+      "light": {
+        "css": "oklch(0.545 0.125 242)",
+        "hex": "#0f77b2"
+      },
+      "dark": {
+        "css": "oklch(0.72 0.135 242)",
+        "hex": "#4aaef1"
+      }
+    },
+    "primary-foreground": {
+      "light": {
+        "css": "oklch(0.985 0.008 242)",
+        "hex": "#f6fbff"
+      },
+      "dark": {
+        "css": "oklch(0.2 0.035 242)",
+        "hex": "#061824"
+      }
+    },
+    "secondary": {
+      "light": {
+        "css": "oklch(0.925 0.024 245)",
+        "hex": "#dae8f6"
+      },
+      "dark": {
+        "css": "oklch(0.33 0.016 245)",
+        "hex": "#2f363d"
+      }
+    },
+    "secondary-foreground": {
+      "light": {
+        "css": "oklch(0.467 0.024 245)",
+        "hex": "#4f5c67"
+      },
+      "dark": {
+        "css": "oklch(0.7558 0.024 245)",
+        "hex": "#a4b2be"
+      }
+    },
+    "brand-secondary": {
+      "light": {
+        "css": "var(--chart-1)",
+        "hex": "#187bb7"
+      },
+      "dark": {
+        "css": "var(--chart-1)",
+        "hex": "#47a1de"
+      }
+    },
+    "brand-secondary-foreground": {
+      "light": {
+        "css": "var(--primary-foreground)",
+        "hex": "#f6fbff"
+      },
+      "dark": {
+        "css": "var(--primary-foreground)",
+        "hex": "#061824"
+      }
+    },
+    "brand-accent": {
+      "light": {
+        "css": "var(--chart-2)",
+        "hex": "#a27dd0"
+      },
+      "dark": {
+        "css": "var(--chart-2)",
+        "hex": "#cca6fc"
+      }
+    },
+    "brand-accent-foreground": {
+      "light": {
+        "css": "var(--primary-foreground)",
+        "hex": "#f6fbff"
+      },
+      "dark": {
+        "css": "var(--primary-foreground)",
+        "hex": "#061824"
+      }
+    },
+    "accent": {
+      "light": {
+        "css": "oklch(0.945 0.045 242)",
+        "hex": "#d3f1ff"
+      },
+      "dark": {
+        "css": "oklch(0.318 0.0425 242)",
+        "hex": "#1e3546"
+      }
+    },
+    "accent-foreground": {
+      "light": {
+        "css": "oklch(0.513 0.1125 242)",
+        "hex": "#176da1"
+      },
+      "dark": {
+        "css": "oklch(0.6897 0.1125 242)",
+        "hex": "#56a3db"
+      }
+    },
+    "destructive": {
+      "light": {
+        "css": "oklch(0.555 0.14 27)",
+        "hex": "#b74c44"
+      },
+      "dark": {
+        "css": "oklch(0.715 0.1148 27)",
+        "hex": "#e2867c"
+      }
+    },
+    "destructive-foreground": {
+      "light": {
+        "css": "oklch(0.985 0.008 27)",
+        "hex": "#fff8f7"
+      },
+      "dark": {
+        "css": "oklch(0.331 0.03 27)",
+        "hex": "#44302d"
+      }
+    },
+    "destructive-chip": {
+      "light": {
+        "css": "oklch(0.945 0.055 27)",
+        "hex": "#ffe0d9"
+      },
+      "dark": {
+        "css": "oklch(0.305 0.056 27)",
+        "hex": "#47231f"
+      }
+    },
+    "destructive-chip-foreground": {
+      "light": {
+        "css": "oklch(0.5245 0.119 27)",
+        "hex": "#a44b43"
+      },
+      "dark": {
+        "css": "oklch(0.6815 0.119 27)",
+        "hex": "#d87a70"
+      }
+    },
+    "warning": {
+      "light": {
+        "css": "oklch(0.555 0.135 68)",
+        "hex": "#a56000"
+      },
+      "dark": {
+        "css": "oklch(0.715 0.1107 68)",
+        "hex": "#d19552"
+      }
+    },
+    "warning-foreground": {
+      "light": {
+        "css": "oklch(0.985 0.008 68)",
+        "hex": "#fef9f4"
+      },
+      "dark": {
+        "css": "oklch(0.338 0.03 68)",
+        "hex": "#423527"
+      }
+    },
+    "warning-chip": {
+      "light": {
+        "css": "oklch(0.945 0.055 68)",
+        "hex": "#ffe7c6"
+      },
+      "dark": {
+        "css": "oklch(0.305 0.054 68)",
+        "hex": "#41290d"
+      }
+    },
+    "warning-chip-foreground": {
+      "light": {
+        "css": "oklch(0.5245 0.1148 68)",
+        "hex": "#955b01"
+      },
+      "dark": {
+        "css": "oklch(0.6815 0.1148 68)",
+        "hex": "#c78a43"
+      }
+    },
+    "success": {
+      "light": {
+        "css": "oklch(0.5335 0.14 150)",
+        "hex": "#13823d"
+      },
+      "dark": {
+        "css": "oklch(0.715 0.1148 150)",
+        "hex": "#6bb77c"
+      }
+    },
+    "success-foreground": {
+      "light": {
+        "css": "oklch(0.985 0.008 150)",
+        "hex": "#f6fcf7"
+      },
+      "dark": {
+        "css": "oklch(0.345 0.03 150)",
+        "hex": "#2e3e31"
+      }
+    },
+    "success-chip": {
+      "light": {
+        "css": "oklch(0.945 0.055 150)",
+        "hex": "#d4f8da"
+      },
+      "dark": {
+        "css": "oklch(0.305 0.056 150)",
+        "hex": "#183720"
+      }
+    },
+    "success-chip-foreground": {
+      "light": {
+        "css": "oklch(0.513 0.119 150)",
+        "hex": "#277940"
+      },
+      "dark": {
+        "css": "oklch(0.665 0.119 150)",
+        "hex": "#59a86c"
+      }
+    },
+    "info": {
+      "light": {
+        "css": "oklch(0.549 0.14 255)",
+        "hex": "#3072c1"
+      },
+      "dark": {
+        "css": "oklch(0.715 0.1148 255)",
+        "hex": "#71a6ea"
+      }
+    },
+    "info-foreground": {
+      "light": {
+        "css": "oklch(0.985 0.008 255)",
+        "hex": "#f7faff"
+      },
+      "dark": {
+        "css": "oklch(0.338 0.03 255)",
+        "hex": "#2d3847"
+      }
+    },
+    "info-chip": {
+      "light": {
+        "css": "oklch(0.945 0.055 255)",
+        "hex": "#d5efff"
+      },
+      "dark": {
+        "css": "oklch(0.305 0.056 255)",
+        "hex": "#1b304b"
+      }
+    },
+    "info-chip-foreground": {
+      "light": {
+        "css": "oklch(0.5245 0.119 255)",
+        "hex": "#366bad"
+      },
+      "dark": {
+        "css": "oklch(0.6733 0.119 255)",
+        "hex": "#6299de"
+      }
+    },
+    "sidebar": {
+      "light": {
+        "css": "oklch(0.225 0.042 250)",
+        "hex": "#0b1d2f"
+      },
+      "dark": {
+        "css": "oklch(0.165 0.012 250)",
+        "hex": "#0a0f13"
+      }
+    },
+    "sidebar-foreground": {
+      "light": {
+        "css": "oklch(0.955 0.012 250)",
+        "hex": "#eaf1f8"
+      },
+      "dark": {
+        "css": "oklch(0.955 0.012 250)",
+        "hex": "#eaf1f8"
+      }
+    },
+    "sidebar-primary": {
+      "light": {
+        "css": "oklch(0.595 0.125 242)",
+        "hex": "#2886c2"
+      },
+      "dark": {
+        "css": "oklch(0.72 0.135 242)",
+        "hex": "#4aaef1"
+      }
+    },
+    "sidebar-primary-foreground": {
+      "light": {
+        "css": "oklch(0.191 0.03 242)",
+        "hex": "#071620"
+      },
+      "dark": {
+        "css": "oklch(0.2 0.035 242)",
+        "hex": "#061824"
+      }
+    },
+    "sidebar-accent": {
+      "light": {
+        "css": "oklch(0.31 0.0525 242)",
+        "hex": "#153349"
+      },
+      "dark": {
+        "css": "oklch(0.31 0.0567 242)",
+        "hex": "#12334a"
+      }
+    },
+    "sidebar-accent-foreground": {
+      "light": {
+        "css": "oklch(0.965 0.02 242)",
+        "hex": "#e8f6ff"
+      },
+      "dark": {
+        "css": "oklch(0.965 0.02 242)",
+        "hex": "#e8f6ff"
+      }
+    },
+    "sidebar-border": {
+      "light": {
+        "css": "oklch(0.5165 0.0378 250)",
+        "hex": "#586a7d"
+      },
+      "dark": {
+        "css": "oklch(0.5165 0.0378 250)",
+        "hex": "#586a7d"
+      }
+    },
+    "sidebar-ring": {
+      "light": {
+        "css": "oklch(0.595 0.125 242)",
+        "hex": "#2886c2"
+      },
+      "dark": {
+        "css": "oklch(0.7 0.125 242)",
+        "hex": "#4ea7e5"
+      }
+    },
+    "sidebar-quiet": {
+      "light": {
+        "css": "oklch(0.225 0.042 250)",
+        "hex": "#0b1d2f"
+      },
+      "dark": {
+        "css": "oklch(0.225 0.042 250)",
+        "hex": "#0b1d2f"
+      }
+    },
+    "sidebar-quiet-foreground": {
+      "light": {
+        "css": "oklch(0.955 0.012 250)",
+        "hex": "#eaf1f8"
+      },
+      "dark": {
+        "css": "oklch(0.955 0.012 250)",
+        "hex": "#eaf1f8"
+      }
+    },
+    "sidebar-quiet-border": {
+      "light": {
+        "css": "oklch(0.5165 0.0378 250)",
+        "hex": "#586a7d"
+      },
+      "dark": {
+        "css": "oklch(0.5165 0.0378 250)",
+        "hex": "#586a7d"
+      }
+    },
+    "sidebar-quiet-accent": {
+      "light": {
+        "css": "oklch(0.31 0.0567 242)",
+        "hex": "#12334a"
+      },
+      "dark": {
+        "css": "oklch(0.31 0.0567 242)",
+        "hex": "#12334a"
+      }
+    },
+    "sidebar-quiet-accent-foreground": {
+      "light": {
+        "css": "oklch(0.965 0.02 242)",
+        "hex": "#e8f6ff"
+      },
+      "dark": {
+        "css": "oklch(0.965 0.02 242)",
+        "hex": "#e8f6ff"
+      }
+    },
+    "sidebar-tinted": {
+      "light": {
+        "css": "oklch(0.95 0.0208 245)",
+        "hex": "#e3f0fc"
+      },
+      "dark": {
+        "css": "oklch(0.222 0.0112 245)",
+        "hex": "#171c20"
+      }
+    },
+    "sidebar-tinted-foreground": {
+      "light": {
+        "css": "oklch(0.255 0.024 245)",
+        "hex": "#19242e"
+      },
+      "dark": {
+        "css": "oklch(0.955 0.016 245)",
+        "hex": "#e8f2fa"
+      }
+    },
+    "sidebar-tinted-border": {
+      "light": {
+        "css": "oklch(0.6165 0.016 245)",
+        "hex": "#7d868e"
+      },
+      "dark": {
+        "css": "oklch(0.5165 0.016 245)",
+        "hex": "#616971"
+      }
+    },
+    "sidebar-tinted-accent": {
+      "light": {
+        "css": "oklch(0.945 0.045 242)",
+        "hex": "#d3f1ff"
+      },
+      "dark": {
+        "css": "oklch(0.318 0.0425 242)",
+        "hex": "#1e3546"
+      }
+    },
+    "sidebar-tinted-accent-foreground": {
+      "light": {
+        "css": "oklch(0.513 0.1125 242)",
+        "hex": "#176da1"
+      },
+      "dark": {
+        "css": "oklch(0.6897 0.1125 242)",
+        "hex": "#56a3db"
+      }
+    },
+    "sidebar-inverted": {
+      "light": {
+        "css": "oklch(0.225 0.042 250)",
+        "hex": "#0b1d2f"
+      },
+      "dark": {
+        "css": "oklch(0.158 0.026 250)",
+        "hex": "#050e18"
+      }
+    },
+    "sidebar-inverted-foreground": {
+      "light": {
+        "css": "oklch(0.955 0.012 250)",
+        "hex": "#eaf1f8"
+      },
+      "dark": {
+        "css": "oklch(0.955 0.012 250)",
+        "hex": "#eaf1f8"
+      }
+    },
+    "sidebar-inverted-border": {
+      "light": {
+        "css": "oklch(0.5165 0.0378 250)",
+        "hex": "#586a7d"
+      },
+      "dark": {
+        "css": "oklch(0.5 0.0234 250)",
+        "hex": "#596570"
+      }
+    },
+    "sidebar-inverted-accent": {
+      "light": {
+        "css": "oklch(0.31 0.0525 242)",
+        "hex": "#153349"
+      },
+      "dark": {
+        "css": "oklch(0.243 0.0325 242)",
+        "hex": "#11222e"
+      }
+    },
+    "sidebar-inverted-accent-foreground": {
+      "light": {
+        "css": "oklch(0.965 0.02 242)",
+        "hex": "#e8f6ff"
+      },
+      "dark": {
+        "css": "oklch(0.965 0.02 242)",
+        "hex": "#e8f6ff"
+      }
+    },
+    "surface-1": {
+      "light": {
+        "css": "oklch(0.994 0.004 245)",
+        "hex": "#fbfdff"
+      },
+      "dark": {
+        "css": "oklch(0.238 0.0104 245)",
+        "hex": "#1b1f23"
+      }
+    },
+    "surface-2": {
+      "light": {
+        "css": "oklch(0.995 0.0032 245)",
+        "hex": "#fcfeff"
+      },
+      "dark": {
+        "css": "oklch(0.272 0.0104 245)",
+        "hex": "#23282c"
+      }
+    },
+    "surface-tint": {
+      "light": {
+        "css": "color-mix(in oklab, var(--primary) 8%, var(--card))",
+        "hex": "#eaf2fa"
+      },
+      "dark": {
+        "css": "color-mix(in oklab, var(--primary) 10%, var(--card))",
+        "hex": "#212c35"
+      }
+    },
+    "table-pin-tint": {
+      "light": {
+        "css": "color-mix(in oklab, var(--surface-tint) 50%, var(--card))",
+        "hex": "#f2f8fd"
+      },
+      "dark": {
+        "css": "color-mix(in oklab, var(--surface-tint) 50%, var(--card))",
+        "hex": "#1e262c"
+      }
+    },
+    "hero-wash": {
+      "light": {
+        "css": "linear-gradient(180deg, var(--surface-tint) 0%, var(--card) 72%)"
+      },
+      "dark": {
+        "css": "linear-gradient(170deg, var(--surface-tint) 0%, var(--card) 86%)"
+      }
+    },
+    "chart-1": {
+      "light": {
+        "css": "oklch(0.56 0.125 242)",
+        "hex": "#187bb7"
+      },
+      "dark": {
+        "css": "oklch(0.68 0.125 242)",
+        "hex": "#47a1de"
+      }
+    },
+    "chart-2": {
+      "light": {
+        "css": "oklch(0.6585 0.125 304)",
+        "hex": "#a27dd0"
+      },
+      "dark": {
+        "css": "oklch(0.79 0.125 304)",
+        "hex": "#cca6fc"
+      }
+    },
+    "chart-3": {
+      "light": {
+        "css": "oklch(0.47 0.125 10)",
+        "hex": "#93374b"
+      },
+      "dark": {
+        "css": "oklch(0.59 0.125 10)",
+        "hex": "#ba5a6c"
+      }
+    },
+    "chart-4": {
+      "light": {
+        "css": "oklch(0.64 0.125 78)",
+        "hex": "#b5811c"
+      },
+      "dark": {
+        "css": "oklch(0.735 0.125 78)",
+        "hex": "#d49f42"
+      }
+    },
+    "chart-5": {
+      "light": {
+        "css": "oklch(0.41 0.125 150)",
+        "hex": "#005c21"
+      },
+      "dark": {
+        "css": "oklch(0.52 0.125 150)",
+        "hex": "#237c40"
+      }
+    },
+    "chart-6": {
+      "light": {
+        "css": "oklch(0.6265 0.125 204)",
+        "hex": "#009dab"
+      },
+      "dark": {
+        "css": "oklch(0.845 0.125 204)",
+        "hex": "#4de4f1"
+      }
+    },
+    "primary-gradient": {
+      "light": {
+        "css": "linear-gradient( 103deg, var(--primary) 0%, color-mix(in oklab, var(--primary) 76%, var(--accent)) 100% )"
+      },
+      "dark": {
+        "css": "linear-gradient( 103deg, var(--primary) 0%, color-mix(in oklab, var(--primary) 76%, var(--accent-foreground)) 100% )"
+      }
+    },
+    "nav-active": {
+      "light": {
+        "css": "var(--primary)",
+        "hex": "#0f77b2"
+      },
+      "dark": {
+        "css": "var(--primary)",
+        "hex": "#4aaef1"
+      }
+    },
+    "nav-active-shadow": {
+      "light": {
+        "css": "none"
+      },
+      "dark": {
+        "css": "none"
+      }
+    }
+  }
+}

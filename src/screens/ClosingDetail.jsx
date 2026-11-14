@@ -1,10 +1,12 @@
 import React, { useState, useEffect } from 'react';
+import { PageSkeleton } from '../components/ui/PageSkeleton';
+import { PageHeader, Button, Alert, EmptyState } from '../components/ui';
 import { useParams, useNavigate } from 'react-router-dom';
 import html2pdf from 'html2pdf.js';
 import { useBusiness } from '../context/BusinessContext';
 import { getClosing } from '../services/api/closing';
 import ClosingReport from '../components/ClosingReport';
-import { FiArrowLeft, FiDownload, FiAlertCircle } from 'react-icons/fi';
+import { FiDownload, FiAlertCircle, FiMessageSquare } from 'react-icons/fi';
 
 const ClosingDetail = () => {
     const { id } = useParams();
@@ -41,6 +43,7 @@ const ClosingDetail = () => {
         return v < 0 ? `Short by ${fmt(Math.abs(v))}` : `Over by ${fmt(Math.abs(v))}`;
     };
 
+    // design-check: print-start — PDF HTML, always printed black on white
     const TENDER_PDF_META = {
         cash: { label: 'Cash', expectedLabel: 'Expected (drawer, all-time)' },
         card: { label: 'Card', expectedLabel: 'Expected (this period)' },
@@ -240,64 +243,64 @@ const ClosingDetail = () => {
                 document.body.removeChild(container);
             });
     };
+    // design-check: print-end
 
     if (loading) {
         return (
-            <div className="h-full flex items-center justify-center bg-slate-50 dark:bg-d-bg">
-                <div className="flex flex-col items-center gap-4">
-                    <div className="w-12 h-12 border-4 border-primary-500 dark:border-d-accent border-t-transparent rounded-full animate-spin" />
-                    <p className="text-slate-500 dark:text-d-muted">Loading closing...</p>
-                </div>
-            </div>
+            <PageSkeleton variant="detail" />
         );
     }
 
     if (error) {
         return (
-            <div className="h-full flex items-center justify-center bg-slate-50 dark:bg-d-bg">
-                <div className="flex flex-col items-center gap-4 text-center">
-                    <FiAlertCircle size={48} className="text-red-500 dark:text-d-red" />
-                    <p className="text-slate-700 dark:text-d-text">{error}</p>
-                    <button
-                        onClick={() => navigate('/closing')}
-                        className="px-4 py-2 bg-primary-500 dark:bg-d-accent text-white dark:text-d-card rounded-xl"
-                    >
-                        Back to Closings
-                    </button>
-                </div>
+            <div className="h-full flex items-center justify-center p-6">
+                <EmptyState
+                    icon={FiAlertCircle}
+                    title="Couldn't open this closing"
+                    actions={
+                        <Button variant="outline" onClick={() => navigate('/closing')}>
+                            Back to closings
+                        </Button>
+                    }
+                >
+                    {error}
+                </EmptyState>
             </div>
         );
     }
 
-    return (
-        <div className="h-full overflow-y-auto bg-slate-50 dark:bg-d-bg">
-            <div className="max-w-[1200px] mx-auto p-6">
-                <div className="flex items-center justify-between mb-6">
-                    <button
-                        onClick={() => navigate('/closing')}
-                        className="flex items-center gap-2 text-slate-500 dark:text-d-muted hover:text-slate-800 dark:hover:text-d-text transition-colors"
-                    >
-                        <FiArrowLeft size={18} />
-                        Back to Closings
-                    </button>
-                    <button
-                        onClick={downloadPdf}
-                        className="flex items-center gap-2 px-4 py-2.5 bg-white dark:bg-d-card border border-slate-200 dark:border-d-border text-slate-700 dark:text-d-text rounded-xl text-sm font-medium hover:bg-slate-50 dark:hover:bg-d-glass transition-colors"
-                    >
-                        <FiDownload size={16} />
-                        Download PDF
-                    </button>
-                </div>
+    const when = (d) => new Date(d).toLocaleString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', hour: 'numeric', minute: '2-digit' });
 
-                <ClosingReport
-                    data={closing}
-                    meta={{
-                        closingNumber: closing.closingNumber,
-                        closedBy: closing.closedBy,
-                        closedAt: closing.closedAt,
-                        countedNote: closing.countedNote,
-                    }}
+    return (
+        <div className="h-full overflow-y-auto">
+            <div className="max-w-[1200px] mx-auto p-6">
+                <PageHeader
+                    back={{ to: '/closing', label: 'Closings' }}
+                    eyebrow="Closing report · locked"
+                    title={closing.closingNumber ? `Closing #${closing.closingNumber}` : 'Closing'}
+                    subtitle={
+                        <>
+                            {when(closing.periodStart)} → {when(closing.periodEnd)}
+                            <br />
+                            Closed by {closing.closedBy?.name || '—'}
+                            {closing.closedAt ? ` on ${when(closing.closedAt)}` : ''}
+                        </>
+                    }
+                    actions={
+                        <Button variant="outline" onClick={downloadPdf}>
+                            <FiDownload aria-hidden="true" />
+                            Download PDF
+                        </Button>
+                    }
                 />
+
+                {closing.countedNote ? (
+                    <Alert tone="neutral" icon={FiMessageSquare} title="Note" className="mb-5">
+                        {closing.countedNote}
+                    </Alert>
+                ) : null}
+
+                <ClosingReport data={closing} />
             </div>
         </div>
     );

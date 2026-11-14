@@ -1,4 +1,8 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import { PageSkeleton } from '../components/ui/PageSkeleton';
+import { PageHeader, Button, IconButton, TableScroll } from '../components/ui';
+import { DialogShell } from '../components/ui/Dialog';
+import { toast } from '../components/ui/Toast';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useBusiness } from '../context/BusinessContext';
 import { todayLocalDate, toLocalDateStr } from '../utils/date';
@@ -88,7 +92,6 @@ const VendorLedger = () => {
     const [payMoney, setPayMoney] = useState({ accountId: null, chequeNumber: '', chequeDate: '' });
     const [payShort, setPayShort] = useState(false);
     const [pendingSupplies, setPendingSupplies] = useState([]); // [{ supplyId, supplyNumber, due }]
-    const [toast, setToast] = useState('');
 
     const currency = business?.currency || 'Rs.';
     const formatCurrency = (amount) => {
@@ -98,10 +101,7 @@ const VendorLedger = () => {
     // Running balance: negative = the vendor owes us (credit)
     const formatBalance = (v) => ((v || 0) < -0.005 ? `Cr ${formatCurrency(-v)}` : formatCurrency(v));
 
-    const showToast = (message) => {
-        setToast(message);
-        setTimeout(() => setToast(''), 4000);
-    };
+    const showToast = (message) => toast.success(message, { id: 'vendor-ledger', duration: 4000 });
 
     // =========================================================================
     // Data
@@ -350,6 +350,7 @@ const VendorLedger = () => {
         }
     };
 
+    // design-check: print-start — PDF HTML, always printed black on white
     const downloadPdf = () => {
         if (!ledgerData) return;
         const { summary } = ledgerData;
@@ -527,6 +528,7 @@ const VendorLedger = () => {
                 document.body.removeChild(container);
             });
     };
+    // design-check: print-end
 
     const handlePrint = () => {
         window.print();
@@ -538,24 +540,19 @@ const VendorLedger = () => {
 
     if (loading && !ledgerData) {
         return (
-            <div className="h-full flex items-center justify-center bg-slate-50 dark:bg-d-bg">
-                <div className="flex flex-col items-center gap-4">
-                    <div className="w-12 h-12 border-4 border-primary-500 dark:border-d-accent border-t-transparent rounded-full animate-spin" />
-                    <p className="text-slate-500 dark:text-d-muted">Loading ledger...</p>
-                </div>
-            </div>
+            <PageSkeleton variant="ledger" columns={7} />
         );
     }
 
     if (error && !ledgerData) {
         return (
-            <div className="h-full flex items-center justify-center bg-slate-50 dark:bg-d-bg">
+            <div className="h-full flex items-center justify-center">
                 <div className="flex flex-col items-center gap-4 text-center">
-                    <FiAlertCircle size={48} className="text-red-500 dark:text-d-red" />
-                    <p className="text-slate-700 dark:text-d-text">{error}</p>
+                    <FiAlertCircle size={48} className="text-destructive" />
+                    <p className="text-foreground">{error}</p>
                     <button
                         onClick={() => navigate('/vendors')}
-                        className="px-4 py-2 bg-primary-500 dark:bg-d-accent text-white dark:text-d-card rounded-xl"
+                        className="px-4 py-2 bg-primary text-white rounded-xl"
                     >
                         Back to Vendors
                     </button>
@@ -567,72 +564,47 @@ const VendorLedger = () => {
     const summary = ledgerData?.summary || {};
 
     return (
-        <div className="h-full overflow-y-auto bg-slate-50 dark:bg-d-bg print:bg-white">
+        <div className="h-full overflow-y-auto print:bg-card">
             <div className="max-w-[1400px] mx-auto p-6 print:p-0">
                 {/* Header */}
-                <div className="flex items-center justify-between mb-6 print:hidden">
-                    <div className="flex items-center gap-3">
-                        <button
-                            onClick={() => navigate('/vendors')}
-                            className="p-2 text-slate-500 dark:text-d-muted hover:bg-slate-100 dark:hover:bg-d-glass rounded-lg transition-colors"
-                            title="Back"
-                        >
-                            <FiArrowLeft size={20} />
-                        </button>
-                        <div>
-                            <h1 className="text-2xl font-bold text-slate-800 dark:text-d-heading">
-                                Vendor Ledger
-                            </h1>
-                            <p className="text-sm text-slate-500 dark:text-d-muted">
-                                Complete account statement and transaction history
-                            </p>
-                        </div>
-                    </div>
-                    <div className="flex items-center gap-2">
-                        <button
-                            onClick={fetchLedger}
-                            className="p-2.5 text-slate-500 dark:text-d-muted hover:bg-slate-100 dark:hover:bg-d-glass rounded-xl transition-colors"
-                            title="Refresh"
-                        >
-                            <FiRefreshCw size={17} />
-                        </button>
-                        <button
-                            onClick={handlePrint}
-                            className="flex items-center gap-2 px-3 py-2.5 bg-white dark:bg-d-card border border-slate-200 dark:border-d-border text-slate-700 dark:text-d-text rounded-xl text-sm font-medium hover:bg-slate-50 dark:hover:bg-d-glass transition-colors"
-                        >
-                            <FiPrinter size={15} />
-                            Print
-                        </button>
-                        <button
-                            onClick={downloadPdf}
-                            className="flex items-center gap-2 px-3 py-2.5 bg-white dark:bg-d-card border border-slate-200 dark:border-d-border text-slate-700 dark:text-d-text rounded-xl text-sm font-medium hover:bg-slate-50 dark:hover:bg-d-glass transition-colors"
-                        >
-                            <FiDownload size={15} />
-                            Download PDF
-                        </button>
-                        <button
-                            onClick={openPaymentModal}
-                            disabled={amountDue <= 0}
-                            className="flex items-center gap-2 px-4 py-2.5 bg-emerald-500 dark:bg-d-green text-white dark:text-d-card rounded-xl text-sm font-semibold hover:bg-emerald-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                        >
-                            <FiPlus size={15} />
-                            Pay Vendor
-                        </button>
-                    </div>
-                </div>
+                <PageHeader
+                    className="print:hidden"
+                    back={{ to: '/vendors', label: 'Vendors' }}
+                    title="Vendor Ledger"
+                    subtitle="Complete account statement and transaction history"
+                    actions={
+                        <>
+                            <IconButton label="Refresh" variant="outline" onClick={fetchLedger}>
+                                <FiRefreshCw />
+                            </IconButton>
+                            <Button variant="outline" onClick={handlePrint}>
+                                <FiPrinter aria-hidden="true" />
+                                Print
+                            </Button>
+                            <Button variant="outline" onClick={downloadPdf}>
+                                <FiDownload aria-hidden="true" />
+                                Download PDF
+                            </Button>
+                            <Button onClick={openPaymentModal} disabled={amountDue <= 0}>
+                                <FiPlus aria-hidden="true" />
+                                Pay Vendor
+                            </Button>
+                        </>
+                    }
+                />
 
                 {/* Vendor Info Card */}
-                <div className="bg-white dark:bg-d-card border border-slate-100 dark:border-d-border rounded-2xl p-6 mb-4 shadow-sm">
+                <div className="bg-card border border-hairline rounded-2xl p-6 mb-4 shadow-sm">
                     <div className="flex items-start justify-between flex-wrap gap-4">
                         <div className="flex items-start gap-4">
-                            <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-primary-400 to-primary-600 dark:from-d-accent dark:to-d-accent-s flex items-center justify-center text-white dark:text-d-card text-2xl font-bold">
+                            <div className="w-16 h-16 rounded-2xl bg-primary flex items-center justify-center text-white text-2xl font-bold">
                                 {(vendor?.name || '?').charAt(0).toUpperCase()}
                             </div>
                             <div>
-                                <h2 className="text-2xl font-bold text-slate-800 dark:text-d-heading">
+                                <h2 className="text-2xl font-bold text-foreground">
                                     {vendor?.name}
                                 </h2>
-                                <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-2 text-sm text-slate-500 dark:text-d-muted">
+                                <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-2 text-sm text-muted-foreground">
                                     {vendor?.phone && (
                                         <span className="flex items-center gap-1.5">
                                             <FiPhone size={13} /> {vendor.phone}
@@ -649,7 +621,7 @@ const VendorLedger = () => {
                                         </span>
                                     )}
                                 </div>
-                                <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-1 text-xs text-slate-400 dark:text-d-faint">
+                                <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-1 text-xs text-muted-foreground">
                                     {!!vendor?.creditLimit && (
                                         <span>Credit limit: {formatCurrency(vendor.creditLimit)}</span>
                                     )}
@@ -710,15 +682,15 @@ const VendorLedger = () => {
                 </div>
 
                 {/* Filters */}
-                <div className="bg-white dark:bg-d-card border border-slate-100 dark:border-d-border rounded-2xl p-4 mb-4 shadow-sm print:hidden">
+                <div className="bg-card border border-hairline rounded-2xl p-4 mb-4 shadow-sm print:hidden">
                     <div className="flex flex-wrap items-center gap-3">
                         <div className="flex items-center gap-2">
                             <button
                                 onClick={openFilterModal}
                                 className={`flex items-center gap-2 px-3 py-2 rounded-xl text-sm font-medium border transition-colors ${
                                     activeFilterLabel
-                                        ? 'bg-primary-50 dark:bg-[rgba(124,131,253,0.12)] border-primary-200 dark:border-d-accent/50 text-primary-600 dark:text-d-accent'
-                                        : 'bg-slate-50 dark:bg-d-bg border-slate-200 dark:border-d-border text-slate-600 dark:text-d-text hover:bg-slate-100 dark:hover:bg-d-glass'
+                                        ? 'bg-accent border-primary/30 text-primary'
+                                        : 'bg-muted/40 border-hairline text-muted-foreground hover:bg-[var(--hover-overlay)]'
                                 }`}
                             >
                                 <FiFilter size={14} />
@@ -726,12 +698,12 @@ const VendorLedger = () => {
                             </button>
 
                             {activeFilterLabel && (
-                                <div className="flex items-center gap-1.5 pl-3 pr-2 py-2 bg-slate-50 dark:bg-d-bg border border-slate-200 dark:border-d-border rounded-xl text-xs text-slate-600 dark:text-d-text">
-                                    <FiCalendar size={12} className="text-slate-400 dark:text-d-faint shrink-0" />
+                                <div className="flex items-center gap-1.5 pl-3 pr-2 py-2 bg-muted/40 border border-hairline rounded-xl text-xs text-muted-foreground">
+                                    <FiCalendar size={12} className="text-muted-foreground shrink-0" />
                                     {activeFilterLabel}
                                     <button
                                         onClick={clearDateFilter}
-                                        className="text-slate-400 hover:text-slate-600 dark:hover:text-d-text"
+                                        className="text-muted-foreground hover:text-foreground"
                                         title="Clear date filter"
                                     >
                                         <FiX size={13} />
@@ -740,11 +712,11 @@ const VendorLedger = () => {
                             )}
 
                             {loading && ledgerData && (
-                                <FiRefreshCw size={14} className="text-slate-400 dark:text-d-faint animate-spin" />
+                                <FiRefreshCw size={14} className="text-muted-foreground animate-spin" />
                             )}
                         </div>
 
-                        <div className="flex items-center gap-1 bg-slate-50 dark:bg-d-bg rounded-xl p-1 border border-slate-200 dark:border-d-border">
+                        <div className="flex items-center gap-1 bg-muted/40 rounded-xl p-1 border border-hairline">
                             {[
                                 { id: 'all', label: 'All' },
                                 { id: 'supply', label: 'Supplies' },
@@ -756,8 +728,8 @@ const VendorLedger = () => {
                                     onClick={() => setTypeFilter(f.id)}
                                     className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
                                         typeFilter === f.id
-                                            ? 'bg-primary-500 dark:bg-d-accent text-white dark:text-d-card'
-                                            : 'text-slate-600 dark:text-d-muted hover:bg-slate-100 dark:hover:bg-d-glass'
+                                            ? 'bg-primary text-white'
+                                            : 'text-muted-foreground hover:bg-[var(--hover-overlay)]'
                                     }`}
                                 >
                                     {f.label}
@@ -766,43 +738,43 @@ const VendorLedger = () => {
                         </div>
 
                         <div className="relative flex-1 min-w-[200px]">
-                            <FiSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 dark:text-d-faint" size={14} />
+                            <FiSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" size={14} />
                             <input
                                 type="text"
                                 value={searchQuery}
                                 onChange={(e) => setSearchQuery(e.target.value)}
                                 placeholder="Search by supply #, description, method, note..."
-                                className="w-full pl-9 pr-3 py-2 bg-slate-50 dark:bg-d-bg border border-slate-200 dark:border-d-border rounded-xl text-sm text-slate-700 dark:text-d-text placeholder-slate-400 focus:outline-none focus:border-primary-300"
+                                className="w-full pl-9 pr-3 py-2 bg-muted/40 border border-hairline rounded-xl text-sm text-foreground placeholder:text-placeholder focus:outline-none focus:border-primary/30"
                             />
                         </div>
 
-                        <div className="text-xs text-slate-500 dark:text-d-muted ml-auto">
+                        <div className="text-xs text-muted-foreground ml-auto">
                             {filteredEntries.length} of {ledgerData?.ledger?.length || 0} entries
                         </div>
                     </div>
                 </div>
 
                 {/* Ledger Table */}
-                <div className="bg-white dark:bg-d-card border border-slate-100 dark:border-d-border rounded-2xl shadow-sm overflow-hidden">
+                <div className="bg-card text-card-foreground border border-hairline rounded-2xl shadow-1 overflow-hidden">
                     {filteredEntries.length === 0 ? (
-                        <div className="flex flex-col items-center justify-center py-20 text-slate-400 dark:text-d-faint">
+                        <div className="flex flex-col items-center justify-center py-20 text-muted-foreground">
                             <FiFileText size={48} />
                             <p className="mt-4 text-base">No entries found</p>
                             <p className="text-xs mt-1">Try adjusting your filters</p>
                         </div>
                     ) : (
-                        <div className="overflow-x-auto">
+                        <TableScroll>
                             <table className="w-full text-sm">
-                                <thead className="bg-slate-50 dark:bg-d-glass">
+                                <thead>
                                     <tr>
-                                        <th className="w-8"></th>
-                                        <th className="text-left py-3 px-4 font-medium text-slate-600 dark:text-d-muted whitespace-nowrap">Date</th>
-                                        <th className="text-left py-3 px-4 font-medium text-slate-600 dark:text-d-muted whitespace-nowrap">Voucher</th>
-                                        <th className="text-left py-3 px-4 font-medium text-slate-600 dark:text-d-muted">Description</th>
-                                        <th className="text-left py-3 px-4 font-medium text-slate-600 dark:text-d-muted whitespace-nowrap">Method / By</th>
-                                        <th className="text-right py-3 px-4 font-medium text-slate-600 dark:text-d-muted whitespace-nowrap">Debit</th>
-                                        <th className="text-right py-3 px-4 font-medium text-slate-600 dark:text-d-muted whitespace-nowrap">Credit</th>
-                                        <th className="text-right py-3 px-4 font-medium text-slate-600 dark:text-d-muted whitespace-nowrap">Balance</th>
+                                        <th className="sticky top-0 z-[1] bg-[color-mix(in_oklab,var(--muted)_45%,var(--card))] shadow-[inset_0_-1px_0_var(--border)] w-8"></th>
+                                        <th className="sticky top-0 z-[1] bg-[color-mix(in_oklab,var(--muted)_45%,var(--card))] shadow-[inset_0_-1px_0_var(--border)] h-[var(--head-h)] px-4 text-left font-mono text-th uppercase font-medium text-muted-foreground whitespace-nowrap">Date</th>
+                                        <th className="sticky top-0 z-[1] bg-[color-mix(in_oklab,var(--muted)_45%,var(--card))] shadow-[inset_0_-1px_0_var(--border)] h-[var(--head-h)] px-4 text-left font-mono text-th uppercase font-medium text-muted-foreground whitespace-nowrap">Voucher</th>
+                                        <th className="sticky top-0 z-[1] bg-[color-mix(in_oklab,var(--muted)_45%,var(--card))] shadow-[inset_0_-1px_0_var(--border)] h-[var(--head-h)] px-4 text-left font-mono text-th uppercase font-medium text-muted-foreground">Description</th>
+                                        <th className="sticky top-0 z-[1] bg-[color-mix(in_oklab,var(--muted)_45%,var(--card))] shadow-[inset_0_-1px_0_var(--border)] h-[var(--head-h)] px-4 text-left font-mono text-th uppercase font-medium text-muted-foreground whitespace-nowrap">Method / By</th>
+                                        <th className="sticky top-0 z-[1] bg-[color-mix(in_oklab,var(--muted)_45%,var(--card))] shadow-[inset_0_-1px_0_var(--border)] h-[var(--head-h)] px-4 text-right font-mono text-th uppercase font-medium text-muted-foreground whitespace-nowrap">Debit</th>
+                                        <th className="sticky top-0 z-[1] bg-[color-mix(in_oklab,var(--muted)_45%,var(--card))] shadow-[inset_0_-1px_0_var(--border)] h-[var(--head-h)] px-4 text-right font-mono text-th uppercase font-medium text-muted-foreground whitespace-nowrap">Credit</th>
+                                        <th className="sticky top-0 z-[1] bg-[color-mix(in_oklab,var(--muted)_45%,var(--card))] shadow-[inset_0_-1px_0_var(--border)] h-[var(--head-h)] px-4 text-right font-mono text-th uppercase font-medium text-muted-foreground whitespace-nowrap">Balance</th>
                                     </tr>
                                 </thead>
                                 <tbody>
@@ -817,27 +789,27 @@ const VendorLedger = () => {
                                             <React.Fragment key={idx}>
                                                 <tr
                                                     onClick={() => hasDetails && setExpandedRow(isExpanded ? null : idx)}
-                                                    className={`border-t border-slate-100 dark:border-d-border hover:bg-slate-50 dark:hover:bg-[rgba(255,255,255,0.02)] transition-colors ${
+                                                    className={`h-[var(--row-h)] shadow-[inset_0_1px_0_var(--hairline)] hover:bg-[var(--hover-overlay)] ${
                                                         hasDetails ? 'cursor-pointer' : ''
                                                     }`}
                                                 >
                                                     <td className="py-3 px-2 text-center">
                                                         {hasDetails &&
                                                             (isExpanded ? (
-                                                                <FiChevronDown size={14} className="text-slate-400 mx-auto" />
+                                                                <FiChevronDown size={14} className="text-muted-foreground mx-auto" />
                                                             ) : (
-                                                                <FiChevronRight size={14} className="text-slate-400 mx-auto" />
+                                                                <FiChevronRight size={14} className="text-muted-foreground mx-auto" />
                                                             ))}
                                                     </td>
-                                                    <td className="py-3 px-4 text-slate-600 dark:text-d-text whitespace-nowrap">
+                                                    <td className="py-3 px-4 text-muted-foreground whitespace-nowrap">
                                                         <div className="font-medium">{d.toLocaleDateString()}</div>
-                                                        <div className="text-[10px] text-slate-400 dark:text-d-faint">
+                                                        <div className="text-micro text-muted-foreground">
                                                             {d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                                                         </div>
                                                     </td>
                                                     <td className="py-3 px-4 whitespace-nowrap">
                                                         {entry.supplyNumber && (
-                                                            <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-mono bg-slate-100 dark:bg-d-glass text-slate-600 dark:text-d-muted">
+                                                            <span className="inline-flex items-center px-2 py-0.5 rounded-md text-caption font-mono bg-muted text-muted-foreground">
                                                                 #{entry.supplyNumber}
                                                             </span>
                                                         )}
@@ -845,7 +817,7 @@ const VendorLedger = () => {
                                                     <td className="py-3 px-4">
                                                         <div className="flex items-center gap-2">
                                                             <TypeBadge type={entry.type} />
-                                                            <span className={entry.fromCredit ? 'italic text-slate-500 dark:text-d-muted' : 'text-slate-700 dark:text-d-text'}>
+                                                            <span className={entry.fromCredit ? 'italic text-muted-foreground' : 'text-foreground'}>
                                                                 {entry.description}
                                                             </span>
                                                         </div>
@@ -853,50 +825,50 @@ const VendorLedger = () => {
                                                     <td className="py-3 px-4 whitespace-nowrap text-xs">
                                                         {entry.method && (
                                                             <div className={entry.fromCredit || entry.method === 'vendor_credit'
-                                                                ? 'italic text-slate-500 dark:text-d-muted'
-                                                                : 'uppercase text-slate-600 dark:text-d-text font-medium'}
+                                                                ? 'italic text-muted-foreground'
+                                                                : 'uppercase text-muted-foreground font-medium'}
                                                             >
                                                                 {methodLabel(entry)}
                                                             </div>
                                                         )}
                                                         {entry.paidBy && (
-                                                            <div className="text-slate-400 dark:text-d-faint">{entry.paidBy}</div>
+                                                            <div className="text-muted-foreground">{entry.paidBy}</div>
                                                         )}
                                                     </td>
-                                                    <td className={`py-3 px-4 text-right font-medium whitespace-nowrap ${entry.type === 'credit_transfer' ? 'text-slate-500 dark:text-d-muted' : 'text-red-600 dark:text-d-red'}`}>
+                                                    <td className={`py-3 px-4 text-right font-medium whitespace-nowrap ${entry.type === 'credit_transfer' ? 'text-muted-foreground' : 'text-destructive'}`}>
                                                         {entry.debit > 0 ? formatCurrency(entry.debit) : '\u2014'}
                                                     </td>
-                                                    <td className={`py-3 px-4 text-right font-medium whitespace-nowrap ${entry.fromCredit ? 'italic text-slate-500 dark:text-d-muted' : 'text-emerald-600 dark:text-d-green'}`}>
+                                                    <td className={`py-3 px-4 text-right font-medium whitespace-nowrap ${entry.fromCredit ? 'italic text-muted-foreground' : 'text-success'}`}>
                                                         {entry.credit > 0 ? formatCurrency(entry.credit) : '\u2014'}
                                                     </td>
-                                                    <td className={`py-3 px-4 text-right font-bold whitespace-nowrap ${(entry.balance || 0) < -0.005 ? 'text-emerald-600 dark:text-d-green' : 'text-slate-800 dark:text-d-heading'}`}>
+                                                    <td className={`py-3 px-4 text-right font-bold whitespace-nowrap ${(entry.balance || 0) < -0.005 ? 'text-success' : 'text-foreground'}`}>
                                                         {formatBalance(entry.balance)}
                                                     </td>
                                                 </tr>
                                                 {isExpanded && hasDetails && (
-                                                    <tr className="bg-slate-50/70 dark:bg-d-glass">
+                                                    <tr className="bg-muted/40">
                                                         <td></td>
                                                         <td colSpan={7} className="py-5 px-5">
                                                             {entry.items && entry.items.length > 0 && (
-                                                                <div className="bg-white dark:bg-d-card border border-slate-200 dark:border-d-border rounded-2xl overflow-hidden shadow-[0_4px_20px_rgba(0,0,0,0.04)] dark:shadow-[0_4px_20px_rgba(0,0,0,0.3)]">
+                                                                <div className="bg-card border border-hairline rounded-2xl overflow-hidden">
                                                                     {/* Gradient Header */}
-                                                                    <div className="relative px-6 py-4 bg-gradient-to-r from-slate-50 via-white to-slate-50 dark:from-d-elevated dark:via-d-card dark:to-d-elevated border-b border-slate-200 dark:border-d-border">
-                                                                        <div className="absolute left-0 top-0 bottom-0 w-1 bg-gradient-to-b from-primary-400 to-primary-600 dark:from-d-accent dark:to-d-accent/50" />
+                                                                    <div className="relative px-6 py-4 bg-muted/40 border-b border-hairline">
+                                                                        <div className="absolute left-0 top-0 bottom-0 w-1 bg-primary " />
                                                                         <div className="flex items-center justify-between">
                                                                             <div className="flex items-center gap-3">
-                                                                                <div className="w-9 h-9 rounded-xl bg-primary-500 dark:bg-d-accent flex items-center justify-center shadow-sm">
-                                                                                    <FiPackage size={16} className="text-white dark:text-d-card" />
+                                                                                <div className="w-9 h-9 rounded-xl bg-primary flex items-center justify-center shadow-sm">
+                                                                                    <FiPackage size={16} className="text-white" />
                                                                                 </div>
                                                                                 <div>
                                                                                     <div className="flex items-center gap-2">
-                                                                                        <span className="text-sm font-bold text-slate-800 dark:text-d-heading">
+                                                                                        <span className="text-sm font-bold text-foreground">
                                                                                             Supply #{entry.supplyNumber}
                                                                                         </span>
-                                                                                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-700 dark:bg-d-text text-white dark:text-d-card">
+                                                                                        <span className="text-micro font-bold px-2 py-0.5 rounded-full bg-foreground text-white">
                                                                                             {entry.items.length} {entry.items.length === 1 ? 'item' : 'items'}
                                                                                         </span>
                                                                                     </div>
-                                                                                    <div className="flex items-center gap-1.5 text-[11px] text-slate-600 dark:text-d-text mt-0.5 font-medium">
+                                                                                    <div className="flex items-center gap-1.5 text-caption text-muted-foreground mt-0.5 font-medium">
                                                                                         <FiCalendar size={10} />
                                                                                         <span>{new Date(entry.date).toLocaleString()}</span>
                                                                                     </div>
@@ -909,7 +881,7 @@ const VendorLedger = () => {
                                                                     <div className="px-6 py-2">
                                                                         <table className="w-full text-sm">
                                                                             <thead>
-                                                                                <tr className="text-[11px] font-bold uppercase tracking-[0.08em] text-slate-600 dark:text-d-text border-b border-slate-200 dark:border-d-border">
+                                                                                <tr className="text-caption font-bold uppercase tracking-[0.08em] text-muted-foreground border-b border-hairline">
                                                                                     <th className="text-left py-3">Item</th>
                                                                                     <th className="text-center py-3 w-20">Qty</th>
                                                                                     <th className="text-right py-3 w-32">Unit Price</th>
@@ -917,40 +889,40 @@ const VendorLedger = () => {
                                                                                     <th className="text-right py-3 w-32">Line Total</th>
                                                                                 </tr>
                                                                             </thead>
-                                                                            <tbody className="divide-y divide-slate-100 dark:divide-d-border">
+                                                                            <tbody className="divide-y divide-[var(--hairline)]">
                                                                                 {entry.items.map((it, i) => {
                                                                                     const lineGross = (it.unitCost || it.unitPrice || it.price || 0) * (it.quantity || it.qty || 0);
                                                                                     const gstAmount = it.gstAmount || 0;
                                                                                     const lineTotal = it.totalPrice != null ? it.totalPrice : lineGross + gstAmount;
                                                                                     return (
-                                                                                        <tr key={i} className="text-slate-700 dark:text-d-text hover:bg-slate-50/50 dark:hover:bg-d-elevated/50 transition-colors">
+                                                                                        <tr key={i} className="text-foreground hover:bg-[var(--hover-overlay)] transition-colors">
                                                                                             <td className="py-4">
                                                                                                 <div className="flex items-center gap-3">
-                                                                                                    <div className="w-8 h-8 rounded-lg bg-slate-200 dark:bg-d-border flex items-center justify-center text-[12px] font-bold text-slate-700 dark:text-d-heading">
+                                                                                                    <div className="w-8 h-8 rounded-lg bg-muted flex items-center justify-center text-body-sm font-bold text-foreground">
                                                                                                         {i + 1}
                                                                                                     </div>
-                                                                                                    <div className="font-semibold text-slate-800 dark:text-d-heading">{it.productName || it.name}</div>
+                                                                                                    <div className="font-semibold text-foreground">{it.productName || it.name}</div>
                                                                                                 </div>
                                                                                             </td>
                                                                                             <td className="py-4 text-center">
-                                                                                                <span className="inline-flex items-center justify-center min-w-[40px] px-3 py-1 rounded-lg bg-primary-500 dark:bg-d-accent text-xs font-bold text-white dark:text-d-card shadow-sm">
+                                                                                                <span className="inline-flex items-center justify-center min-w-[40px] px-3 py-1 rounded-lg bg-primary text-xs font-bold text-white shadow-sm">
                                                                                                     &times; {it.quantity || it.qty}
                                                                                                 </span>
                                                                                             </td>
-                                                                                            <td className="py-4 text-right text-slate-600 dark:text-d-muted tabular-nums font-medium">
+                                                                                            <td className="py-4 text-right text-muted-foreground tabular-nums font-medium">
                                                                                                 {formatCurrency(it.unitCost || it.unitPrice || it.price)}
                                                                                             </td>
                                                                                             <td className="py-4 text-right tabular-nums">
                                                                                                 {gstAmount > 0 ? (
-                                                                                                    <span className="text-slate-600 dark:text-d-muted font-medium">
+                                                                                                    <span className="text-muted-foreground font-medium">
                                                                                                         {formatCurrency(gstAmount)}
                                                                                                         {it.gstPercent ? ` (${it.gstPercent}%)` : ''}
                                                                                                     </span>
                                                                                                 ) : (
-                                                                                                    <span className="text-slate-400 dark:text-d-muted">&mdash;</span>
+                                                                                                    <span className="text-muted-foreground">&mdash;</span>
                                                                                                 )}
                                                                                             </td>
-                                                                                            <td className="py-4 text-right font-bold text-slate-900 dark:text-d-heading tabular-nums text-[15px]">
+                                                                                            <td className="py-4 text-right font-bold text-foreground tabular-nums text-lead">
                                                                                                 {formatCurrency(lineTotal)}
                                                                                             </td>
                                                                                         </tr>
@@ -961,13 +933,13 @@ const VendorLedger = () => {
                                                                     </div>
 
                                                                     {/* Totals block */}
-                                                                    <div className="px-6 py-5 bg-gradient-to-br from-slate-50 to-slate-100/60 dark:from-d-elevated dark:to-d-bg border-t border-slate-200 dark:border-d-border">
+                                                                    <div className="px-6 py-5 bg-muted/40 border-t border-hairline">
                                                                         <div className="ml-auto max-w-sm space-y-2.5">
-                                                                            <div className="flex justify-between items-center pt-3 mt-1 border-t-2 border-slate-300 dark:border-d-border">
-                                                                                <span className="text-xs font-bold text-slate-500 dark:text-d-muted uppercase tracking-[0.1em]">
+                                                                            <div className="flex justify-between items-center pt-3 mt-1 border-t-2 border-border">
+                                                                                <span className="text-xs font-bold text-muted-foreground uppercase tracking-[0.1em]">
                                                                                     Grand Total
                                                                                 </span>
-                                                                                <span className="text-2xl font-extrabold text-slate-900 dark:text-d-heading tabular-nums">
+                                                                                <span className="text-2xl font-extrabold text-foreground tabular-nums">
                                                                                     {formatCurrency(entry.debit || 0)}
                                                                                 </span>
                                                                             </div>
@@ -976,18 +948,18 @@ const VendorLedger = () => {
                                                                 </div>
                                                             )}
                                                             {entry.returnItems && entry.returnItems.length > 0 && (
-                                                                <div className="mt-4 bg-white dark:bg-d-card border border-slate-200 dark:border-d-border rounded-xl overflow-hidden shadow-sm">
-                                                                    <div className="flex items-center gap-2 px-5 py-3 bg-red-50 dark:bg-[rgba(255,107,107,0.08)] border-b border-red-100 dark:border-[rgba(255,107,107,0.2)]">
-                                                                        <FiRefreshCw size={14} className="text-red-500 dark:text-d-red" />
-                                                                        <span className="text-xs font-bold text-red-700 dark:text-d-red uppercase tracking-wider">
+                                                                <div className="mt-4 bg-card border border-hairline rounded-xl overflow-hidden shadow-sm">
+                                                                    <div className="flex items-center gap-2 px-5 py-3 bg-destructive-chip border-b border-destructive/30">
+                                                                        <FiRefreshCw size={14} className="text-destructive" />
+                                                                        <span className="text-xs font-bold text-destructive uppercase tracking-wider">
                                                                             Returned Items
                                                                         </span>
                                                                     </div>
-                                                                    <ul className="px-5 py-3 text-sm text-slate-700 dark:text-d-text space-y-1.5">
+                                                                    <ul className="px-5 py-3 text-sm text-foreground space-y-1.5">
                                                                         {entry.returnItems.map((it, i) => (
                                                                             <li key={i} className="flex justify-between">
-                                                                                <span>{it.productName || it.name} <span className="text-slate-400 dark:text-d-faint">&times; {it.quantity || it.qty}</span></span>
-                                                                                <span className="font-medium text-red-600 dark:text-d-red tabular-nums">
+                                                                                <span>{it.productName || it.name} <span className="text-muted-foreground">&times; {it.quantity || it.qty}</span></span>
+                                                                                <span className="font-medium text-destructive tabular-nums">
                                                                                     {formatCurrency(it.refundAmount || ((it.unitCost || it.price || 0) * (it.quantity || it.qty || 0)))}
                                                                                 </span>
                                                                             </li>
@@ -996,13 +968,13 @@ const VendorLedger = () => {
                                                                 </div>
                                                             )}
                                                             {entry.notes && (
-                                                                <div className="mt-3 px-4 py-2.5 bg-blue-50 dark:bg-[rgba(59,130,246,0.08)] border-l-2 border-blue-400 dark:border-blue-500 rounded-r-lg">
-                                                                    <div className="text-[10px] font-semibold uppercase tracking-wide text-blue-600 dark:text-blue-400 mb-0.5">Note</div>
-                                                                    <div className="text-xs text-slate-700 dark:text-d-text italic">{entry.notes}</div>
+                                                                <div className="mt-3 px-4 py-2.5 bg-info-chip border-l-2 border-info rounded-r-lg">
+                                                                    <div className="text-micro font-semibold uppercase tracking-wide text-info mb-0.5">Note</div>
+                                                                    <div className="text-xs text-foreground italic">{entry.notes}</div>
                                                                 </div>
                                                             )}
                                                             {entry.reference && (
-                                                                <div className="mt-2 text-xs text-slate-500 dark:text-d-muted">
+                                                                <div className="mt-2 text-xs text-muted-foreground">
                                                                     Reference: <span className="font-medium">{entry.reference}</span>
                                                                 </div>
                                                             )}
@@ -1014,31 +986,25 @@ const VendorLedger = () => {
                                     })}
                                 </tbody>
                                 {/* Footer totals */}
-                                <tfoot className="bg-slate-50 dark:bg-d-glass border-t-2 border-slate-200 dark:border-d-border">
+                                <tfoot className="bg-muted/40 border-t-2 border-hairline">
                                     <tr>
-                                        <td colSpan={5} className="py-3 px-4 text-right font-semibold text-slate-600 dark:text-d-muted">Totals</td>
-                                        <td className="py-3 px-4 text-right font-bold text-red-600 dark:text-d-red">
+                                        <td colSpan={5} className="py-3 px-4 text-right font-semibold text-muted-foreground">Totals</td>
+                                        <td className="py-3 px-4 text-right font-bold text-destructive">
                                             {formatCurrency(filteredEntries.reduce((s, e) => s + (e.debit || 0), 0))}
                                         </td>
-                                        <td className="py-3 px-4 text-right font-bold text-emerald-600 dark:text-d-green">
+                                        <td className="py-3 px-4 text-right font-bold text-success">
                                             {formatCurrency(filteredEntries.reduce((s, e) => s + (e.credit || 0), 0))}
                                         </td>
-                                        <td className="py-3 px-4 text-right font-bold text-slate-800 dark:text-d-heading">
+                                        <td className="py-3 px-4 text-right font-bold text-foreground">
                                             {formatBalance(summary.currentBalance || 0)}
                                         </td>
                                     </tr>
                                 </tfoot>
                             </table>
-                        </div>
+                        </TableScroll>
                     )}
                 </div>
             </div>
-
-            {toast && (
-                <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[60] px-4 py-2.5 rounded-xl shadow-lg bg-slate-800 dark:bg-d-elevated border border-transparent dark:border-d-border text-sm text-white dark:text-d-text animate-pop-in print:hidden">
-                    {toast}
-                </div>
-            )}
 
             {/* Record Payment Modal */}
             {showPaymentModal && (() => {
@@ -1066,22 +1032,21 @@ const VendorLedger = () => {
                     }
                 }
                 return (
-                    <div className="fixed inset-0 bg-black/50 dark:bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-                        <div className="bg-white dark:bg-d-elevated border border-slate-200 dark:border-[rgba(255,255,255,0.08)] rounded-2xl shadow-2xl w-full max-w-md animate-pop-in overflow-hidden flex flex-col max-h-[90vh]">
+                    <DialogShell size="md" className="overflow-hidden flex flex-col max-h-[90vh]">
                             {/* Header */}
-                            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100 dark:border-d-border">
+                            <div className="flex items-center justify-between px-6 py-4 border-b border-hairline">
                                 <div className="flex items-center gap-3">
-                                    <div className="w-10 h-10 rounded-xl bg-emerald-100 dark:bg-[rgba(52,232,161,0.12)] flex items-center justify-center">
-                                        <FiDollarSign className="text-emerald-600 dark:text-d-green" size={18} />
+                                    <div className="w-10 h-10 rounded-xl bg-success-chip flex items-center justify-center">
+                                        <FiDollarSign className="text-success" size={18} />
                                     </div>
                                     <div>
-                                        <h2 className="text-lg font-bold text-slate-800 dark:text-d-heading">Pay Vendor</h2>
-                                        <p className="text-[11px] text-slate-500 dark:text-d-muted">Payment to {vendor?.name}</p>
+                                        <h2 className="text-lg font-bold text-foreground">Pay Vendor</h2>
+                                        <p className="text-caption text-muted-foreground">Payment to {vendor?.name}</p>
                                     </div>
                                 </div>
-                                <button
+                                <button data-dialog-close
                                     onClick={() => setShowPaymentModal(false)}
-                                    className="p-2 text-slate-400 dark:text-d-faint hover:bg-slate-100 dark:hover:bg-d-glass hover:text-slate-600 dark:hover:text-d-text rounded-lg transition-colors"
+                                    className="p-2 text-muted-foreground hover:bg-[var(--hover-overlay)] hover:text-foreground rounded-lg transition-colors"
                                 >
                                     <FiX size={18} />
                                 </button>
@@ -1093,28 +1058,28 @@ const VendorLedger = () => {
                                 {cashInHand != null && (
                                     <div className={`flex items-center justify-between p-3 rounded-xl border ${
                                         paymentForm.method === 'cash' && (parseFloat(paymentForm.amount) || 0) > cashInHand
-                                            ? 'bg-red-50 dark:bg-[rgba(239,68,68,0.08)] border-red-200 dark:border-[rgba(239,68,68,0.2)]'
-                                            : 'bg-slate-50 dark:bg-d-bg border-slate-200 dark:border-d-border'
+                                            ? 'bg-destructive-chip border-destructive/30'
+                                            : 'bg-muted/40 border-hairline'
                                     }`}>
-                                        <span className="text-xs font-medium text-slate-500 dark:text-d-muted">Cash in Hand</span>
+                                        <span className="text-xs font-medium text-muted-foreground">Cash in Hand</span>
                                         <span className={`text-sm font-bold ${
                                             paymentForm.method === 'cash' && (parseFloat(paymentForm.amount) || 0) > cashInHand
-                                                ? 'text-red-600 dark:text-d-red'
-                                                : 'text-slate-800 dark:text-d-heading'
+                                                ? 'text-destructive'
+                                                : 'text-foreground'
                                         }`}>{formatCurrency(cashInHand)}</span>
                                     </div>
                                 )}
 
                                 {/* Payment error */}
                                 {paymentError && (
-                                    <div className="flex items-center gap-2 p-3 bg-red-50 dark:bg-[rgba(239,68,68,0.08)] border border-red-200 dark:border-[rgba(239,68,68,0.2)] rounded-xl">
-                                        <FiAlertCircle className="text-red-500 dark:text-d-red flex-shrink-0" size={14} />
-                                        <span className="text-xs text-red-700 dark:text-red-400 font-medium">{paymentError}</span>
+                                    <div className="flex items-center gap-2 p-3 bg-destructive-chip border border-destructive/30 rounded-xl">
+                                        <FiAlertCircle className="text-destructive flex-shrink-0" size={14} />
+                                        <span className="text-xs text-destructive font-medium">{paymentError}</span>
                                     </div>
                                 )}
 
                                 {/* Mode toggle */}
-                                <div className="grid grid-cols-2 gap-1 p-1 bg-slate-100 dark:bg-d-bg border border-slate-200 dark:border-d-border rounded-xl">
+                                <div className="grid grid-cols-2 gap-1 p-1 bg-muted border border-hairline rounded-xl">
                                     <button
                                         type="button"
                                         onClick={() => {
@@ -1124,8 +1089,8 @@ const VendorLedger = () => {
                                         }}
                                         className={`py-2 rounded-lg text-xs font-semibold transition-all ${
                                             paymentMode === 'fifo'
-                                                ? 'bg-white dark:bg-d-elevated text-slate-800 dark:text-d-heading shadow-sm'
-                                                : 'text-slate-500 dark:text-d-muted hover:text-slate-700 dark:hover:text-d-text'
+                                                ? 'bg-card text-foreground shadow-sm'
+                                                : 'text-muted-foreground hover:text-foreground'
                                         }`}
                                     >
                                         Auto (FIFO)
@@ -1143,8 +1108,8 @@ const VendorLedger = () => {
                                         }}
                                         className={`py-2 rounded-lg text-xs font-semibold transition-all ${
                                             paymentMode === 'specific'
-                                                ? 'bg-white dark:bg-d-elevated text-slate-800 dark:text-d-heading shadow-sm'
-                                                : 'text-slate-500 dark:text-d-muted hover:text-slate-700 dark:hover:text-d-text'
+                                                ? 'bg-card text-foreground shadow-sm'
+                                                : 'text-muted-foreground hover:text-foreground'
                                         }`}
                                     >
                                         Specific Supply
@@ -1153,9 +1118,9 @@ const VendorLedger = () => {
 
                                 {/* FIFO info banner */}
                                 {paymentMode === 'fifo' && (
-                                    <div className="flex items-start gap-2 p-3 bg-blue-50 dark:bg-[rgba(59,130,246,0.08)] border border-blue-200 dark:border-[rgba(59,130,246,0.2)] rounded-xl">
-                                        <FiAlertCircle className="text-blue-600 dark:text-blue-400 mt-0.5 flex-shrink-0" size={14} />
-                                        <div className="text-[11px] text-blue-700 dark:text-blue-300 leading-relaxed">
+                                    <div className="flex items-start gap-2 p-3 bg-info-chip border border-info/30 rounded-xl">
+                                        <FiAlertCircle className="text-info mt-0.5 flex-shrink-0" size={14} />
+                                        <div className="text-caption text-info leading-relaxed">
                                             Amount will be auto-applied to <strong>{outstandingSupplies.length} outstanding supply{outstandingSupplies.length === 1 ? '' : ' orders'}</strong>, oldest first (FIFO). Total due: <strong>{formatCurrency(dueAmount)}</strong>
                                         </div>
                                     </div>
@@ -1164,7 +1129,7 @@ const VendorLedger = () => {
                                 {/* Supply selector — only in specific mode */}
                                 {paymentMode === 'specific' && (
                                     <div>
-                                        <label className="block text-[11px] font-semibold text-slate-500 dark:text-d-muted mb-2 uppercase tracking-wide">
+                                        <label className="block text-caption font-semibold text-muted-foreground mb-2 uppercase tracking-wide">
                                             Supply to settle
                                         </label>
                                         <div className="relative">
@@ -1178,7 +1143,7 @@ const VendorLedger = () => {
                                                         amount: supply ? String(supply.due) : p.amount,
                                                     }));
                                                 }}
-                                                className="w-full appearance-none pl-4 pr-10 py-3 bg-slate-50 dark:bg-d-bg border border-slate-200 dark:border-d-border rounded-xl text-sm text-slate-800 dark:text-d-text focus:outline-none focus:border-primary-400 dark:focus:border-d-border-hover cursor-pointer"
+                                                className="w-full appearance-none pl-4 pr-10 py-3 bg-muted/40 border border-hairline rounded-xl text-sm text-foreground focus:outline-none focus:border-primary cursor-pointer"
                                             >
                                                 {outstandingSupplies.map((s) => (
                                                     <option key={s.supplyId} value={s.supplyId}>
@@ -1188,7 +1153,7 @@ const VendorLedger = () => {
                                             </select>
                                             <FiChevronDown
                                                 size={15}
-                                                className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 dark:text-d-faint pointer-events-none"
+                                                className="absolute right-4 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none"
                                             />
                                         </div>
                                     </div>
@@ -1197,19 +1162,19 @@ const VendorLedger = () => {
                                 {/* Amount */}
                                 <div>
                                     <div className="flex items-center justify-between mb-2">
-                                        <label className="text-[11px] font-semibold text-slate-500 dark:text-d-muted uppercase tracking-wide">
+                                        <label className="text-caption font-semibold text-muted-foreground uppercase tracking-wide">
                                             Amount
                                         </label>
                                         <button
                                             type="button"
                                             onClick={() => setPaymentForm((p) => ({ ...p, amount: String(dueAmount) }))}
-                                            className="text-[11px] font-medium text-primary-600 dark:text-d-accent hover:underline"
+                                            className="text-caption font-medium text-primary hover:underline"
                                         >
                                             Pay full ({formatCurrency(dueAmount)})
                                         </button>
                                     </div>
                                     <div className="relative">
-                                        <span className="absolute left-4 top-1/2 -translate-y-1/2 text-sm font-semibold text-slate-400 dark:text-d-faint">
+                                        <span className="absolute left-4 top-1/2 -translate-y-1/2 text-sm font-semibold text-muted-foreground">
                                             {currency}
                                         </span>
                                         <input
@@ -1222,10 +1187,10 @@ const VendorLedger = () => {
                                                 setPaymentError('');
                                             }}
                                             placeholder="0"
-                                            className={`w-full pl-14 pr-4 py-4 bg-slate-50 dark:bg-d-bg border rounded-xl text-2xl font-bold text-slate-800 dark:text-d-text focus:outline-none transition-colors ${
+                                            className={`w-full pl-14 pr-4 py-4 bg-muted/40 border rounded-xl text-2xl font-bold text-foreground focus:outline-none transition-colors ${
                                                 isOverpay
-                                                    ? 'border-red-300 dark:border-d-red/50 focus:border-red-400'
-                                                    : 'border-slate-200 dark:border-d-border focus:border-primary-400 dark:focus:border-d-border-hover'
+                                                    ? 'border-destructive/30 focus:border-destructive'
+                                                    : 'border-hairline focus:border-primary'
                                             }`}
                                             required
                                         />
@@ -1242,14 +1207,14 @@ const VendorLedger = () => {
                                                 key={chip.label}
                                                 type="button"
                                                 onClick={() => setPaymentForm((p) => ({ ...p, amount: String(Math.round(chip.value * 100) / 100) }))}
-                                                className="flex-1 py-1.5 bg-slate-100 dark:bg-d-glass text-slate-600 dark:text-d-muted text-[11px] font-medium rounded-lg hover:bg-slate-200 dark:hover:bg-d-glass-hover transition-colors"
+                                                className="flex-1 py-1.5 bg-muted text-muted-foreground text-caption font-medium rounded-lg hover:bg-[var(--hover-overlay)] transition-colors"
                                             >
                                                 {chip.label}
                                             </button>
                                         ))}
                                     </div>
                                     {isOverpay && (
-                                        <p className="mt-2 text-[11px] text-red-500 dark:text-d-red flex items-center gap-1">
+                                        <p className="mt-2 text-caption text-destructive flex items-center gap-1">
                                             <FiAlertCircle size={11} />
                                             Amount exceeds outstanding due
                                         </p>
@@ -1258,7 +1223,7 @@ const VendorLedger = () => {
 
                                 {/* Method — icon pills */}
                                 <div>
-                                    <label className="block text-[11px] font-semibold text-slate-500 dark:text-d-muted mb-2 uppercase tracking-wide">
+                                    <label className="block text-caption font-semibold text-muted-foreground mb-2 uppercase tracking-wide">
                                         Payment Method
                                     </label>
                                     <div className="grid grid-cols-5 gap-2">
@@ -1275,8 +1240,8 @@ const VendorLedger = () => {
                                                 onClick={() => setPaymentForm((p) => ({ ...p, method: m.id }))}
                                                 className={`py-2.5 rounded-xl text-xs font-semibold transition-all ${
                                                     paymentForm.method === m.id
-                                                        ? 'bg-primary-500 dark:bg-d-accent text-white dark:text-d-card shadow-sm'
-                                                        : 'bg-slate-50 dark:bg-d-bg border border-slate-200 dark:border-d-border text-slate-600 dark:text-d-muted hover:border-slate-300 dark:hover:border-d-border-hover'
+                                                        ? 'bg-primary text-white shadow-sm'
+                                                        : 'bg-muted/40 border border-hairline text-muted-foreground hover:border-border'
                                                 }`}
                                             >
                                                 {m.label}
@@ -1306,7 +1271,7 @@ const VendorLedger = () => {
 
                                 {/* Reference */}
                                 <div>
-                                    <label className="block text-[11px] font-semibold text-slate-500 dark:text-d-muted mb-2 uppercase tracking-wide">
+                                    <label className="block text-caption font-semibold text-muted-foreground mb-2 uppercase tracking-wide">
                                         Reference (optional)
                                     </label>
                                     <input
@@ -1314,13 +1279,13 @@ const VendorLedger = () => {
                                         value={paymentForm.reference}
                                         onChange={(e) => setPaymentForm((p) => ({ ...p, reference: e.target.value }))}
                                         placeholder="Cheque #, transaction ID..."
-                                        className="w-full px-4 py-2.5 bg-slate-50 dark:bg-d-bg border border-slate-200 dark:border-d-border rounded-xl text-sm text-slate-800 dark:text-d-text placeholder-slate-400 dark:placeholder-d-faint focus:outline-none focus:border-primary-400 dark:focus:border-d-border-hover"
+                                        className="w-full px-4 py-2.5 bg-muted/40 border border-hairline rounded-xl text-sm text-foreground placeholder:text-placeholder focus:outline-none focus:border-primary"
                                     />
                                 </div>
 
                                 {/* Note */}
                                 <div>
-                                    <label className="block text-[11px] font-semibold text-slate-500 dark:text-d-muted mb-2 uppercase tracking-wide">
+                                    <label className="block text-caption font-semibold text-muted-foreground mb-2 uppercase tracking-wide">
                                         Note (optional)
                                     </label>
                                     <input
@@ -1328,22 +1293,22 @@ const VendorLedger = () => {
                                         value={paymentForm.note}
                                         onChange={(e) => setPaymentForm((p) => ({ ...p, note: e.target.value }))}
                                         placeholder="Payment note..."
-                                        className="w-full px-4 py-2.5 bg-slate-50 dark:bg-d-bg border border-slate-200 dark:border-d-border rounded-xl text-sm text-slate-800 dark:text-d-text placeholder-slate-400 dark:placeholder-d-faint focus:outline-none focus:border-primary-400 dark:focus:border-d-border-hover"
+                                        className="w-full px-4 py-2.5 bg-muted/40 border border-hairline rounded-xl text-sm text-foreground placeholder:text-placeholder focus:outline-none focus:border-primary"
                                     />
                                 </div>
 
                                 {/* Specific-supply summary preview */}
                                 {paymentMode === 'specific' && selectedSupply && enteredAmount > 0 && !isOverpay && (
-                                    <div className="p-3 bg-emerald-50 dark:bg-[rgba(52,232,161,0.08)] border border-emerald-200 dark:border-[rgba(52,232,161,0.2)] rounded-xl space-y-1">
-                                        <div className="flex justify-between text-xs text-slate-600 dark:text-d-muted">
+                                    <div className="p-3 bg-success-chip border border-success/30 rounded-xl space-y-1">
+                                        <div className="flex justify-between text-xs text-muted-foreground">
                                             <span>Outstanding on #{selectedSupply.supplyNumber}</span>
                                             <span>{formatCurrency(dueAmount)}</span>
                                         </div>
-                                        <div className="flex justify-between text-xs text-emerald-700 dark:text-d-green font-medium">
+                                        <div className="flex justify-between text-xs text-success font-medium">
                                             <span>Paying now</span>
                                             <span>&minus; {formatCurrency(enteredAmount)}</span>
                                         </div>
-                                        <div className="flex justify-between text-sm font-bold text-slate-800 dark:text-d-heading pt-1.5 border-t border-emerald-200 dark:border-[rgba(52,232,161,0.2)]">
+                                        <div className="flex justify-between text-sm font-bold text-foreground pt-1.5 border-t border-success/30">
                                             <span>Remaining after</span>
                                             <span>{formatCurrency(remaining)}</span>
                                         </div>
@@ -1352,31 +1317,31 @@ const VendorLedger = () => {
 
                                 {/* FIFO allocation preview */}
                                 {paymentMode === 'fifo' && enteredAmount > 0 && !isOverpay && allocationPreview.length > 0 && (
-                                    <div className="p-3 bg-emerald-50 dark:bg-[rgba(52,232,161,0.08)] border border-emerald-200 dark:border-[rgba(52,232,161,0.2)] rounded-xl space-y-2">
-                                        <div className="text-[11px] font-semibold text-slate-500 dark:text-d-muted uppercase tracking-wide">
+                                    <div className="p-3 bg-success-chip border border-success/30 rounded-xl space-y-2">
+                                        <div className="text-caption font-semibold text-muted-foreground uppercase tracking-wide">
                                             Will be applied to
                                         </div>
                                         <div className="space-y-1.5 max-h-40 overflow-y-auto">
                                             {allocationPreview.map((a) => (
                                                 <div key={a.supplyNumber} className="flex items-center justify-between text-xs">
                                                     <div className="flex items-center gap-2">
-                                                        <span className="font-semibold text-slate-700 dark:text-d-text">#{a.supplyNumber}</span>
-                                                        <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded ${
+                                                        <span className="font-semibold text-foreground">#{a.supplyNumber}</span>
+                                                        <span className={`text-micro font-medium px-1.5 py-0.5 rounded ${
                                                             a.fullyPaid
-                                                                ? 'bg-emerald-200 dark:bg-d-green/20 text-emerald-700 dark:text-d-green'
-                                                                : 'bg-amber-200 dark:bg-amber-500/20 text-amber-700 dark:text-amber-400'
+                                                                ? 'bg-success/20 text-success'
+                                                                : 'bg-primary/25 text-primary'
                                                         }`}>
                                                             {a.fullyPaid ? 'PAID' : 'PARTIAL'}
                                                         </span>
                                                     </div>
-                                                    <div className="text-slate-600 dark:text-d-muted">
-                                                        <span className="text-emerald-700 dark:text-d-green font-semibold">{formatCurrency(a.apply)}</span>
-                                                        <span className="text-slate-400 dark:text-d-faint"> / {formatCurrency(a.due)}</span>
+                                                    <div className="text-muted-foreground">
+                                                        <span className="text-success font-semibold">{formatCurrency(a.apply)}</span>
+                                                        <span className="text-muted-foreground"> / {formatCurrency(a.due)}</span>
                                                     </div>
                                                 </div>
                                             ))}
                                         </div>
-                                        <div className="flex justify-between text-sm font-bold text-slate-800 dark:text-d-heading pt-2 border-t border-emerald-200 dark:border-[rgba(52,232,161,0.2)]">
+                                        <div className="flex justify-between text-sm font-bold text-foreground pt-2 border-t border-success/30">
                                             <span>Balance after</span>
                                             <span>{formatCurrency(remaining)}</span>
                                         </div>
@@ -1387,22 +1352,22 @@ const VendorLedger = () => {
                                 </div>
 
                                 {/* Actions — pinned to bottom */}
-                                <div className="flex items-center gap-2 px-6 py-4 border-t border-slate-100 dark:border-d-border shrink-0">
+                                <div className="flex items-center gap-2 px-6 py-4 border-t border-hairline shrink-0">
                                     <button
                                         type="button"
                                         onClick={() => setShowPaymentModal(false)}
-                                        className="flex-1 py-3 text-slate-600 dark:text-d-muted hover:bg-slate-100 dark:hover:bg-d-glass rounded-xl text-sm font-medium transition-colors"
+                                        className="flex-1 py-3 text-muted-foreground hover:bg-[var(--hover-overlay)] rounded-xl text-sm font-medium transition-colors"
                                     >
                                         Cancel
                                     </button>
                                     <button
                                         type="submit"
                                         disabled={submittingPayment || isOverpay || enteredAmount <= 0}
-                                        className="flex-[2] py-3 bg-emerald-500 dark:bg-d-green text-white dark:text-d-card rounded-xl font-bold text-sm hover:shadow-[0_4px_20px_rgba(52,232,161,0.3)] disabled:opacity-50 disabled:cursor-not-allowed disabled:shadow-none transition-all flex items-center justify-center gap-2"
+                                        className="flex-[2] py-3 bg-success text-white rounded-xl font-bold text-sm disabled:opacity-50 disabled:cursor-not-allowed disabled:shadow-none transition-all flex items-center justify-center gap-2"
                                     >
                                         {submittingPayment ? (
                                             <>
-                                                <div className="w-4 h-4 border-2 border-white dark:border-d-card border-t-transparent rounded-full animate-spin" />
+                                                <div className="w-4 h-4 border-2 border-hairline border-t-transparent rounded-full animate-spin" />
                                                 Processing...
                                             </>
                                         ) : (
@@ -1414,8 +1379,7 @@ const VendorLedger = () => {
                                     </button>
                                 </div>
                             </form>
-                        </div>
-                    </div>
+                        </DialogShell>
                 );
             })()}
 
@@ -1423,13 +1387,12 @@ const VendorLedger = () => {
                 MODAL: Filter Ledger
             ================================================================ */}
             {showFilterModal && (
-                <div className="fixed inset-0 bg-black/50 dark:bg-black/60 flex items-center justify-center z-50 p-4">
-                    <div className="bg-white dark:bg-d-card dark:border dark:border-d-border rounded-2xl w-full max-w-md animate-fadeIn max-h-[90vh] overflow-y-auto">
-                        <div className="flex items-center justify-between p-6 border-b border-slate-200 dark:border-d-border">
-                            <h3 className="text-xl font-semibold text-slate-800 dark:text-d-heading">Filter Ledger</h3>
-                            <button
+                <DialogShell size="md" className="max-h-[90vh] overflow-y-auto">
+                        <div className="flex items-center justify-between p-6 border-b border-hairline">
+                            <h3 className="text-xl font-semibold text-foreground">Filter Ledger</h3>
+                            <button data-dialog-close
                                 onClick={() => setShowFilterModal(false)}
-                                className="p-2 hover:bg-slate-100 dark:hover:bg-d-glass-hover rounded-lg transition-colors text-slate-500 dark:text-d-muted"
+                                className="p-2 hover:bg-[var(--hover-overlay)] rounded-lg transition-colors text-muted-foreground"
                             >
                                 <FiX />
                             </button>
@@ -1437,7 +1400,7 @@ const VendorLedger = () => {
 
                         <div className="p-6 space-y-5">
                             <div>
-                                <label className="block text-sm font-medium text-slate-700 dark:text-d-text mb-2">
+                                <label className="block text-sm font-medium text-foreground mb-2">
                                     Quick Ranges
                                 </label>
                                 <div className="grid grid-cols-2 gap-2">
@@ -1451,7 +1414,7 @@ const VendorLedger = () => {
                                             key={p.id}
                                             type="button"
                                             onClick={() => applyPreset(p.id)}
-                                            className="px-4 py-2.5 rounded-xl border border-slate-200 dark:border-d-border text-sm font-medium text-slate-700 dark:text-d-text hover:bg-slate-100 dark:hover:bg-d-glass hover:border-primary-300 dark:hover:border-d-accent/50 transition-colors"
+                                            className="px-4 py-2.5 rounded-xl border border-hairline text-sm font-medium text-foreground hover:bg-[var(--hover-overlay)] hover:border-primary/30 transition-colors"
                                         >
                                             {p.label}
                                         </button>
@@ -1459,45 +1422,45 @@ const VendorLedger = () => {
                                 </div>
                             </div>
 
-                            <div className="border-t border-slate-100 dark:border-d-border pt-5">
-                                <label className="block text-sm font-medium text-slate-700 dark:text-d-text mb-2">
+                            <div className="border-t border-hairline pt-5">
+                                <label className="block text-sm font-medium text-foreground mb-2">
                                     Custom Range
                                 </label>
                                 <div className="space-y-3">
-                                    <div className="flex items-center gap-2 bg-slate-50 dark:bg-d-bg rounded-xl pl-3 pr-2 py-2 border border-slate-200 dark:border-d-border">
-                                        <span className="text-xs text-slate-400 dark:text-d-faint w-9 shrink-0">From</span>
+                                    <div className="flex items-center gap-2 bg-muted/40 rounded-xl pl-3 pr-2 py-2 border border-hairline">
+                                        <span className="text-xs text-muted-foreground w-9 shrink-0">From</span>
                                         <input
                                             type="date"
                                             value={draftStartDate}
                                             onChange={(e) => { setDraftStartDate(e.target.value); if (!e.target.value) setDraftStartTime(''); }}
-                                            className="bg-transparent text-sm text-slate-700 dark:text-d-text focus:outline-none flex-1"
+                                            className="bg-transparent text-sm text-foreground focus:outline-none flex-1"
                                         />
-                                        <div className="w-px h-4 bg-slate-200 dark:bg-d-border shrink-0" />
+                                        <div className="w-px h-4 bg-muted shrink-0" />
                                         <input
                                             type="time"
                                             value={draftStartTime}
                                             onChange={(e) => setDraftStartTime(e.target.value)}
                                             disabled={!draftStartDate}
                                             title={draftStartDate ? 'Start time (optional)' : 'Pick a start date first'}
-                                            className="bg-transparent text-sm text-slate-700 dark:text-d-text focus:outline-none disabled:opacity-30 disabled:cursor-not-allowed w-[90px]"
+                                            className="bg-transparent text-sm text-foreground focus:outline-none disabled:opacity-30 disabled:cursor-not-allowed w-[90px]"
                                         />
                                     </div>
-                                    <div className="flex items-center gap-2 bg-slate-50 dark:bg-d-bg rounded-xl pl-3 pr-2 py-2 border border-slate-200 dark:border-d-border">
-                                        <span className="text-xs text-slate-400 dark:text-d-faint w-9 shrink-0">To</span>
+                                    <div className="flex items-center gap-2 bg-muted/40 rounded-xl pl-3 pr-2 py-2 border border-hairline">
+                                        <span className="text-xs text-muted-foreground w-9 shrink-0">To</span>
                                         <input
                                             type="date"
                                             value={draftEndDate}
                                             onChange={(e) => { setDraftEndDate(e.target.value); if (!e.target.value) setDraftEndTime(''); }}
-                                            className="bg-transparent text-sm text-slate-700 dark:text-d-text focus:outline-none flex-1"
+                                            className="bg-transparent text-sm text-foreground focus:outline-none flex-1"
                                         />
-                                        <div className="w-px h-4 bg-slate-200 dark:bg-d-border shrink-0" />
+                                        <div className="w-px h-4 bg-muted shrink-0" />
                                         <input
                                             type="time"
                                             value={draftEndTime}
                                             onChange={(e) => setDraftEndTime(e.target.value)}
                                             disabled={!draftEndDate}
                                             title={draftEndDate ? 'End time (optional)' : 'Pick an end date first'}
-                                            className="bg-transparent text-sm text-slate-700 dark:text-d-text focus:outline-none disabled:opacity-30 disabled:cursor-not-allowed w-[90px]"
+                                            className="bg-transparent text-sm text-foreground focus:outline-none disabled:opacity-30 disabled:cursor-not-allowed w-[90px]"
                                         />
                                     </div>
                                 </div>
@@ -1508,20 +1471,19 @@ const VendorLedger = () => {
                             <button
                                 type="button"
                                 onClick={() => setShowFilterModal(false)}
-                                className="flex-1 py-3 border border-slate-200 dark:border-d-border rounded-xl font-medium text-slate-600 dark:text-d-text hover:bg-slate-50 dark:hover:bg-d-glass transition-colors"
+                                className="flex-1 py-3 border border-hairline rounded-xl font-medium text-muted-foreground hover:bg-[var(--hover-overlay)] transition-colors"
                             >
                                 Cancel
                             </button>
                             <button
                                 type="button"
                                 onClick={applyCustomRange}
-                                className="flex-1 py-3 bg-primary-500 text-white rounded-xl font-medium hover:bg-primary-600 transition-colors"
+                                className="flex-1 py-3 bg-primary text-white rounded-xl font-medium hover:bg-primary/90 transition-colors"
                             >
                                 Apply
                             </button>
                         </div>
-                    </div>
-                </div>
+                    </DialogShell>
             )}
         </div>
     );
@@ -1533,38 +1495,38 @@ const VendorLedger = () => {
 
 const SummaryCard = ({ icon, label, value, tone = 'slate', highlight = false, hint }) => {
     const toneClasses = {
-        slate: 'text-slate-700 dark:text-d-heading',
-        emerald: 'text-emerald-600 dark:text-d-green',
-        red: 'text-red-600 dark:text-d-red',
-        amber: 'text-amber-600 dark:text-d-accent',
+        slate: 'text-foreground',
+        emerald: 'text-success',
+        red: 'text-destructive',
+        amber: 'text-primary',
     };
     return (
-        <div className={`bg-white dark:bg-d-card border rounded-2xl p-4 shadow-sm ${
+        <div className={`bg-card border rounded-2xl p-4 shadow-sm ${
             highlight
-                ? 'border-primary-300 dark:border-d-accent/40 ring-1 ring-primary-100 dark:ring-d-accent/10'
-                : 'border-slate-100 dark:border-d-border'
+                ? 'border-primary/30 ring-1 ring-ring'
+                : 'border-hairline'
         }`}>
             <div className="flex items-center gap-2 mb-1.5">
                 <span className={`${toneClasses[tone]}`}>{icon}</span>
-                <p className="text-xs text-slate-500 dark:text-d-muted">{label}</p>
+                <p className="text-xs text-muted-foreground">{label}</p>
             </div>
             <p className={`text-lg font-bold ${toneClasses[tone]}`}>{value}</p>
-            {hint && <p className="text-[11px] text-emerald-600 dark:text-d-green mt-0.5">{hint}</p>}
+            {hint && <p className="text-caption text-success mt-0.5">{hint}</p>}
         </div>
     );
 };
 
 const TypeBadge = ({ type }) => {
     const config = {
-        supply: { label: 'SUPPLY', cls: 'bg-blue-50 dark:bg-[rgba(91,156,246,0.1)] text-blue-600 dark:text-d-blue' },
-        payment: { label: 'PAID', cls: 'bg-emerald-50 dark:bg-[rgba(52,232,161,0.1)] text-emerald-600 dark:text-d-green' },
-        return: { label: 'RETURN', cls: 'bg-amber-50 dark:bg-[rgba(255,185,50,0.1)] text-amber-600 dark:text-d-accent' },
-        opening_balance: { label: 'OPENING', cls: 'bg-indigo-50 dark:bg-[rgba(124,131,253,0.12)] text-indigo-600 dark:text-d-accent' },
-        credit_transfer: { label: 'CREDIT MOVED', cls: 'bg-slate-100 dark:bg-white/10 text-slate-600 dark:text-d-muted' },
+        supply: { label: 'SUPPLY', cls: 'bg-info-chip text-info' },
+        payment: { label: 'PAID', cls: 'bg-success-chip text-success' },
+        return: { label: 'RETURN', cls: 'bg-accent text-primary' },
+        opening_balance: { label: 'OPENING', cls: 'bg-accent text-primary' },
+        credit_transfer: { label: 'CREDIT MOVED', cls: 'bg-muted text-muted-foreground' },
     };
-    const c = config[type] || { label: type, cls: 'bg-slate-100 text-slate-600' };
+    const c = config[type] || { label: type, cls: 'bg-muted text-muted-foreground' };
     return (
-        <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-bold tracking-wide ${c.cls}`}>
+        <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-micro font-bold tracking-wide ${c.cls}`}>
             {c.label}
         </span>
     );

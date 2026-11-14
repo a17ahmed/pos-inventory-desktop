@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { PageHeader } from '../components/ui/PageHeader';
 import {
-    FiRefreshCw, FiPrinter, FiPlus, FiMinus, FiRepeat, FiSliders, FiAlertTriangle, FiBriefcase,
-    FiInbox, FiCreditCard, FiSmartphone, FiDollarSign,
+    FiRefreshCw, FiPrinter, FiPlus, FiMinus, FiRepeat, FiSliders,
 } from 'react-icons/fi';
 import { useAuth } from '../context/AuthContext';
 import { useBusiness } from '../context/BusinessContext';
@@ -10,12 +10,12 @@ import { getCheques, reverseTransfer } from '../services/api/moneyBook';
 import { appAlert, appConfirm } from '../components/AppDialog';
 import { ACCOUNT_TYPES, ACCOUNT_TYPE_LABELS, apiErrorMessage, formatMoney } from '../utils/moneyBook';
 import EntriesTable from '../components/moneybook/EntriesTable';
+import { Alert, Button, IconButton, Tabs, KpiStrip, KpiCard } from '../components/ui';
 import MoneyActionModal from '../components/moneybook/MoneyActionModal';
 import TransfersPanel from '../components/moneybook/TransfersPanel';
 import ChequesPanel from '../components/moneybook/ChequesPanel';
 import AccountSettings from '../components/moneybook/AccountSettings';
 
-const TYPE_ICONS = { cash: FiInbox, bank: FiBriefcase, wallet: FiSmartphone, card_machine: FiCreditCard };
 
 /**
  * Money Book — every money account of the shop (cash drawer, bank, wallets…).
@@ -108,154 +108,135 @@ const MoneyBook = () => {
         { id: 'all', label: 'All' },
         ...activeAccounts.map((a) => ({ id: String(a._id), label: a.name })),
         { id: 'transfers', label: 'Transfers' },
-        ...(chequesAvailable ? [{ id: 'cheques', label: `Cheques${pendingCheques ? ` (${pendingCheques})` : ''}` }] : []),
+        ...(chequesAvailable ? [{ id: 'cheques', label: 'Cheques', count: pendingCheques || undefined }] : []),
         ...(isAdmin ? [{ id: 'accounts', label: 'Accounts' }] : []),
     ];
 
-    const actionBtn = 'flex items-center gap-2 px-4 py-2.5 text-white rounded-xl transition-colors text-sm font-medium';
     const presetAccount = selectedAccount ? String(selectedAccount._id) : undefined;
 
     return (
-        <div className="h-full flex flex-col bg-slate-50 dark:bg-d-bg overflow-auto print:overflow-visible">
+        <div className="h-full flex flex-col overflow-auto print:overflow-visible">
             <div className="flex-1 p-6 max-w-7xl mx-auto w-full">
                 {/* Header */}
-                <div className="flex items-center justify-between mb-6 print:mb-2">
-                    <div>
-                        <h1 className="text-2xl font-bold text-slate-800 dark:text-d-heading">Money Book</h1>
-                        <p className="text-slate-500 dark:text-d-muted">
-                            Cash, bank and wallet money in one place
-                            {settings?.enabledAt ? ` · bank / online tracking since ${new Date(settings.enabledAt).toLocaleDateString()}` : ''}
-                        </p>
-                    </div>
-                    <div className="flex items-center gap-2 print:hidden">
-                        <button onClick={refreshAll} title="Refresh" className="flex items-center gap-2 px-3 py-2 text-slate-500 dark:text-d-muted hover:bg-slate-100 dark:hover:bg-d-glass rounded-xl">
-                            <FiRefreshCw size={16} className={refreshing ? 'animate-spin' : ''} />
-                        </button>
-                        <button onClick={handlePrint} title="Print" className="flex items-center gap-2 px-3 py-2 text-slate-500 dark:text-d-muted hover:bg-slate-100 dark:hover:bg-d-glass rounded-xl">
-                            <FiPrinter size={16} />
-                        </button>
-                    </div>
-                </div>
+                <PageHeader
+                    title={<>Money Book</>}
+                    subtitle={<>Cash, bank and wallet money in one place
+                            {settings?.enabledAt ? ` · bank / online tracking since ${new Date(settings.enabledAt).toLocaleDateString()}` : ''}</>}
+                    actions={
+                        <>
+                            <IconButton label="Refresh" onClick={refreshAll}>
+                                <FiRefreshCw className={refreshing ? 'animate-spin' : ''} />
+                            </IconButton>
+                            <IconButton label="Print" onClick={handlePrint}>
+                                <FiPrinter />
+                            </IconButton>
+                        </>
+                    }
+                />
 
                 {/* Go-live banner */}
                 {showGoLive && (
-                    <div className="flex flex-wrap items-center justify-between gap-3 mb-6 p-4 rounded-2xl border border-amber-200 dark:border-[rgba(255,210,100,0.25)] bg-amber-50 dark:bg-[rgba(255,210,100,0.06)] print:hidden">
-                        <div className="flex items-center gap-3">
-                            <FiAlertTriangle className="text-amber-600 dark:text-d-accent flex-shrink-0" size={20} />
-                            <div>
-                                <p className="font-semibold text-amber-800 dark:text-d-accent">Enter your bank / online opening balance from today's statement</p>
-                                <p className="text-sm text-amber-700/80 dark:text-d-muted">
-                                    Until then {bankOnline.name} starts at {fmt(0)}, so payments out of it will be refused.
-                                </p>
-                            </div>
-                        </div>
-                        <button onClick={() => setModal({ kind: 'opening', accountId: String(bankOnline._id) })} className={`${actionBtn} bg-amber-500 hover:bg-amber-600`}>
-                            Enter opening balance
-                        </button>
-                    </div>
+                    <Alert
+                        tone="warning"
+                        title="Enter your bank / online opening balance from today's statement"
+                        className="mb-6 print:hidden"
+                        action={
+                            <Button variant="warning" onClick={() => setModal({ kind: 'opening', accountId: String(bankOnline._id) })}>
+                                Enter opening balance
+                            </Button>
+                        }
+                    >
+                        Until then {bankOnline.name} starts at {fmt(0)}, so payments out of it will be refused.
+                    </Alert>
                 )}
 
-                {/* Cards */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6 print:grid-cols-4 print:gap-2">
-                    <div className="bg-white dark:bg-d-card border border-slate-200 dark:border-d-border rounded-2xl p-5">
-                        <div className="flex items-center gap-3 mb-2">
-                            <div className="w-10 h-10 bg-[rgba(91,156,246,0.12)] rounded-xl flex items-center justify-center">
-                                <FiDollarSign className="text-d-blue" size={20} />
-                            </div>
-                            <span className="text-slate-500 dark:text-d-muted text-sm">Total money</span>
-                        </div>
-                        <p className={`text-2xl font-bold font-display ${(totals?.total || 0) < 0 ? 'text-d-red' : 'text-slate-800 dark:text-d-heading'}`}>{fmt(totals?.total)}</p>
+                {/* Money at a glance — click an account to see its entries */}
+                <KpiStrip cols={4} className="mb-6 print:grid-cols-4 print:gap-2">
+                    <KpiCard
+                        label="Total money"
+                        size="sm"
+                        value={fmt(totals?.total)}
+                        tone={(totals?.total || 0) < 0 ? 'destructive' : undefined}
+                        onClick={tab !== 'all' ? () => setTab('all') : undefined}
+                        ariaLabel="Total money — show all accounts"
+                        className={tab === 'all' ? 'outline outline-2 -outline-offset-1 outline-primary' : undefined}
+                    >
                         <div className="mt-2 space-y-0.5">
                             {ACCOUNT_TYPES.filter((t) => activeAccounts.some((a) => a.type === t)).map((t) => (
-                                <div key={t} className="flex justify-between text-xs text-slate-500 dark:text-d-muted">
+                                <div key={t} className="flex justify-between text-body-sm text-muted-foreground">
                                     <span>{ACCOUNT_TYPE_LABELS[t]}</span>
-                                    <span className={(totals?.byType?.[t] || 0) < 0 ? 'text-d-red' : ''}>{fmt(totals?.byType?.[t])}</span>
+                                    <span className={`tabular-nums ${(totals?.byType?.[t] || 0) < 0 ? 'text-destructive' : ''}`}>{fmt(totals?.byType?.[t])}</span>
                                 </div>
                             ))}
                         </div>
-                    </div>
+                    </KpiCard>
                     {activeAccounts.map((a) => {
-                        const Icon = TYPE_ICONS[a.type] || FiDollarSign;
                         const active = tab === String(a._id);
                         return (
-                            <button
+                            <KpiCard
                                 key={a._id}
+                                size="sm"
+                                label={`${a.name}${a.details?.accountTail ? ` ••${a.details.accountTail}` : ''}`}
+                                value={fmt(a.balance)}
+                                tone={a.balance < 0 ? 'destructive' : undefined}
                                 onClick={() => setTab(String(a._id))}
-                                className={`text-left bg-white dark:bg-d-card border rounded-2xl p-5 transition-all ${active ? 'border-amber-400 dark:border-d-accent' : 'border-slate-200 dark:border-d-border hover:border-slate-300 dark:hover:border-d-border-hover'}`}
+                                ariaLabel={`${a.name}: ${fmt(a.balance)} — show its entries`}
+                                className={active ? 'outline outline-2 -outline-offset-1 outline-primary' : undefined}
+                                note={
+                                    <span className="tabular-nums">
+                                        <span className="text-success">+{fmt(a.today?.totalIn)}</span>
+                                        {' · '}
+                                        <span className="text-destructive">−{fmt(a.today?.totalOut)}</span> today
+                                    </span>
+                                }
                             >
-                                <div className="flex items-center gap-3 mb-2">
-                                    <div className="w-10 h-10 bg-[rgba(52,232,161,0.12)] rounded-xl flex items-center justify-center">
-                                        <Icon className="text-d-green" size={18} />
-                                    </div>
-                                    <div className="min-w-0">
-                                        <p className="text-slate-700 dark:text-d-text text-sm font-semibold truncate">{a.name}</p>
-                                        <p className="text-[11px] text-slate-400 dark:text-d-faint">
-                                            {ACCOUNT_TYPE_LABELS[a.type]}{a.details?.accountTail ? ` ••${a.details.accountTail}` : ''}
-                                        </p>
-                                    </div>
-                                </div>
-                                <p className={`text-xl font-bold font-display ${a.balance < 0 ? 'text-d-red' : 'text-slate-800 dark:text-d-heading'}`}>{fmt(a.balance)}</p>
-                                <p className="text-xs mt-1">
-                                    <span className="text-d-green">+{fmt(a.today?.totalIn)}</span>
-                                    <span className="text-slate-400"> · </span>
-                                    <span className="text-d-red">−{fmt(a.today?.totalOut)}</span>
-                                    <span className="text-slate-400 dark:text-d-faint"> today</span>
-                                </p>
                                 {a.pendingCheques?.count > 0 && (
-                                    <span className="inline-block mt-2 text-[11px] px-2 py-0.5 rounded-md bg-amber-100 dark:bg-[rgba(255,210,100,0.1)] text-amber-700 dark:text-d-accent">
+                                    <span className="inline-block mt-2 text-caption px-2 py-0.5 rounded-md bg-warning-chip text-warning-chip-foreground">
                                         {a.pendingCheques.count} pending cheque{a.pendingCheques.count > 1 ? 's' : ''} · {fmt(a.pendingCheques.amount)}
                                     </span>
                                 )}
-                            </button>
+                            </KpiCard>
                         );
                     })}
-                </div>
+                </KpiStrip>
 
                 {/* Actions */}
                 <div className="flex flex-wrap gap-3 mb-6 print:hidden">
                     {canManage && (
                         <>
-                            <button onClick={() => setModal({ kind: 'deposit', accountId: presetAccount })} className={`${actionBtn} bg-emerald-500 hover:bg-emerald-600`}>
-                                <FiPlus size={16} /> Deposit
-                            </button>
-                            <button onClick={() => setModal({ kind: 'withdraw', accountId: presetAccount })} className={`${actionBtn} bg-orange-500 hover:bg-orange-600`}>
-                                <FiMinus size={16} /> Withdraw
-                            </button>
+                            <Button onClick={() => setModal({ kind: 'deposit', accountId: presetAccount })} variant="primary">
+                                <FiPlus aria-hidden="true" /> Deposit
+                            </Button>
+                            <Button onClick={() => setModal({ kind: 'withdraw', accountId: presetAccount })} variant="outline">
+                                <FiMinus aria-hidden="true" /> Withdraw
+                            </Button>
                         </>
                     )}
                     {canTransfer && activeAccounts.length > 1 && (
-                        <button onClick={() => setModal({ kind: 'transfer', accountId: presetAccount })} className={`${actionBtn} bg-indigo-500 hover:bg-indigo-600`}>
-                            <FiRepeat size={16} /> Transfer
-                        </button>
+                        <Button onClick={() => setModal({ kind: 'transfer', accountId: presetAccount })} variant="outline">
+                            <FiRepeat aria-hidden="true" /> Transfer
+                        </Button>
                     )}
                     {isAdmin && (
-                        <button onClick={() => setModal({ kind: 'adjustment', accountId: presetAccount })} className={`${actionBtn} bg-slate-500 hover:bg-slate-600`}>
-                            <FiSliders size={16} /> Adjustment
-                        </button>
+                        <Button onClick={() => setModal({ kind: 'adjustment', accountId: presetAccount })} variant="outline">
+                            <FiSliders aria-hidden="true" /> Adjustment
+                        </Button>
                     )}
                     {canManage && selectedAccount && (Number(selectedAccount.openingBalance) || 0) === 0 && (
-                        <button onClick={() => setModal({ kind: 'opening', accountId: String(selectedAccount._id) })} className={`${actionBtn} bg-blue-500 hover:bg-blue-600`}>
+                        <Button onClick={() => setModal({ kind: 'opening', accountId: String(selectedAccount._id) })} variant="outline">
                             Set opening balance
-                        </button>
+                        </Button>
                     )}
                 </div>
 
                 {/* Tabs */}
-                <div className="flex gap-1 mb-4 overflow-x-auto border-b border-slate-200 dark:border-d-border print:hidden">
-                    {tabs.map((t) => (
-                        <button
-                            key={t.id}
-                            onClick={() => setTab(t.id)}
-                            className={`px-4 py-2.5 text-sm font-medium whitespace-nowrap border-b-2 -mb-px transition-colors ${
-                                tab === t.id
-                                    ? 'border-amber-500 dark:border-d-accent text-amber-600 dark:text-d-accent'
-                                    : 'border-transparent text-slate-500 dark:text-d-muted hover:text-slate-700 dark:hover:text-d-text'
-                            }`}
-                        >
-                            {t.label}
-                        </button>
-                    ))}
-                </div>
+                <Tabs
+                    className="mb-4"
+                    label="Money Book sections"
+                    value={tab}
+                    onChange={setTab}
+                    items={tabs.map((t) => ({ value: t.id, label: t.label, count: t.count }))}
+                />
 
                 {tab === 'transfers' ? (
                     <TransfersPanel

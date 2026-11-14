@@ -1,4 +1,6 @@
 import React, { useState, useEffect } from 'react';
+import { PageHeader, Button, DataTable, rowActions, Dash, SegmentedControl, StatusBadge, StatusChip } from '../components/ui';
+import { DialogShell } from '../components/ui/Dialog';
 import { todayLocalDate, toLocalDateStr } from '../utils/date';
 import { useBusiness } from '../context/BusinessContext';
 import { getEmployees, getEmployeePrefix, createEmployee, updateEmployee, deleteEmployee, reactivateEmployee } from '../services/api/employees';
@@ -124,12 +126,15 @@ const Employees = () => {
         fetchPrefix();
     }, []);
 
+    const [loadError, setLoadError] = useState(null);
     const fetchEmployees = async () => {
+        setLoadError(null);
         try {
             const res = await getEmployees();
             setEmployees(res.data || []);
         } catch (error) {
             console.error('Error fetching employees:', error);
+            setLoadError(error.response?.data?.message || (!navigator.onLine ? 'You seem to be offline.' : 'The server didn\'t answer.'));
         } finally {
             setLoading(false);
         }
@@ -341,193 +346,148 @@ const Employees = () => {
         }
     };
 
+    const employeeColumns = [
+        {
+            id: 'name',
+            header: 'Name',
+            accessorFn: (e) => e.name || '',
+            cell: ({ row: { original: e } }) => (
+                <div className="flex items-center gap-2.5 min-w-0">
+                    <span className="w-8 h-8 flex-none rounded-full bg-accent text-accent-foreground inline-flex items-center justify-center text-caption font-semibold">
+                        {(e.name || '?').charAt(0).toUpperCase()}
+                    </span>
+                    <div className="min-w-0">
+                        <p className="font-medium truncate">{e.name}</p>
+                        {e.employeeId ? <p className="font-mono text-mono-xs text-muted-foreground">{e.employeeId}</p> : null}
+                    </div>
+                </div>
+            ),
+        },
+        {
+            id: 'role',
+            header: 'Role',
+            accessorFn: (e) => (e.role === 'manager' ? 'Manager' : 'Staff'),
+            cell: ({ getValue }) => (getValue() === 'Manager' ? <StatusChip size="sm" tone="accent" label="Manager" /> : <span className="text-muted-foreground">Staff</span>),
+        },
+        {
+            id: 'status',
+            header: 'Status',
+            accessorFn: (e) => e.status || 'active',
+            cell: ({ getValue }) => <StatusBadge kind="active" value={String(getValue() !== 'inactive')} size="sm" />,
+        },
+        { id: 'email', header: 'Email', accessorFn: (e) => e.email || '', cell: ({ getValue }) => getValue() || <Dash /> },
+        { id: 'phone', header: 'Phone', accessorFn: (e) => e.phone || '', meta: { mono: true }, cell: ({ getValue }) => getValue() || <Dash /> },
+        {
+            id: 'salary',
+            header: 'Salary / month',
+            accessorFn: (e) => Number(e.salary) || 0,
+            meta: { align: 'right' },
+            cell: ({ getValue }) => (getValue() > 0 ? getValue().toLocaleString() : <Dash />),
+        },
+        {
+            id: 'hours',
+            header: 'Hours',
+            accessorFn: (e) => (e.workingHours ? `${e.workingHours.start} - ${e.workingHours.end}` : ''),
+            cell: ({ getValue }) => (getValue() ? <span className="text-muted-foreground whitespace-nowrap">{getValue()}</span> : <Dash />),
+        },
+        ...(isService
+            ? [
+                  {
+                      id: 'commission',
+                      header: 'Commission',
+                      accessorFn: (e) => Number(e.commissionRate) || 0,
+                      meta: { align: 'right' },
+                      cell: ({ getValue }) => (getValue() > 0 ? `${getValue()}%` : <Dash />),
+                  },
+              ]
+            : []),
+        rowActions(
+            (e) =>
+                e.status === 'inactive'
+                    ? [{ label: 'Reactivate', icon: FiRefreshCw, onSelect: () => handleReactivate(e._id) }]
+                    : [
+                          { label: 'Edit', icon: FiEdit2, onSelect: () => openModal(e) },
+                          { label: 'Access control', icon: FiShield, onSelect: () => openAccessModal(e) },
+                          { separator: true },
+                          { label: 'Deactivate', icon: FiTrash2, danger: true, onSelect: () => handleDelete(e._id) },
+                      ],
+            { label: 'Employee actions' }
+        ),
+    ];
+
     const getStatusBadge = (status) => {
         switch (status) {
             case 'active':
-                return 'bg-green-100 text-green-600 dark:bg-[rgba(52,232,161,0.15)] dark:text-d-green';
+                return 'bg-success-chip text-success';
             case 'inactive':
-                return 'bg-red-100 text-red-600 dark:bg-[rgba(255,107,107,0.15)] dark:text-d-red';
+                return 'bg-destructive-chip text-destructive';
             case 'on_leave':
-                return 'bg-yellow-100 text-yellow-600 dark:bg-[rgba(255,210,100,0.15)] dark:text-d-accent';
+                return 'bg-warning-chip text-warning-chip-foreground';
             default:
-                return 'bg-slate-100 text-slate-600 dark:bg-d-glass-hover dark:text-d-muted';
+                return 'bg-muted text-muted-foreground';
         }
     };
 
-    const inputClass = "w-full px-4 py-2 bg-white dark:bg-d-bg border border-slate-200 dark:border-d-border rounded-xl text-slate-800 dark:text-d-text placeholder-slate-400 dark:placeholder-d-faint focus:outline-none focus:border-amber-300 dark:focus:border-d-border-hover";
-    const labelClass = "block text-sm font-medium text-slate-700 dark:text-d-muted mb-1";
+    const inputClass = "w-full px-4 py-2 bg-card border border-hairline rounded-xl text-foreground placeholder:text-placeholder focus:outline-none focus:border-primary/30";
+    const labelClass = "block text-sm font-medium text-foreground mb-1";
 
     return (
-        <div className="p-6 animate-fadeIn bg-slate-50 dark:bg-d-bg min-h-full">
+        <div className="p-6 animate-fadeIn min-h-full">
             {/* Header */}
-            <div className="flex items-center justify-between mb-6">
-                <div>
-                    <h1 className="text-2xl font-bold text-slate-800 dark:text-d-heading">Employees</h1>
-                    <p className="text-slate-500 dark:text-d-muted">{employees.length} team members</p>
-                </div>
-                <button
-                    onClick={() => openModal()}
-                    className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-amber-400 to-amber-500 dark:from-d-accent dark:to-d-accent-s text-white dark:text-d-card rounded-xl font-semibold hover:shadow-md dark:hover:shadow-[0_4px_20px_rgba(255,210,100,0.4)] transition-all"
-                >
-                    <FiPlus />
-                    Add Employee
-                </button>
-            </div>
+            <PageHeader
+                title={config?.staffLabel || 'Staff'}
+                subtitle={`${employees.length} ${employees.length === 1 ? 'person' : 'people'} who can sign in at the counter`}
+                actions={
+                    <Button onClick={() => openModal()}>
+                        <FiPlus aria-hidden="true" />
+                        Add person
+                    </Button>
+                }
+            />
 
-            {/* Search + Status Filter */}
-            <div className="flex flex-wrap items-center gap-3 mb-6">
-                <div className="relative flex-1 max-w-md">
-                    <FiSearch className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 dark:text-d-faint" />
-                    <input
-                        type="text"
-                        value={searchQuery}
-                        onChange={(e) => setSearchQuery(e.target.value)}
-                        placeholder="Search by name, ID, email or phone..."
-                        className="w-full pl-12 pr-4 py-3 bg-white dark:bg-d-card border border-slate-200 dark:border-d-border rounded-xl text-slate-800 dark:text-d-text placeholder-slate-400 dark:placeholder-d-faint focus:outline-none focus:border-amber-300 dark:focus:border-d-border-hover transition-colors"
+            <DataTable
+                id="employees"
+                caption="Employees"
+                data={filteredEmployees}
+                columns={employeeColumns}
+                getRowId={(e) => e._id}
+                loading={loading}
+                error={loadError ? { message: loadError, onRetry: () => { setLoading(true); fetchEmployees(); } } : null}
+                search={{ value: searchQuery, onChange: setSearchQuery, placeholder: 'Search by name, ID, email or phone' }}
+                filters={
+                    <SegmentedControl
+                        label="Status"
+                        value={statusFilter}
+                        onChange={setStatusFilter}
+                        options={[
+                            { value: 'active', label: 'Active' },
+                            { value: 'inactive', label: 'Inactive' },
+                            { value: 'all', label: 'All' },
+                        ]}
                     />
-                </div>
-                <div className="flex rounded-xl border border-slate-200 dark:border-d-border overflow-hidden">
-                    {[
-                        { value: 'active', label: 'Active' },
-                        { value: 'inactive', label: 'Inactive' },
-                        { value: 'all', label: 'All' },
-                    ].map((opt) => (
-                        <button
-                            key={opt.value}
-                            onClick={() => setStatusFilter(opt.value)}
-                            className={`px-4 py-2.5 text-sm font-medium transition-colors ${
-                                statusFilter === opt.value
-                                    ? 'bg-amber-500 dark:bg-d-accent text-white dark:text-d-card'
-                                    : 'bg-white dark:bg-d-card text-slate-500 dark:text-d-muted hover:bg-slate-50 dark:hover:bg-d-glass'
-                            }`}
-                        >
-                            {opt.label}
-                        </button>
-                    ))}
-                </div>
-            </div>
-
-            {/* Employees Grid */}
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {filteredEmployees.map((employee) => (
-                    <div
-                        key={employee._id}
-                        className="bg-white dark:bg-d-card rounded-2xl p-6 shadow-sm border border-slate-100 dark:border-d-border hover:border-amber-300 dark:hover:border-d-border-hover transition-all"
-                    >
-                        <div className="flex items-start justify-between mb-4">
-                            <div className="flex items-center gap-4">
-                                <div className="w-14 h-14 bg-primary-100 dark:bg-[rgba(255,210,100,0.1)] rounded-xl flex items-center justify-center">
-                                    <span className="text-xl font-bold text-primary-600 dark:text-d-accent">
-                                        {employee.name?.charAt(0).toUpperCase()}
-                                    </span>
-                                </div>
-                                <div>
-                                    <h3 className="font-semibold text-slate-800 dark:text-d-text">{employee.name}</h3>
-                                    {employee.employeeId && (
-                                        <p className="text-xs text-slate-400 dark:text-d-faint font-mono">{employee.employeeId}</p>
-                                    )}
-                                    <div className="flex items-center gap-2 mt-1">
-                                        {employee.role === 'manager' && (
-                                            <span className="inline-block px-2 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-600 dark:bg-[rgba(139,92,246,0.15)] dark:text-[#a78bfa]">
-                                                Manager
-                                            </span>
-                                        )}
-                                        <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-medium ${getStatusBadge(employee.status)}`}>
-                                            {employee.status || 'active'}
-                                        </span>
-                                    </div>
-                                </div>
-                            </div>
-                            <div className="flex gap-1">
-                                {employee.status === 'inactive' ? (
-                                    <button
-                                        onClick={() => handleReactivate(employee._id)}
-                                        className="p-2 text-slate-400 dark:text-d-faint hover:text-green-500 dark:hover:text-d-green hover:bg-green-50 dark:hover:bg-[rgba(52,232,161,0.1)] rounded-lg transition-colors"
-                                        title="Reactivate"
-                                    >
-                                        <FiRefreshCw size={18} />
-                                    </button>
-                                ) : (
-                                    <>
-                                        <button
-                                            onClick={() => openAccessModal(employee)}
-                                            className="p-2 text-slate-400 dark:text-d-faint hover:text-purple-500 dark:hover:text-[#a78bfa] hover:bg-purple-50 dark:hover:bg-[rgba(139,92,246,0.1)] rounded-lg transition-colors"
-                                            title="Access Control"
-                                        >
-                                            <FiShield size={18} />
-                                        </button>
-                                        <button
-                                            onClick={() => openModal(employee)}
-                                            className="p-2 text-slate-400 dark:text-d-faint hover:text-primary-500 dark:hover:text-d-accent hover:bg-primary-50 dark:hover:bg-[rgba(255,210,100,0.1)] rounded-lg transition-colors"
-                                        >
-                                            <FiEdit2 size={18} />
-                                        </button>
-                                        <button
-                                            onClick={() => handleDelete(employee._id)}
-                                            className="p-2 text-slate-400 dark:text-d-faint hover:text-red-500 dark:hover:text-d-red hover:bg-red-50 dark:hover:bg-[rgba(255,107,107,0.1)] rounded-lg transition-colors"
-                                            title="Deactivate"
-                                        >
-                                            <FiTrash2 size={18} />
-                                        </button>
-                                    </>
-                                )}
-                            </div>
-                        </div>
-
-                        <div className="space-y-2">
-                            {employee.email && (
-                                <div className="flex items-center gap-2 text-sm text-slate-500 dark:text-d-muted">
-                                    <FiMail size={14} />
-                                    <span>{employee.email}</span>
-                                </div>
-                            )}
-                            {employee.phone && (
-                                <div className="flex items-center gap-2 text-sm text-slate-500 dark:text-d-muted">
-                                    <FiPhone size={14} />
-                                    <span>{employee.phone}</span>
-                                </div>
-                            )}
-                            {employee.salary > 0 && (
-                                <div className="flex items-center gap-2 text-sm text-slate-500 dark:text-d-muted">
-                                    <FiDollarSign size={14} />
-                                    <span>{employee.salary?.toLocaleString()} /month</span>
-                                </div>
-                            )}
-                            {employee.workingHours && (
-                                <div className="flex items-center gap-2 text-sm text-slate-500 dark:text-d-muted">
-                                    <FiClock size={14} />
-                                    <span>{employee.workingHours.start} - {employee.workingHours.end}</span>
-                                </div>
-                            )}
-                            {isService && employee.commissionRate > 0 && (
-                                <div className="flex items-center gap-2 text-sm text-slate-500 dark:text-d-muted">
-                                    <FiPercent size={14} />
-                                    <span>{employee.commissionRate}% commission</span>
-                                </div>
-                            )}
-                        </div>
-                    </div>
-                ))}
-            </div>
-
-            {filteredEmployees.length === 0 && (
-                <div className="flex flex-col items-center justify-center py-16 text-slate-400 dark:text-d-faint">
-                    <FiUsers size={48} />
-                    <p className="mt-4 dark:text-d-muted">No employees found</p>
-                </div>
-            )}
+                }
+                isFiltered={!!searchQuery || (statusFilter !== 'all' && employees.length > 0)}
+                onClearFilters={() => {
+                    setSearchQuery('');
+                    setStatusFilter('all');
+                }}
+                empty={{ icon: FiUsers, title: 'No employees yet', description: 'Add the people who sell at your counter.' }}
+                onRowClick={(e) => (e.status === 'inactive' ? null : openModal(e))}
+                rowLabel={(e) => `Edit ${e.name}`}
+                rowClassName={(e) => (e.status === 'inactive' ? 'opacity-70' : '')}
+                initialSort={[{ id: 'name', desc: false }]}
+            />
 
             {/* Add/Edit Employee Modal */}
             {showModal && (
-                <div className="fixed inset-0 bg-black/50 dark:bg-black/60 flex items-center justify-center z-50 p-4">
-                    <div className="bg-white dark:bg-d-card dark:border dark:border-d-border rounded-2xl w-full max-w-lg animate-fadeIn max-h-[90vh] overflow-y-auto">
-                        <div className="flex items-center justify-between p-6 border-b border-slate-200 dark:border-d-border sticky top-0 bg-white dark:bg-d-card rounded-t-2xl z-10">
-                            <h3 className="text-xl font-semibold text-slate-800 dark:text-d-heading">
+                <DialogShell size="md" className="max-h-[90vh] overflow-y-auto">
+                        <div className="flex items-center justify-between p-6 border-b border-hairline sticky top-0 bg-card rounded-t-2xl z-10">
+                            <h3 className="text-xl font-semibold text-foreground">
                                 {editingEmployee ? 'Edit Employee' : 'Add Employee'}
                             </h3>
-                            <button
+                            <button data-dialog-close
                                 onClick={() => setShowModal(false)}
-                                className="p-2 hover:bg-slate-100 dark:hover:bg-d-glass-hover rounded-lg transition-colors text-slate-600 dark:text-d-muted"
+                                className="p-2 hover:bg-[var(--hover-overlay)] rounded-lg transition-colors text-muted-foreground"
                             >
                                 <FiX />
                             </button>
@@ -550,9 +510,9 @@ const Employees = () => {
                             {/* Employee ID */}
                             <div>
                                 <label className={labelClass}>Employee ID</label>
-                                <div className={`${inputClass} bg-slate-50 dark:bg-d-elevated flex items-center gap-2`}>
-                                    <FiHash size={14} className="text-slate-400 dark:text-d-faint" />
-                                    <span className={generatedId || editingEmployee?.employeeId ? 'text-slate-800 dark:text-d-text' : 'text-slate-400 dark:text-d-faint'}>
+                                <div className={`${inputClass} bg-muted/40 flex items-center gap-2`}>
+                                    <FiHash size={14} className="text-muted-foreground" />
+                                    <span className={generatedId || editingEmployee?.employeeId ? 'text-foreground' : 'text-muted-foreground'}>
                                         {editingEmployee ? editingEmployee.employeeId : (generatedId || 'Auto-generated from name')}
                                     </span>
                                 </div>
@@ -581,9 +541,9 @@ const Employees = () => {
                                         type="checkbox"
                                         checked={formData.requirePasswordChange}
                                         onChange={(e) => setFormData({ ...formData, requirePasswordChange: e.target.checked })}
-                                        className="w-4 h-4 rounded border-slate-300 text-amber-500 focus:ring-amber-400"
+                                        className="w-4 h-4 rounded border-border text-primary focus:ring-ring"
                                     />
-                                    <span className="text-sm text-slate-700 dark:text-d-text">
+                                    <span className="text-sm text-foreground">
                                         Require password change on first login
                                     </span>
                                 </label>
@@ -641,16 +601,16 @@ const Employees = () => {
                             </div>
 
                             {/* Manager toggle */}
-                            <label className="flex items-center gap-3 cursor-pointer p-3 bg-purple-50 dark:bg-[rgba(139,92,246,0.1)] rounded-xl border border-purple-200 dark:border-[rgba(139,92,246,0.2)]">
+                            <label className="flex items-center gap-3 cursor-pointer p-3 bg-accent rounded-xl border border-primary/30">
                                 <input
                                     type="checkbox"
                                     checked={formData.isManager}
                                     onChange={(e) => setFormData({ ...formData, isManager: e.target.checked })}
-                                    className="w-4 h-4 rounded border-slate-300 text-purple-500 focus:ring-purple-400"
+                                    className="w-4 h-4 rounded border-border text-primary focus:ring-ring"
                                 />
                                 <div>
-                                    <span className="text-sm font-medium text-purple-700 dark:text-[#a78bfa]">Manager Access</span>
-                                    <p className="text-xs text-purple-500 dark:text-[#a78bfa]/70">Can manage other employees and their permissions</p>
+                                    <span className="text-sm font-medium text-primary">Manager Access</span>
+                                    <p className="text-xs text-primary">Can manage other employees and their permissions</p>
                                 </div>
                             </label>
 
@@ -696,8 +656,8 @@ const Employees = () => {
                                             onClick={() => toggleDayOff(day)}
                                             className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
                                                 formData.daysOff.includes(day)
-                                                    ? 'bg-amber-100 text-amber-700 dark:bg-[rgba(255,210,100,0.2)] dark:text-d-accent border border-amber-300 dark:border-d-accent'
-                                                    : 'bg-slate-100 text-slate-500 dark:bg-d-glass dark:text-d-muted border border-transparent hover:border-slate-300 dark:hover:border-d-border'
+                                                    ? 'bg-accent text-primary border border-primary/30'
+                                                    : 'bg-muted text-muted-foreground border border-transparent hover:border-border'
                                             }`}
                                         >
                                             {day.charAt(0).toUpperCase() + day.slice(1, 3)}
@@ -718,7 +678,7 @@ const Employees = () => {
                                             className={inputClass}
                                             placeholder="e.g. Haircut, Coloring, Styling"
                                         />
-                                        <p className="text-xs text-slate-400 dark:text-d-faint mt-1">Comma-separated</p>
+                                        <p className="text-xs text-muted-foreground mt-1">Comma-separated</p>
                                     </div>
                                     <div>
                                         <label className={labelClass}>Commission Rate (%)</label>
@@ -737,40 +697,38 @@ const Employees = () => {
                                 <button
                                     type="button"
                                     onClick={() => setShowModal(false)}
-                                    className="flex-1 py-3 border border-slate-200 dark:border-d-border rounded-xl font-medium text-slate-600 dark:text-d-muted hover:bg-slate-50 dark:hover:bg-d-glass transition-colors"
+                                    className="flex-1 py-3 border border-hairline rounded-xl font-medium text-muted-foreground hover:bg-[var(--hover-overlay)] transition-colors"
                                 >
                                     Cancel
                                 </button>
                                 <button
                                     type="submit"
                                     disabled={submitting}
-                                    className="flex-1 py-3 bg-gradient-to-r from-amber-400 to-amber-500 dark:from-d-accent dark:to-d-accent-s text-white dark:text-d-card rounded-xl font-medium hover:shadow-md dark:hover:shadow-[0_4px_20px_rgba(255,210,100,0.4)] transition-all flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
+                                    className="flex-1 py-3 bg-primary text-white rounded-xl font-medium hover:shadow-md transition-all flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
                                 >
                                     <FiSave /> {submitting ? 'Saving...' : 'Save'}
                                 </button>
                             </div>
                         </form>
-                    </div>
-                </div>
+                    </DialogShell>
             )}
 
             {/* Access Control Modal */}
             {showAccessModal && accessEmployee && (
-                <div className="fixed inset-0 bg-black/50 dark:bg-black/60 flex items-center justify-center z-50 p-4">
-                    <div className="bg-white dark:bg-d-card dark:border dark:border-d-border rounded-2xl w-full max-w-2xl animate-fadeIn max-h-[90vh] overflow-y-auto">
-                        <div className="flex items-center justify-between p-6 border-b border-slate-200 dark:border-d-border sticky top-0 bg-white dark:bg-d-card rounded-t-2xl z-10">
+                <DialogShell size="lg" className="max-h-[90vh] overflow-y-auto">
+                        <div className="flex items-center justify-between p-6 border-b border-hairline sticky top-0 bg-card rounded-t-2xl z-10">
                             <div>
-                                <h3 className="text-xl font-semibold text-slate-800 dark:text-d-heading flex items-center gap-2">
-                                    <FiShield className="text-purple-500" />
+                                <h3 className="text-xl font-semibold text-foreground flex items-center gap-2">
+                                    <FiShield className="text-primary" />
                                     Access Control
                                 </h3>
-                                <p className="text-sm text-slate-500 dark:text-d-muted mt-1">
+                                <p className="text-sm text-muted-foreground mt-1">
                                     {accessEmployee.name} ({accessEmployee.employeeId})
                                 </p>
                             </div>
-                            <button
+                            <button data-dialog-close
                                 onClick={() => setShowAccessModal(false)}
-                                className="p-2 hover:bg-slate-100 dark:hover:bg-d-glass-hover rounded-lg transition-colors text-slate-600 dark:text-d-muted"
+                                className="p-2 hover:bg-[var(--hover-overlay)] rounded-lg transition-colors text-muted-foreground"
                             >
                                 <FiX />
                             </button>
@@ -779,7 +737,7 @@ const Employees = () => {
                         <div className="p-6">
                             {loadingAccess ? (
                                 <div className="flex justify-center py-8">
-                                    <div className="w-8 h-8 border-3 border-purple-500 border-t-transparent rounded-full animate-spin" />
+                                    <div className="w-8 h-8 border-3 border-primary border-t-transparent rounded-full animate-spin" />
                                 </div>
                             ) : (
                                 <div className="space-y-4">
@@ -788,19 +746,19 @@ const Employees = () => {
                                         const someEnabled = mod.actions.some(a => permissionOn(permissions, mod.key, a));
 
                                         return (
-                                            <div key={mod.key} className="border border-slate-200 dark:border-d-border rounded-xl overflow-hidden">
+                                            <div key={mod.key} className="border border-hairline rounded-xl overflow-hidden">
                                                 {/* Module header */}
                                                 <button
                                                     type="button"
                                                     onClick={() => toggleAllModule(mod.key, mod.actions)}
-                                                    className="w-full flex items-center justify-between px-4 py-3 bg-slate-50 dark:bg-d-elevated hover:bg-slate-100 dark:hover:bg-d-glass-hover transition-colors"
+                                                    className="w-full flex items-center justify-between px-4 py-3 bg-muted/40 hover:bg-[var(--hover-overlay)] transition-colors"
                                                 >
-                                                    <span className="font-medium text-slate-700 dark:text-d-text text-sm">{mod.label}</span>
+                                                    <span className="font-medium text-foreground text-sm">{mod.label}</span>
                                                     <div className={`w-5 h-5 rounded flex items-center justify-center text-white text-xs ${
-                                                        allEnabled ? 'bg-purple-500' : someEnabled ? 'bg-purple-300 dark:bg-purple-500/50' : 'bg-slate-300 dark:bg-d-border'
+                                                        allEnabled ? 'bg-primary' : someEnabled ? 'bg-primary/25' : 'bg-border'
                                                     }`}>
                                                         {allEnabled && <FiCheck size={12} />}
-                                                        {someEnabled && !allEnabled && <span className="w-2 h-0.5 bg-white rounded" />}
+                                                        {someEnabled && !allEnabled && <span className="w-2 h-0.5 bg-card rounded" />}
                                                     </div>
                                                 </button>
 
@@ -813,8 +771,8 @@ const Employees = () => {
                                                             onClick={() => togglePermission(mod.key, action)}
                                                             className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
                                                                 permissionOn(permissions, mod.key, action)
-                                                                    ? 'bg-purple-100 text-purple-700 dark:bg-[rgba(139,92,246,0.2)] dark:text-[#a78bfa] border border-purple-300 dark:border-[rgba(139,92,246,0.3)]'
-                                                                    : 'bg-slate-100 text-slate-500 dark:bg-d-glass dark:text-d-muted border border-transparent hover:border-slate-300 dark:hover:border-d-border'
+                                                                    ? 'bg-accent text-primary border border-primary/30'
+                                                                    : 'bg-muted text-muted-foreground border border-transparent hover:border-border'
                                                             }`}
                                                         >
                                                             {ACTION_LABELS[action] || action}
@@ -831,7 +789,7 @@ const Employees = () => {
                                 <button
                                     type="button"
                                     onClick={() => setShowAccessModal(false)}
-                                    className="flex-1 py-3 border border-slate-200 dark:border-d-border rounded-xl font-medium text-slate-600 dark:text-d-muted hover:bg-slate-50 dark:hover:bg-d-glass transition-colors"
+                                    className="flex-1 py-3 border border-hairline rounded-xl font-medium text-muted-foreground hover:bg-[var(--hover-overlay)] transition-colors"
                                 >
                                     Cancel
                                 </button>
@@ -839,10 +797,10 @@ const Employees = () => {
                                     type="button"
                                     onClick={handleSaveAccess}
                                     disabled={savingAccess || loadingAccess}
-                                    className="flex-1 py-3 bg-purple-500 text-white rounded-xl font-medium hover:bg-purple-600 transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
+                                    className="flex-1 py-3 bg-primary text-white rounded-xl font-medium hover:bg-primary/90 transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
                                 >
                                     {savingAccess ? (
-                                        <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                                        <div className="w-5 h-5 border-2 border-hairline border-t-transparent rounded-full animate-spin" />
                                     ) : (
                                         <FiShield />
                                     )}
@@ -850,8 +808,7 @@ const Employees = () => {
                                 </button>
                             </div>
                         </div>
-                    </div>
-                </div>
+                    </DialogShell>
             )}
         </div>
     );

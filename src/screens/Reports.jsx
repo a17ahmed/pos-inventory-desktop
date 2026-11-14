@@ -1,4 +1,8 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { PageSkeleton } from '../components/ui/PageSkeleton';
+import { PageHeader } from '../components/ui/PageHeader';
+import { KpiCard, KpiStrip, ChartPanel, BarChart, AreaChart, DonutChart, HorizontalBarChart, SegmentedControl, Tabs, Button, IconButton, Input, Field, StateCard } from '../components/ui';
+import { CARD_FRAME } from '../components/ui/Card';
 import { useBusiness } from '../context/BusinessContext';
 import { appAlert } from '../components/AppDialog';
 import {
@@ -22,21 +26,6 @@ import {
     FiX,
     FiFileText,
 } from 'react-icons/fi';
-import {
-    PieChart,
-    Pie,
-    Cell,
-    ResponsiveContainer,
-    BarChart,
-    Bar,
-    XAxis,
-    YAxis,
-    CartesianGrid,
-    Tooltip,
-    Legend,
-    LineChart,
-    Line,
-} from 'recharts';
 import {
     getProfitReport,
     getSalesTimeline,
@@ -71,19 +60,6 @@ const TIME_FILTERS = [
     { key: 'year', label: 'Year' },
     { key: 'custom', label: 'Custom' },
 ];
-
-const PIE_COLORS = [
-    '#3b82f6', '#22c55e', '#f97316', '#ef4444', '#8b5cf6',
-    '#ec4899', '#14b8a6', '#eab308', '#06b6d4', '#6366f1',
-];
-
-const PAYMENT_COLORS = {
-    cash: '#22c55e',
-    card: '#3b82f6',
-    online: '#8b5cf6',
-    store_credit: '#f97316',
-    unknown: '#64748b',
-};
 
 // ── Helpers ──────────────────────────────────────────────────────
 const fmt = (n) => `Rs. ${(n || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`;
@@ -137,47 +113,86 @@ const getFilterLabel = (filter, customStart, customEnd) => {
     }
 };
 
+
+// ── Timeline helpers ─────────────────────────────────────────────
+const MEASURES = [
+    { value: 'totalSales', label: 'Revenue' },
+    { value: 'totalProfit', label: 'Profit' },
+    { value: 'billCount', label: 'Bills' },
+];
+
+const pad2 = (n) => String(n).padStart(2, '0');
+const dayKey = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+const monthKeyOf = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}`;
+const isoWeekKey = (d) => {
+    const t = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+    const wd = t.getUTCDay() || 7;
+    t.setUTCDate(t.getUTCDate() + 4 - wd);
+    const y = t.getUTCFullYear();
+    const w = Math.ceil(((t - Date.UTC(y, 0, 1)) / 86400000 + 1) / 7);
+    return `${y}-W${pad2(w)}`;
+};
+const dm = (d, opts) => d.toLocaleDateString('en-GB', opts);
+
+/**
+ * The server only returns periods that had bills. Fill every day / week / month of the range
+ * (zeros included) so the chart has no gaps, and add a short `label` and a long `full` name.
+ */
+const fillTimeline = (rows, group, range) => {
+    const byKey = new Map(rows.map((r) => [r.period, r]));
+    const start = new Date(range.startDate);
+    const end = new Date(range.endDate);
+    const out = [];
+    const seen = new Set();
+    const d = new Date(start.getFullYear(), start.getMonth(), start.getDate());
+    for (let guard = 0; d <= end && guard < 800; guard += 1) {
+        const key = group === 'month' ? monthKeyOf(d) : group === 'week' ? isoWeekKey(d) : dayKey(d);
+        if (!seen.has(key)) {
+            seen.add(key);
+            const first = new Date(d);
+            const label = group === 'month' ? dm(first, { month: 'short' }) : dm(first, { day: 'numeric', month: 'short' });
+            const full =
+                group === 'month'
+                    ? dm(first, { month: 'long', year: 'numeric' })
+                    : group === 'week'
+                      ? `Week of ${dm(first, { day: 'numeric', month: 'short', year: 'numeric' })}`
+                      : dm(first, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
+            const r = byKey.get(key) || {};
+            out.push({ period: key, totalSales: 0, totalProfit: 0, billCount: 0, ...r, label, full });
+        }
+        d.setDate(d.getDate() + 1);
+    }
+    return out;
+};
+
+const shortMoney = (v) => {
+    const n = Math.abs(Number(v) || 0);
+    const sign = Number(v) < 0 ? '−' : '';
+    if (n >= 1e6) return `${sign}${(n / 1e6).toFixed(n >= 1e7 ? 0 : 1)}M`;
+    if (n >= 1e3) return `${sign}${(n / 1e3).toFixed(n >= 1e4 ? 0 : 1)}K`;
+    return `${sign}${Math.round(n)}`;
+};
+
+const METHOD_LABEL = { cash: 'Cash', card: 'Card', online: 'Online', store_credit: 'Store credit', split: 'Split', credit: 'On credit' };
+const methodLabel = (m) => METHOD_LABEL[m] || String(m || 'Unknown').replace(/_/g, ' ');
+
 // ── Card wrapper ─────────────────────────────────────────────────
-const Card = ({ children, className = '' }) => (
-    <div className={`bg-white dark:bg-d-card rounded-2xl shadow-sm border border-slate-100 dark:border-d-border p-6 ${className}`}>
-        {children}
-    </div>
-);
+const Card = ({ children, className = '' }) => <div className={`${CARD_FRAME} p-6 min-w-0 ${className}`}>{children}</div>;
 
-const STAT_COLORS = {
-    blue:   { bg: 'bg-blue-100 dark:bg-blue-900/30', text: 'text-blue-600 dark:text-blue-400' },
-    green:  { bg: 'bg-green-100 dark:bg-green-900/30', text: 'text-green-600 dark:text-green-400' },
-    red:    { bg: 'bg-red-100 dark:bg-red-900/30', text: 'text-red-600 dark:text-red-400' },
-    purple: { bg: 'bg-purple-100 dark:bg-purple-900/30', text: 'text-purple-600 dark:text-purple-400' },
-    orange: { bg: 'bg-orange-100 dark:bg-orange-900/30', text: 'text-orange-600 dark:text-orange-400' },
-};
+const CardTitle = ({ children }) => <h3 className="font-heading text-h4 text-foreground mb-3">{children}</h3>;
 
-const StatCard = ({ label, value, icon: Icon, color = 'blue', sub }) => {
-    const c = STAT_COLORS[color] || STAT_COLORS.blue;
-    return (
-        <Card>
-            <div className="flex items-start justify-between">
-                <div>
-                    <p className="text-slate-500 dark:text-d-muted text-sm">{label}</p>
-                    <p className="text-2xl font-bold text-slate-800 dark:text-d-heading mt-1">{value}</p>
-                    {sub && <p className="text-xs text-slate-400 dark:text-d-muted mt-1">{sub}</p>}
-                </div>
-                <div className={`w-12 h-12 rounded-xl ${c.bg} flex items-center justify-center print:hidden`}>
-                    <Icon size={24} className={c.text} />
-                </div>
-            </div>
-        </Card>
-    );
-};
+// Old colour names → figure tone
+const TONE = { green: 'success', red: 'destructive', orange: 'warning' };
+const StatCard = ({ label, value, color, sub, tone }) => <KpiCard label={label} value={value} note={sub} tone={tone || TONE[color]} />;
 
 // ── Table component ──────────────────────────────────────────────
 const DataTable = ({ columns, data, footer, compact }) => (
-    <div className="overflow-x-auto">
+    <div className="overflow-auto max-h-[max(320px,calc(100vh-300px))] print:max-h-none print:overflow-visible">
         <table className={`w-full ${compact ? 'text-xs' : 'text-sm'}`}>
             <thead>
-                <tr className="border-b border-slate-200 dark:border-d-border print:border-black">
+                <tr className="border-b border-border bg-muted/30 print:bg-transparent print:border-black">
                     {columns.map((col, i) => (
-                        <th key={i} className={`py-2 px-3 text-slate-500 dark:text-d-muted font-medium print:text-black ${col.align === 'right' ? 'text-right' : 'text-left'}`}>
+                        <th key={i} className={`sticky top-0 z-[1] print:static bg-[color-mix(in_oklab,var(--muted)_45%,var(--card))] shadow-[inset_0_-1px_0_var(--border)] print:bg-transparent print:shadow-none h-[var(--head-h)] px-3 font-mono text-th uppercase font-medium text-muted-foreground whitespace-nowrap print:h-auto print:py-2 print:text-black ${col.align === 'right' ? 'text-right' : 'text-left'}`}>
                             {col.label}
                         </th>
                     ))}
@@ -186,13 +201,13 @@ const DataTable = ({ columns, data, footer, compact }) => (
             <tbody>
                 {data.length === 0 ? (
                     <tr>
-                        <td colSpan={columns.length} className="py-6 text-center text-slate-400 dark:text-d-muted">No data for this period</td>
+                        <td colSpan={columns.length} className="py-6 text-center text-muted-foreground">No data for this period</td>
                     </tr>
                 ) : (
                     data.map((row, ri) => (
-                        <tr key={ri} className="border-b border-slate-50 dark:border-d-border/50 print:border-gray-200 hover:bg-slate-100 dark:hover:bg-white/5 print:hover:bg-transparent">
+                        <tr key={ri} className="border-b border-hairline print:border-hairline hover:bg-[var(--hover-overlay)] print:hover:bg-transparent">
                             {columns.map((col, ci) => (
-                                <td key={ci} className={`py-2 px-3 text-slate-700 dark:text-d-text print:text-black ${col.align === 'right' ? 'text-right font-mono' : ''}`}>
+                                <td key={ci} className={`py-2 px-3 text-foreground print:text-black ${col.align === 'right' ? 'text-right tabular-nums whitespace-nowrap' : ''}`}>
                                     {col.render ? col.render(row) : row[col.key]}
                                 </td>
                             ))}
@@ -202,9 +217,9 @@ const DataTable = ({ columns, data, footer, compact }) => (
             </tbody>
             {footer && (
                 <tfoot>
-                    <tr className="border-t-2 border-slate-200 dark:border-d-border print:border-black bg-slate-100 dark:bg-white/10 print:bg-gray-100 font-semibold">
+                    <tr className="border-t border-border print:border-black bg-muted/50 print:bg-muted font-semibold">
                         {footer.map((cell, i) => (
-                            <td key={i} className={`py-2 px-3 text-slate-800 dark:text-d-heading print:text-black ${columns[i]?.align === 'right' ? 'text-right font-mono' : ''}`}>
+                            <td key={i} className={`py-2 px-3 text-foreground print:text-black ${columns[i]?.align === 'right' ? 'text-right tabular-nums' : ''}`}>
                                 {cell}
                             </td>
                         ))}
@@ -217,21 +232,21 @@ const DataTable = ({ columns, data, footer, compact }) => (
 
 // ── P&L line row ─────────────────────────────────────────────────
 const PnlRow = ({ label, amount, indent, bold, negative, border, bg, growth, sub, formula }) => (
-    <div className={`flex justify-between items-center py-2.5 ${indent ? 'pl-6' : ''} ${border ? 'border-b-2 border-slate-200 dark:border-d-border print:border-black' : 'border-b border-slate-50 dark:border-d-border/50 print:border-gray-200'} ${bg ? '-mx-6 px-6 bg-slate-50 dark:bg-d-elevated print:bg-gray-100' : ''}`}>
+    <div className={`flex justify-between items-center py-2.5 ${indent ? 'pl-6' : ''} ${border ? 'border-b-2 border-border print:border-black' : 'border-b border-hairline print:border-hairline'} ${bg ? '-mx-6 px-6 bg-muted/50 print:bg-muted' : ''}`}>
         <div className="flex-1">
-            <span className={`${bold ? 'font-semibold text-slate-800 dark:text-d-heading print:text-black' : indent ? 'text-slate-500 dark:text-d-muted text-sm print:text-gray-600' : 'text-slate-600 dark:text-d-text print:text-black'} ${negative ? 'text-red-500 dark:text-d-red print:text-black flex items-center gap-1.5' : ''}`}>
+            <span className={`${bold ? 'font-semibold text-foreground print:text-black' : indent ? 'text-muted-foreground text-sm print:text-muted-foreground' : 'text-foreground print:text-black'} ${negative ? 'text-destructive print:text-black flex items-center gap-1.5' : ''}`}>
                 {negative && <FiMinusCircle size={14} className="print:hidden" />}
                 {label}
             </span>
-            {formula && <span className="text-xs text-slate-400 dark:text-d-muted ml-2 print:text-gray-500">({formula})</span>}
-            {sub && <span className="text-xs text-slate-400 dark:text-d-muted ml-2">({sub})</span>}
+            {formula && <span className="text-xs text-muted-foreground ml-2 print:text-muted-foreground">({formula})</span>}
+            {sub && <span className="text-xs text-muted-foreground ml-2">({sub})</span>}
         </div>
         <div className="flex items-center gap-3">
-            <span className={`${bold ? 'font-bold text-lg text-slate-800 dark:text-d-heading print:text-black' : negative ? 'text-red-500 dark:text-d-red print:text-black' : 'text-slate-700 dark:text-d-text print:text-black'} font-mono`}>
+            <span className={`${bold ? 'font-bold text-lg text-foreground print:text-black' : negative ? 'text-destructive print:text-black' : 'text-foreground print:text-black'} tabular-nums`}>
                 {negative ? `- ${fmt(Math.abs(amount))}` : fmt(amount)}
             </span>
             {growth !== undefined && (
-                <span className={`flex items-center text-xs print:hidden ${growth >= 0 ? 'text-green-500 dark:text-d-green' : 'text-red-500 dark:text-d-red'}`}>
+                <span className={`flex items-center text-xs print:hidden ${growth >= 0 ? 'text-success' : 'text-destructive'}`}>
                     {growth >= 0 ? <FiArrowUp size={12} /> : <FiArrowDown size={12} />}
                     {Math.abs(growth).toFixed(1)}%
                 </span>
@@ -243,7 +258,7 @@ const PnlRow = ({ label, amount, indent, bold, negative, border, bg, growth, sub
 // ── Print section header ─────────────────────────────────────────
 const PrintSection = ({ title, children }) => (
     <div className="mb-8 print:break-inside-avoid">
-        <h3 className="text-lg font-bold text-slate-800 dark:text-d-heading print:text-black border-b-2 border-slate-300 dark:border-d-border print:border-black pb-2 mb-4">
+        <h3 className="text-lg font-bold text-foreground print:text-black border-b-2 border-border print:border-black pb-2 mb-4">
             {title}
         </h3>
         {children}
@@ -257,6 +272,8 @@ const Reports = () => {
     const { business } = useBusiness();
     const [tab, setTab] = useState('pnl');
     const [timeFilter, setTimeFilter] = useState('month');
+    const [groupChoice, setGroupChoice] = useState(null); // null = pick from the period
+    const [measure, setMeasure] = useState('totalSales');
     const [customStart, setCustomStart] = useState('');
     const [customEnd, setCustomEnd] = useState('');
     const [loading, setLoading] = useState(true);
@@ -278,19 +295,24 @@ const Reports = () => {
     const [allData, setAllData] = useState(null);
 
     const dateParams = getDateRange(timeFilter, customStart, customEnd);
+    const rangeDays = Math.round((new Date(dateParams.endDate) - new Date(dateParams.startDate)) / 86400000) + 1;
+    const timelineGroup = groupChoice || (rangeDays > 92 ? 'month' : 'day');
+    const setTimelineGroup = setGroupChoice;
     const periodLabel = getFilterLabel(timeFilter, customStart, customEnd);
 
     // ── Fetch data for active tab ────────────────────────────────
+    const [loadError, setLoadError] = useState(null);
     const fetchData = useCallback(async () => {
         if (timeFilter === 'custom' && (!customStart || !customEnd)) return;
         setLoading(true);
+        setLoadError(null);
         try {
             const params = { startDate: dateParams.startDate, endDate: dateParams.endDate };
 
             if (tab === 'pnl') {
                 const [profitRes, timelineRes] = await Promise.all([
                     getProfitReport(params),
-                    getSalesTimeline({ ...params, groupBy: timeFilter === 'year' ? 'month' : 'day' }),
+                    getSalesTimeline({ ...params, groupBy: timelineGroup }),
                 ]);
                 const p = profitRes.data;
                 setPnl(p);
@@ -329,10 +351,11 @@ const Reports = () => {
             }
         } catch (err) {
             console.error('Report fetch error:', err);
+            setLoadError(err.response?.data?.message || (!navigator.onLine ? 'You seem to be offline.' : 'The server didn\'t answer.'));
         } finally {
             setLoading(false);
         }
-    }, [tab, timeFilter, customStart, customEnd]);
+    }, [tab, timeFilter, customStart, customEnd, timelineGroup]);
 
     useEffect(() => { fetchData(); }, [fetchData]);
 
@@ -343,7 +366,7 @@ const Reports = () => {
             const params = { startDate: dateParams.startDate, endDate: dateParams.endDate };
             const [profitRes, timelineRes, productsRes, categoriesRes, paymentsRes, taxRes, returnsRes, discountsRes] = await Promise.all([
                 getProfitReport(params),
-                getSalesTimeline({ ...params, groupBy: timeFilter === 'year' ? 'month' : 'day' }),
+                getSalesTimeline({ ...params, groupBy: timelineGroup }),
                 getSalesByProduct(params),
                 getSalesByCategory(params),
                 getPaymentMethodReport(params),
@@ -419,19 +442,19 @@ const Reports = () => {
         const discData = d.discounts || {};
 
         return (
-            <div className="fixed inset-0 z-50 bg-white dark:bg-d-bg overflow-auto print-static print:bg-white print:z-auto">
+            <div className="fixed inset-0 z-50 bg-card overflow-auto print-static print:bg-card print:z-auto">
                 {/* Close / Print bar — hidden on print */}
                 <div
-                    className="sticky top-0 z-10 bg-white dark:bg-d-card border-b border-slate-200 dark:border-d-border p-4 flex items-center justify-between print:hidden"
+                    className="sticky top-0 z-10 bg-card border-b border-border p-4 flex items-center justify-between print:hidden"
                     style={IS_WIN ? { paddingRight: 148 } : undefined}
                 >
                     <div className="flex items-center gap-3">
-                        <button onClick={() => setShowDetailedReport(false)} className="p-2 hover:bg-slate-100 dark:hover:bg-d-glass-hover rounded-lg">
+                        <button onClick={() => setShowDetailedReport(false)} className="p-2 hover:bg-[var(--hover-overlay)] rounded-lg">
                             <FiX size={20} />
                         </button>
-                        <h2 className="text-lg font-semibold text-slate-800 dark:text-d-heading">Detailed Sales Report</h2>
+                        <h2 className="text-lg font-semibold text-foreground">Detailed Sales Report</h2>
                     </div>
-                    <button onClick={handlePrint} className="flex items-center gap-2 px-5 py-2.5 bg-primary-500 text-white rounded-xl hover:bg-primary-600 transition-colors font-medium">
+                    <button onClick={handlePrint} className="flex items-center gap-2 px-5 py-2.5 bg-primary text-white rounded-xl hover:bg-primary/90 transition-colors font-medium">
                         <FiDownload size={18} />
                         Download PDF
                     </button>
@@ -441,20 +464,20 @@ const Reports = () => {
                 <div className="max-w-[1000px] mx-auto p-8 print:p-4 print:max-w-none">
                     {/* ── Report Header ──────────────────────────────── */}
                     <div className="text-center mb-8 print:mb-6">
-                        <h1 className="text-2xl font-bold text-slate-800 dark:text-d-heading print:text-black">{business?.name || 'Business'}</h1>
-                        <h2 className="text-xl font-semibold text-slate-600 dark:text-d-text print:text-black mt-1">Sales Report</h2>
-                        <p className="text-slate-500 dark:text-d-muted print:text-gray-600 mt-1">
+                        <h1 className="text-2xl font-bold text-foreground print:text-black">{business?.name || 'Business'}</h1>
+                        <h2 className="text-xl font-semibold text-foreground print:text-black mt-1">Sales Report</h2>
+                        <p className="text-muted-foreground print:text-muted-foreground mt-1">
                             Period: {fmtDate(dateParams.startDate)} — {fmtDate(dateParams.endDate)}
                         </p>
-                        <p className="text-xs text-slate-400 dark:text-d-faint print:text-gray-500 mt-1">Generated on {fmtDate(new Date())}</p>
+                        <p className="text-xs text-muted-foreground print:text-muted-foreground mt-1">Generated on {fmtDate(new Date())}</p>
                     </div>
 
                     {/* ── Section 1: P&L Statement ──────────────────── */}
                     <PrintSection title="1. Profit & Loss Statement">
-                        <p className="text-sm text-slate-500 dark:text-d-muted print:text-gray-600 mb-4">
+                        <p className="text-sm text-muted-foreground print:text-muted-foreground mb-4">
                             This section shows how your net profit is calculated step by step — from total sales down to the final number after subtracting costs, refunds, and expenses.
                         </p>
-                        <div className="border border-slate-200 dark:border-d-border print:border-black rounded-lg print:rounded-none overflow-hidden">
+                        <div className="border border-border print:border-black rounded-lg print:rounded-none overflow-hidden">
                             <div className="p-4 print:p-2">
                                 <PnlRow label="Gross Revenue" amount={p.grossRevenue} bold formula={`${p.totalOrders} orders total`} />
                                 <PnlRow label={`Sales (${p.totalOrders} orders, ${p.totalItems} items)`} amount={p.grossRevenue} indent />
@@ -472,29 +495,29 @@ const Reports = () => {
                                 {d.expenses.breakdown.map((e, i) => (
                                     <PnlRow key={i} label={`${e.label} (${e.count} entries)`} amount={e.amount} indent />
                                 ))}
-                                <div className={`flex justify-between items-center py-4 px-4 mt-2 print:border-t-2 print:border-black ${netProfit >= 0 ? 'bg-green-50 dark:bg-green-900/20 print:bg-gray-100' : 'bg-red-50 dark:bg-red-900/20 print:bg-gray-100'}`}>
+                                <div className={`flex justify-between items-center py-4 px-4 mt-2 print:border-t-2 print:border-black ${netProfit >= 0 ? 'bg-success-chip/50 print:bg-muted' : 'bg-destructive-chip/50 print:bg-muted'}`}>
                                     <div>
-                                        <span className="font-bold text-lg text-slate-800 dark:text-d-heading print:text-black">NET PROFIT</span>
-                                        <span className="text-xs text-slate-400 dark:text-d-muted print:text-gray-500 ml-2">(Sales Net Profit - Expenses)</span>
+                                        <span className="font-bold text-lg text-foreground print:text-black">NET PROFIT</span>
+                                        <span className="text-xs text-muted-foreground print:text-muted-foreground ml-2">(Sales Net Profit - Expenses)</span>
                                     </div>
-                                    <span className={`font-bold text-2xl font-mono print:text-black ${netProfit >= 0 ? 'text-green-600 dark:text-d-green' : 'text-red-600 dark:text-d-red'}`}>
+                                    <span className={`font-heading text-h3 tabular-nums print:text-black ${netProfit >= 0 ? 'text-success' : 'text-destructive'}`}>
                                         {fmt(netProfit)}
                                     </span>
                                 </div>
                             </div>
                         </div>
                         <div className="mt-3 grid grid-cols-3 gap-4 text-center text-sm">
-                            <div className="border border-slate-200 dark:border-d-border print:border-gray-400 rounded-lg p-3 print:p-2">
-                                <div className="text-slate-500 dark:text-d-muted print:text-gray-600">Profit Margin</div>
-                                <div className="text-xl font-bold font-mono text-slate-800 dark:text-d-heading print:text-black">{pct(p.profitMargin)}</div>
+                            <div className="border border-border print:border-border rounded-lg p-3 print:p-2">
+                                <div className="text-muted-foreground print:text-muted-foreground">Profit Margin</div>
+                                <div className="text-xl font-bold font-mono text-foreground print:text-black">{pct(p.profitMargin)}</div>
                             </div>
-                            <div className="border border-slate-200 dark:border-d-border print:border-gray-400 rounded-lg p-3 print:p-2">
-                                <div className="text-slate-500 dark:text-d-muted print:text-gray-600">Avg Order Value</div>
-                                <div className="text-xl font-bold font-mono text-slate-800 dark:text-d-heading print:text-black">{fmt(p.avgOrderValue)}</div>
+                            <div className="border border-border print:border-border rounded-lg p-3 print:p-2">
+                                <div className="text-muted-foreground print:text-muted-foreground">Avg Order Value</div>
+                                <div className="text-xl font-bold font-mono text-foreground print:text-black">{fmt(p.avgOrderValue)}</div>
                             </div>
-                            <div className="border border-slate-200 dark:border-d-border print:border-gray-400 rounded-lg p-3 print:p-2">
-                                <div className="text-slate-500 dark:text-d-muted print:text-gray-600">Discount Rate</div>
-                                <div className="text-xl font-bold font-mono text-slate-800 dark:text-d-heading print:text-black">{p.grossRevenue > 0 ? pct((p.totalDiscount / p.grossRevenue) * 100) : '0.0%'}</div>
+                            <div className="border border-border print:border-border rounded-lg p-3 print:p-2">
+                                <div className="text-muted-foreground print:text-muted-foreground">Discount Rate</div>
+                                <div className="text-xl font-bold font-mono text-foreground print:text-black">{p.grossRevenue > 0 ? pct((p.totalDiscount / p.grossRevenue) * 100) : '0.0%'}</div>
                             </div>
                         </div>
                     </PrintSection>
@@ -502,7 +525,7 @@ const Reports = () => {
                     {/* ── Section 2: Daily/Period Breakdown ─────────── */}
                     {timelineRows.length > 0 && (
                         <PrintSection title="2. Daily Sales Breakdown">
-                            <p className="text-sm text-slate-500 dark:text-d-muted print:text-gray-600 mb-3">
+                            <p className="text-sm text-muted-foreground print:text-muted-foreground mb-3">
                                 Day-by-day breakdown of sales, discounts, refunds, and profit.
                             </p>
                             <DataTable
@@ -516,7 +539,7 @@ const Reports = () => {
                                     { key: 'totalRefunded', label: 'Refunds', align: 'right', render: (r) => fmt(r.totalRefunded) },
                                     { key: 'netSales', label: 'Net Sales', align: 'right', render: (r) => fmt(r.netSales) },
                                     { key: 'totalProfit', label: 'Profit', align: 'right', render: (r) => (
-                                        <span className={r.totalProfit >= 0 ? 'text-green-600 print:text-black' : 'text-red-600 print:text-black'}>{fmt(r.totalProfit)}</span>
+                                        <span className={r.totalProfit >= 0 ? 'text-success print:text-black' : 'text-destructive print:text-black'}>{fmt(r.totalProfit)}</span>
                                     )},
                                     { key: 'avgOrderValue', label: 'Avg Order', align: 'right', render: (r) => fmt(r.avgOrderValue) },
                                 ]}
@@ -539,7 +562,7 @@ const Reports = () => {
                     {/* ── Section 3: Sales by Product ──────────────── */}
                     {productRows.length > 0 && (
                         <PrintSection title="3. Sales by Product">
-                            <p className="text-sm text-slate-500 dark:text-d-muted print:text-gray-600 mb-3">
+                            <p className="text-sm text-muted-foreground print:text-muted-foreground mb-3">
                                 Every product sold in this period with quantity, revenue, cost, and profit breakdown.
                             </p>
                             <DataTable
@@ -569,7 +592,7 @@ const Reports = () => {
                     {/* ── Section 4: Sales by Category ─────────────── */}
                     {catRows.length > 0 && (
                         <PrintSection title="4. Sales by Category">
-                            <p className="text-sm text-slate-500 dark:text-d-muted print:text-gray-600 mb-3">
+                            <p className="text-sm text-muted-foreground print:text-muted-foreground mb-3">
                                 Revenue, cost, and profit grouped by product category.
                             </p>
                             <DataTable
@@ -592,7 +615,7 @@ const Reports = () => {
                     {/* ── Section 5: Payment Methods ───────────────── */}
                     {payMethods.length > 0 && (
                         <PrintSection title="5. Payment Methods">
-                            <p className="text-sm text-slate-500 dark:text-d-muted print:text-gray-600 mb-3">
+                            <p className="text-sm text-muted-foreground print:text-muted-foreground mb-3">
                                 How customers paid — cash, card, online, or store credit.
                             </p>
                             <DataTable
@@ -612,19 +635,19 @@ const Reports = () => {
                     {/* ── Section 6: Tax / GST ─────────────────────── */}
                     {(taxData.byRate?.length > 0 || taxData.byCategory?.length > 0) && (
                         <PrintSection title="6. Tax / GST Collection">
-                            <p className="text-sm text-slate-500 dark:text-d-muted print:text-gray-600 mb-3">
+                            <p className="text-sm text-muted-foreground print:text-muted-foreground mb-3">
                                 Tax collected on sold items (excludes returned items).
                             </p>
-                            <div className="mb-3 text-sm text-slate-700 dark:text-d-text">
+                            <div className="mb-3 text-sm text-foreground">
                                 <span className="font-semibold">Total Tax Collected: </span>
                                 <span className="font-mono">{fmtDec(taxData.overall?.totalTax || taxData.summary?.totalTaxCollected)}</span>
-                                <span className="mx-4 text-slate-300 dark:text-d-border print:text-gray-400">|</span>
+                                <span className="mx-4 text-placeholder print:text-muted-foreground">|</span>
                                 <span className="font-semibold">Revenue: </span>
                                 <span className="font-mono">{fmt(taxData.overall?.totalRevenue || taxData.summary?.totalRevenue)}</span>
                             </div>
                             {taxData.byRate?.length > 0 && (
                                 <div className="mb-4">
-                                    <h4 className="text-sm font-semibold mb-2 text-slate-600 dark:text-d-text print:text-black">By GST Rate</h4>
+                                    <h4 className="text-sm font-semibold mb-2 text-foreground print:text-black">By GST Rate</h4>
                                     <DataTable
                                         compact
                                         columns={[
@@ -639,7 +662,7 @@ const Reports = () => {
                             )}
                             {taxData.byCategory?.length > 0 && (
                                 <div>
-                                    <h4 className="text-sm font-semibold mb-2 text-slate-600 dark:text-d-text print:text-black">By Category</h4>
+                                    <h4 className="text-sm font-semibold mb-2 text-foreground print:text-black">By Category</h4>
                                     <DataTable
                                         compact
                                         columns={[
@@ -657,30 +680,30 @@ const Reports = () => {
                     {/* ── Section 7: Returns ───────────────────────── */}
                     {retData.summary && (retData.summary.billsWithReturns > 0) && (
                         <PrintSection title="7. Returns & Refunds">
-                            <p className="text-sm text-slate-500 dark:text-d-muted print:text-gray-600 mb-3">
+                            <p className="text-sm text-muted-foreground print:text-muted-foreground mb-3">
                                 Summary of all returns processed during this period.
                             </p>
                             <div className="grid grid-cols-4 gap-3 mb-4 text-center text-sm">
-                                <div className="border border-slate-200 dark:border-d-border print:border-gray-400 rounded-lg p-2">
-                                    <div className="text-slate-500 dark:text-d-muted print:text-gray-600">Bills with Returns</div>
-                                    <div className="text-lg font-bold font-mono text-slate-800 dark:text-d-heading">{retData.summary.billsWithReturns}</div>
+                                <div className="border border-border print:border-border rounded-lg p-2">
+                                    <div className="text-muted-foreground print:text-muted-foreground">Bills with Returns</div>
+                                    <div className="text-lg font-bold font-mono text-foreground">{retData.summary.billsWithReturns}</div>
                                 </div>
-                                <div className="border border-slate-200 dark:border-d-border print:border-gray-400 rounded-lg p-2">
-                                    <div className="text-slate-500 dark:text-d-muted print:text-gray-600">Return Rate</div>
-                                    <div className="text-lg font-bold font-mono text-slate-800 dark:text-d-heading">{pct(retData.summary.returnRate)}</div>
+                                <div className="border border-border print:border-border rounded-lg p-2">
+                                    <div className="text-muted-foreground print:text-muted-foreground">Return Rate</div>
+                                    <div className="text-lg font-bold font-mono text-foreground">{pct(retData.summary.returnRate)}</div>
                                 </div>
-                                <div className="border border-slate-200 dark:border-d-border print:border-gray-400 rounded-lg p-2">
-                                    <div className="text-slate-500 dark:text-d-muted print:text-gray-600">Total Refunded</div>
+                                <div className="border border-border print:border-border rounded-lg p-2">
+                                    <div className="text-muted-foreground print:text-muted-foreground">Total Refunded</div>
                                     <div className="text-lg font-bold font-mono">{fmt(retData.summary.totalRefunded)}</div>
                                 </div>
-                                <div className="border border-slate-200 dark:border-d-border print:border-gray-400 rounded-lg p-2">
-                                    <div className="text-slate-500 dark:text-d-muted print:text-gray-600">Refund %</div>
-                                    <div className="text-lg font-bold font-mono text-slate-800 dark:text-d-heading">{pct(retData.summary.refundPercentage)}</div>
+                                <div className="border border-border print:border-border rounded-lg p-2">
+                                    <div className="text-muted-foreground print:text-muted-foreground">Refund %</div>
+                                    <div className="text-lg font-bold font-mono text-foreground">{pct(retData.summary.refundPercentage)}</div>
                                 </div>
                             </div>
                             {retData.byReason?.length > 0 && (
                                 <div className="mb-4">
-                                    <h4 className="text-sm font-semibold mb-2 text-slate-600 dark:text-d-text print:text-black">By Reason</h4>
+                                    <h4 className="text-sm font-semibold mb-2 text-foreground print:text-black">By Reason</h4>
                                     <DataTable
                                         compact
                                         columns={[
@@ -695,7 +718,7 @@ const Reports = () => {
                             )}
                             {retData.byProduct?.length > 0 && (
                                 <div>
-                                    <h4 className="text-sm font-semibold mb-2 text-slate-600 dark:text-d-text print:text-black">Most Returned Products</h4>
+                                    <h4 className="text-sm font-semibold mb-2 text-foreground print:text-black">Most Returned Products</h4>
                                     <DataTable
                                         compact
                                         columns={[
@@ -715,26 +738,26 @@ const Reports = () => {
                     {discData.summary && (discData.summary.discountedBills > 0) && (
                         <PrintSection title="8. Discount Analysis">
                             <div className="grid grid-cols-4 gap-3 mb-4 text-center text-sm">
-                                <div className="border border-slate-200 dark:border-d-border print:border-gray-400 rounded-lg p-2">
-                                    <div className="text-slate-500 dark:text-d-muted print:text-gray-600">Total Discounts</div>
-                                    <div className="text-lg font-bold font-mono text-slate-800 dark:text-d-heading">{fmt(discData.summary.totalDiscount)}</div>
+                                <div className="border border-border print:border-border rounded-lg p-2">
+                                    <div className="text-muted-foreground print:text-muted-foreground">Total Discounts</div>
+                                    <div className="text-lg font-bold font-mono text-foreground">{fmt(discData.summary.totalDiscount)}</div>
                                 </div>
-                                <div className="border border-slate-200 dark:border-d-border print:border-gray-400 rounded-lg p-2">
-                                    <div className="text-slate-500 dark:text-d-muted print:text-gray-600">Bills</div>
-                                    <div className="text-lg font-bold font-mono text-slate-800 dark:text-d-heading">{discData.summary.discountedBills}</div>
+                                <div className="border border-border print:border-border rounded-lg p-2">
+                                    <div className="text-muted-foreground print:text-muted-foreground">Bills</div>
+                                    <div className="text-lg font-bold font-mono text-foreground">{discData.summary.discountedBills}</div>
                                 </div>
-                                <div className="border border-slate-200 dark:border-d-border print:border-gray-400 rounded-lg p-2">
-                                    <div className="text-slate-500 dark:text-d-muted print:text-gray-600">Item Discounts</div>
-                                    <div className="text-lg font-bold font-mono text-slate-800 dark:text-d-heading">{fmt(discData.summary.totalItemDiscount)}</div>
+                                <div className="border border-border print:border-border rounded-lg p-2">
+                                    <div className="text-muted-foreground print:text-muted-foreground">Item Discounts</div>
+                                    <div className="text-lg font-bold font-mono text-foreground">{fmt(discData.summary.totalItemDiscount)}</div>
                                 </div>
-                                <div className="border border-slate-200 dark:border-d-border print:border-gray-400 rounded-lg p-2">
-                                    <div className="text-slate-500 dark:text-d-muted print:text-gray-600">Bill Discounts</div>
-                                    <div className="text-lg font-bold font-mono text-slate-800 dark:text-d-heading">{fmt(discData.summary.totalBillDiscount)}</div>
+                                <div className="border border-border print:border-border rounded-lg p-2">
+                                    <div className="text-muted-foreground print:text-muted-foreground">Bill Discounts</div>
+                                    <div className="text-lg font-bold font-mono text-foreground">{fmt(discData.summary.totalBillDiscount)}</div>
                                 </div>
                             </div>
                             {discData.byCashier?.length > 0 && (
                                 <div>
-                                    <h4 className="text-sm font-semibold mb-2 text-slate-600 dark:text-d-text print:text-black">By Cashier</h4>
+                                    <h4 className="text-sm font-semibold mb-2 text-foreground print:text-black">By Cashier</h4>
                                     <DataTable
                                         compact
                                         columns={[
@@ -751,7 +774,7 @@ const Reports = () => {
                     )}
 
                     {/* ── Footer ────────────────────────────────────── */}
-                    <div className="border-t-2 border-slate-300 dark:border-d-border print:border-black pt-4 mt-8 text-center text-xs text-slate-400 dark:text-d-muted print:text-gray-500">
+                    <div className="border-t-2 border-border print:border-black pt-4 mt-8 text-center text-xs text-muted-foreground print:text-muted-foreground">
                         <p>End of Report — {business?.name || 'Business'} — Period: {fmtDate(dateParams.startDate)} to {fmtDate(dateParams.endDate)}</p>
                         <p className="mt-1">Generated automatically from POS system data</p>
                     </div>
@@ -769,6 +792,15 @@ const Reports = () => {
         if (!pnl) return null;
         const profitMargin = pnl.profitMargin || 0;
         const netProfit = pnl.trueNetProfit ?? ((pnl.salesNetProfit || 0) - expenses.total);
+        const timelineRows = fillTimeline(timeline, timelineGroup, dateParams);
+        const measureFmt = measure === 'billCount' ? (v) => Number(v || 0).toLocaleString() : fmt;
+        const axisFmt = measure === 'billCount' ? (v) => v : shortMoney;
+        const tooltipRows = (d) => [
+            ['Revenue', fmt(d.totalSales)],
+            ['Profit', fmt(d.totalProfit)],
+            ['Bills', Number(d.billCount || 0).toLocaleString()],
+        ];
+        const peak = timelineRows.reduce((best, r) => (!best || (r[measure] || 0) > (best[measure] || 0) ? r : best), null);
 
         return (
             <>
@@ -783,10 +815,7 @@ const Reports = () => {
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
                     {/* P&L Statement */}
                     <Card className="lg:col-span-2">
-                        <h2 className="text-lg font-semibold text-slate-800 dark:text-d-heading mb-4 flex items-center gap-2">
-                            <FiPieChart className="text-primary-500" />
-                            Profit & Loss Statement
-                        </h2>
+                        <h2 className="font-heading text-h4 text-foreground mb-3">Profit &amp; Loss statement</h2>
                         <div>
                             <PnlRow label="Gross Revenue" amount={pnl.grossRevenue} bold formula={`${pnl.totalOrders} orders`} />
                             <PnlRow label={`Sales (${pnl.totalOrders} orders, ${pnl.totalItems} items)`} amount={pnl.grossRevenue} indent />
@@ -802,12 +831,12 @@ const Reports = () => {
                             {expenses.breakdown.map((e, i) => (
                                 <PnlRow key={i} label={e.label} amount={e.amount} indent />
                             ))}
-                            <div className={`flex justify-between items-center py-4 -mx-6 px-6 mt-2 rounded-b-xl ${netProfit >= 0 ? 'bg-green-50 dark:bg-green-900/20' : 'bg-red-50 dark:bg-red-900/20'}`}>
+                            <div className={`flex justify-between items-center py-4 -mx-6 px-6 mt-2 rounded-b-xl ${netProfit >= 0 ? 'bg-success-chip/50' : 'bg-destructive-chip/50'}`}>
                                 <div>
-                                    <span className="font-bold text-lg text-slate-800 dark:text-d-heading">Net Profit</span>
-                                    <span className="text-xs text-slate-400 dark:text-d-muted ml-2">(Sales Profit - Expenses)</span>
+                                    <span className="font-bold text-lg text-foreground">Net Profit</span>
+                                    <span className="text-xs text-muted-foreground ml-2">(Sales Profit - Expenses)</span>
                                 </div>
-                                <span className={`font-bold text-2xl font-mono ${netProfit >= 0 ? 'text-green-600 dark:text-d-green' : 'text-red-600 dark:text-d-red'}`}>
+                                <span className={`font-heading text-h3 tabular-nums ${netProfit >= 0 ? 'text-success' : 'text-destructive'}`}>
                                     {fmt(netProfit)}
                                 </span>
                             </div>
@@ -815,66 +844,84 @@ const Reports = () => {
                     </Card>
 
                     {/* Expense breakdown */}
-                    <Card>
-                        <h3 className="text-lg font-semibold text-slate-800 dark:text-d-heading mb-4">Expense Breakdown</h3>
-                        {expenses.breakdown.length > 0 ? (
-                            <>
-                                <ResponsiveContainer width="100%" height={200}>
-                                    <PieChart>
-                                        <Pie data={expenses.breakdown} dataKey="amount" nameKey="label" cx="50%" cy="50%" outerRadius={80} label={({ label, percent }) => `${label} ${(percent * 100).toFixed(0)}%`}>
-                                            {expenses.breakdown.map((_, i) => <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />)}
-                                        </Pie>
-                                        <Tooltip formatter={(v) => fmt(v)} />
-                                    </PieChart>
-                                </ResponsiveContainer>
-                                <div className="mt-4 space-y-2">
-                                    {expenses.breakdown.map((e, i) => (
-                                        <div key={i} className="flex justify-between items-center text-sm">
-                                            <span className="flex items-center gap-2">
-                                                <span className="w-3 h-3 rounded-full" style={{ backgroundColor: PIE_COLORS[i % PIE_COLORS.length] }} />
-                                                <span className="text-slate-600 dark:text-d-text">{e.label}</span>
-                                            </span>
-                                            <span className="font-mono text-slate-700 dark:text-d-text">{fmt(e.amount)}</span>
-                                        </div>
-                                    ))}
-                                    <div className="flex justify-between items-center text-sm font-semibold pt-2 border-t border-slate-100 dark:border-d-border">
-                                        <span className="text-slate-800 dark:text-d-heading">Total</span>
-                                        <span className="font-mono text-slate-800 dark:text-d-heading">{fmt(expenses.total)}</span>
-                                    </div>
-                                </div>
-                            </>
-                        ) : (
-                            <div className="h-40 flex items-center justify-center text-slate-400 dark:text-d-muted">No expenses</div>
-                        )}
-                    </Card>
+                    <ChartPanel
+                        className="lg:self-start"
+                        title="Expenses"
+                        description={`${fmt(expenses.total)} approved in this period`}
+                        isEmpty={!expenses.breakdown.length}
+                        empty={{ title: 'No expenses', description: 'No approved expenses in this period.' }}
+                        table={{
+                            filename: 'expenses-by-category',
+                            columns: [
+                                { key: 'label', label: 'Category' },
+                                { key: 'count', label: 'Entries', align: 'right' },
+                                { key: 'amount', label: 'Amount', align: 'right', format: fmt },
+                            ],
+                            rows: expenses.breakdown,
+                        }}
+                    >
+                        <DonutChart data={expenses.breakdown.map((e) => ({ label: e.label, value: e.amount, count: e.count }))} format={fmt} countLabel="Entries" height={150} />
+                    </ChartPanel>
                 </div>
 
-                {/* Sales Timeline */}
-                {timeline.length > 0 && (
-                    <Card className="mb-6">
-                        <h3 className="text-lg font-semibold text-slate-800 dark:text-d-heading mb-4">Sales Timeline</h3>
-                        <ResponsiveContainer width="100%" height={300}>
-                            <LineChart data={timeline}>
-                                <CartesianGrid strokeDasharray="3 3" className="dark:opacity-30" />
-                                <XAxis dataKey="period" stroke="#94a3b8" tick={{ fontSize: 12 }} />
-                                <YAxis stroke="#94a3b8" tickFormatter={(v) => `${(v / 1000).toFixed(0)}k`} />
-                                <Tooltip formatter={(v) => fmt(v)} />
-                                <Legend />
-                                <Line type="monotone" dataKey="totalSales" name="Revenue" stroke="#3b82f6" strokeWidth={2} dot={false} />
-                                <Line type="monotone" dataKey="totalProfit" name="Profit" stroke="#22c55e" strokeWidth={2} dot={false} />
-                            </LineChart>
-                        </ResponsiveContainer>
-                    </Card>
-                )}
+                {/* Sales over time */}
+                <ChartPanel
+                    className="mb-6"
+                    title="Sales over time"
+                    description={`${MEASURES.find((m) => m.value === measure)?.label} by ${timelineGroup} · ${periodLabel}`}
+                    controls={
+                        <div className="flex flex-wrap items-center gap-2">
+                            <SegmentedControl label="Measure" size="xs" value={measure} onChange={setMeasure} options={MEASURES} />
+                            <SegmentedControl
+                                label="Group by"
+                                size="xs"
+                                value={timelineGroup}
+                                onChange={setTimelineGroup}
+                                options={[
+                                    { value: 'day', label: 'Day' },
+                                    { value: 'week', label: 'Week' },
+                                    { value: 'month', label: 'Month' },
+                                ]}
+                            />
+                        </div>
+                    }
+                    isEmpty={!timeline.length}
+                    empty={{ title: 'No sales', description: 'No bills in this period.' }}
+                    table={{
+                        filename: `sales-by-${timelineGroup}`,
+                        columns: [
+                            { key: 'label', label: timelineGroup === 'day' ? 'Date' : timelineGroup === 'week' ? 'Week' : 'Month' },
+                            { key: 'billCount', label: 'Bills', align: 'right' },
+                            { key: 'totalSales', label: 'Revenue', align: 'right', format: fmt },
+                            { key: 'totalProfit', label: 'Profit', align: 'right', format: fmt },
+                        ],
+                        rows: timelineRows,
+                    }}
+                >
+                    {timelineRows.length > 60 ? (
+                        <AreaChart data={timelineRows} yKey={measure} format={measureFmt} axisFormat={axisFmt} tooltipTitle={(d) => d.full} tooltipRows={tooltipRows} height={260} />
+                    ) : (
+                        <BarChart
+                            data={timelineRows}
+                            yKey={measure}
+                            format={measureFmt}
+                            axisFormat={axisFmt}
+                            highlight={peak?.label}
+                            tooltipTitle={(d) => d.full}
+                            tooltipRows={tooltipRows}
+                            height={260}
+                        />
+                    )}
+                </ChartPanel>
 
                 {/* Daily breakdown table */}
                 {timeline.length > 0 && (
                     <Card>
-                        <h3 className="text-lg font-semibold text-slate-800 dark:text-d-heading mb-4">Daily Breakdown</h3>
+                        <CardTitle>{timelineGroup === 'day' ? 'Day by day' : timelineGroup === 'week' ? 'Week by week' : 'Month by month'}</CardTitle>
                         <DataTable
                             compact
                             columns={[
-                                { key: 'period', label: 'Date' },
+                                { key: 'period', label: timelineGroup === 'day' ? 'Date' : timelineGroup === 'week' ? 'Week' : 'Month', render: (r) => r.full },
                                 { key: 'billCount', label: 'Bills', align: 'right' },
                                 { key: 'totalQty', label: 'Items', align: 'right' },
                                 { key: 'totalSales', label: 'Revenue', align: 'right', render: (r) => fmt(r.totalSales) },
@@ -882,10 +929,10 @@ const Reports = () => {
                                 { key: 'totalRefunded', label: 'Refunds', align: 'right', render: (r) => fmt(r.totalRefunded) },
                                 { key: 'netSales', label: 'Net Sales', align: 'right', render: (r) => fmt(r.netSales) },
                                 { key: 'totalProfit', label: 'Profit', align: 'right', render: (r) => (
-                                    <span className={r.totalProfit >= 0 ? 'text-green-600 dark:text-d-green' : 'text-red-600 dark:text-d-red'}>{fmt(r.totalProfit)}</span>
+                                    <span className={r.totalProfit >= 0 ? 'text-success' : 'text-destructive'}>{fmt(r.totalProfit)}</span>
                                 )},
                             ]}
-                            data={timeline}
+                            data={timelineRows.filter((r) => r.billCount)}
                             footer={[
                                 'Total',
                                 timeline.reduce((s, r) => s + r.billCount, 0),
@@ -909,8 +956,7 @@ const Reports = () => {
         const s = products.summary;
         return (
             <Card>
-                <h3 className="text-lg font-semibold text-slate-800 dark:text-d-heading mb-4 flex items-center gap-2">
-                    <FiPackage className="text-primary-500" /> Sales by Product
+                <h3 className="font-heading text-h4 text-foreground mb-3">Sales by Product
                 </h3>
                 <DataTable
                     columns={[
@@ -922,13 +968,13 @@ const Reports = () => {
                         { key: 'netRevenue', label: 'Revenue', align: 'right', render: (r) => fmt(r.netRevenue) },
                         { key: 'totalCost', label: 'Cost', align: 'right', render: (r) => fmt(r.totalCost) },
                         { key: 'totalProfit', label: 'Profit', align: 'right', render: (r) => (
-                            <span className={r.totalProfit >= 0 ? 'text-green-600 dark:text-d-green' : 'text-red-600 dark:text-d-red'}>
+                            <span className={r.totalProfit >= 0 ? 'text-success' : 'text-destructive'}>
                                 {fmt(r.totalProfit)}
                             </span>
                         )},
                         { key: 'margin', label: 'Margin', align: 'right', render: (r) => {
                             const margin = r.netRevenue > 0 ? (r.totalProfit / r.netRevenue) * 100 : 0;
-                            return <span className={margin >= 0 ? 'text-green-600 dark:text-d-green' : 'text-red-600 dark:text-d-red'}>{pct(margin)}</span>;
+                            return <span className={margin >= 0 ? 'text-success' : 'text-destructive'}>{pct(margin)}</span>;
                         }},
                     ]}
                     data={rows}
@@ -950,8 +996,7 @@ const Reports = () => {
         return (
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                 <Card className="lg:col-span-2">
-                    <h3 className="text-lg font-semibold text-slate-800 dark:text-d-heading mb-4 flex items-center gap-2">
-                        <FiGrid className="text-primary-500" /> Sales by Category
+                    <h3 className="font-heading text-h4 text-foreground mb-3">Sales by Category
                     </h3>
                     <DataTable
                         columns={[
@@ -962,7 +1007,7 @@ const Reports = () => {
                             { key: 'netRevenue', label: 'Net Revenue', align: 'right', render: (r) => fmt(r.netRevenue) },
                             { key: 'totalCost', label: 'Cost', align: 'right', render: (r) => fmt(r.totalCost) },
                             { key: 'totalProfit', label: 'Profit', align: 'right', render: (r) => (
-                                <span className={r.totalProfit >= 0 ? 'text-green-600 dark:text-d-green' : 'text-red-600 dark:text-d-red'}>{fmt(r.totalProfit)}</span>
+                                <span className={r.totalProfit >= 0 ? 'text-success' : 'text-destructive'}>{fmt(r.totalProfit)}</span>
                             )},
                             { key: 'pct', label: '% Share', align: 'right', render: (r) => pct(r.revenuePercentage || (totalRev > 0 ? (r.grossRevenue / totalRev) * 100 : 0)) },
                         ]}
@@ -970,21 +1015,14 @@ const Reports = () => {
                     />
                 </Card>
 
-                <Card>
-                    <h3 className="text-lg font-semibold text-slate-800 dark:text-d-heading mb-4">Revenue Share</h3>
-                    {rows.length > 0 ? (
-                        <ResponsiveContainer width="100%" height={280}>
-                            <PieChart>
-                                <Pie data={rows} dataKey="grossRevenue" nameKey="category" cx="50%" cy="50%" outerRadius={100} label={({ category, percent }) => `${category} ${(percent * 100).toFixed(0)}%`}>
-                                    {rows.map((_, i) => <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />)}
-                                </Pie>
-                                <Tooltip formatter={(v) => fmt(v)} />
-                            </PieChart>
-                        </ResponsiveContainer>
-                    ) : (
-                        <div className="h-40 flex items-center justify-center text-slate-400 dark:text-d-muted">No data</div>
-                    )}
-                </Card>
+                <ChartPanel
+                    title="Revenue share"
+                    description="Gross revenue by category"
+                    isEmpty={!rows.length}
+                    empty={{ title: 'No sales', description: 'No sales in this period.' }}
+                >
+                    <DonutChart data={rows.map((r) => ({ label: r.category || 'Uncategorized', value: r.grossRevenue || 0 }))} format={fmt} height={160} />
+                </ChartPanel>
             </div>
         );
     };
@@ -992,61 +1030,34 @@ const Reports = () => {
     // ── Payment Methods ──────────────────────────────────────────
     const renderPayments = () => {
         const methods = payments.methods || [];
+        const count = methods.reduce((n, m) => n + (m.transactionCount || 0), 0);
+        const top = [...methods].sort((x, y) => (y.totalAmount || 0) - (x.totalAmount || 0))[0];
         return (
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                <Card className="lg:col-span-2">
-                    <h3 className="text-lg font-semibold text-slate-800 dark:text-d-heading mb-4 flex items-center gap-2">
-                        <FiCreditCard className="text-primary-500" /> Payment Methods
-                    </h3>
-                    {methods.length > 0 ? (
-                        <div className="space-y-4">
-                            {methods.map((m, i) => (
-                                <div key={i}>
-                                    <div className="flex justify-between items-center mb-1.5">
-                                        <span className="text-slate-700 dark:text-d-text font-medium capitalize">{m.method.replace('_', ' ')}</span>
-                                        <div className="flex items-center gap-4">
-                                            <span className="text-xs text-slate-400 dark:text-d-muted">{m.transactionCount} transactions</span>
-                                            <span className="font-mono font-semibold text-slate-800 dark:text-d-heading">{fmt(m.totalAmount)}</span>
-                                        </div>
-                                    </div>
-                                    <div className="w-full bg-slate-100 dark:bg-d-elevated rounded-full h-3">
-                                        <div
-                                            className="h-3 rounded-full transition-all"
-                                            style={{
-                                                width: `${m.percentage || 0}%`,
-                                                backgroundColor: PAYMENT_COLORS[m.method] || PAYMENT_COLORS.unknown,
-                                            }}
-                                        />
-                                    </div>
-                                    <div className="text-right text-xs text-slate-400 dark:text-d-muted mt-0.5">{pct(m.percentage)}</div>
-                                </div>
-                            ))}
-                            <div className="flex justify-between items-center pt-4 border-t border-slate-200 dark:border-d-border font-semibold">
-                                <span className="text-slate-800 dark:text-d-heading">Grand Total</span>
-                                <span className="font-mono text-lg text-slate-800 dark:text-d-heading">{fmt(payments.grandTotal)}</span>
-                            </div>
-                        </div>
-                    ) : (
-                        <div className="h-40 flex items-center justify-center text-slate-400 dark:text-d-muted">No payment data</div>
-                    )}
-                </Card>
-
-                <Card>
-                    <h3 className="text-lg font-semibold text-slate-800 dark:text-d-heading mb-4">Distribution</h3>
-                    {methods.length > 0 ? (
-                        <ResponsiveContainer width="100%" height={280}>
-                            <PieChart>
-                                <Pie data={methods} dataKey="totalAmount" nameKey="method" cx="50%" cy="50%" outerRadius={100} label={({ method, percent }) => `${method} ${(percent * 100).toFixed(0)}%`}>
-                                    {methods.map((m, i) => <Cell key={i} fill={PAYMENT_COLORS[m.method] || PAYMENT_COLORS.unknown} />)}
-                                </Pie>
-                                <Tooltip formatter={(v) => fmt(v)} />
-                            </PieChart>
-                        </ResponsiveContainer>
-                    ) : (
-                        <div className="h-40 flex items-center justify-center text-slate-400 dark:text-d-muted">No data</div>
-                    )}
-                </Card>
-            </div>
+            <>
+                <KpiStrip cols={3} className="mb-6">
+                    <StatCard label="Money taken" value={fmt(payments.grandTotal)} />
+                    <StatCard label="Payments" value={count.toLocaleString()} sub={count ? `avg ${fmt((payments.grandTotal || 0) / count)}` : null} />
+                    <StatCard label="Most used" value={top ? methodLabel(top.method) : '—'} sub={top ? `${pct(top.percentage)} of the money` : null} />
+                </KpiStrip>
+                <ChartPanel
+                    title="Payment methods"
+                    description="How customers paid in this period"
+                    isEmpty={!methods.length}
+                    empty={{ title: 'No payments', description: 'No payments in this period.' }}
+                    table={{
+                        filename: 'payment-methods',
+                        columns: [
+                            { key: 'method', label: 'Method', format: methodLabel },
+                            { key: 'transactionCount', label: 'Payments', align: 'right' },
+                            { key: 'totalAmount', label: 'Amount', align: 'right', format: fmt },
+                            { key: 'percentage', label: 'Share', align: 'right', format: pct },
+                        ],
+                        rows: methods,
+                    }}
+                >
+                    <DonutChart data={methods.map((m) => ({ label: methodLabel(m.method), value: m.totalAmount || 0, count: m.transactionCount }))} format={fmt} countLabel="Payments" height={180} />
+                </ChartPanel>
+            </>
         );
     };
 
@@ -1063,7 +1074,7 @@ const Reports = () => {
 
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                     <Card>
-                        <h3 className="text-lg font-semibold text-slate-800 dark:text-d-heading mb-4">Tax by Rate</h3>
+                        <h3 className="font-heading text-h4 text-foreground mb-3">Tax by Rate</h3>
                         <DataTable
                             columns={[
                                 { key: 'gstRate', label: 'GST / Unit', align: 'right', render: (r) => fmtDec(r.gstRate) },
@@ -1076,7 +1087,7 @@ const Reports = () => {
                     </Card>
 
                     <Card>
-                        <h3 className="text-lg font-semibold text-slate-800 dark:text-d-heading mb-4">Tax by Category</h3>
+                        <h3 className="font-heading text-h4 text-foreground mb-3">Tax by Category</h3>
                         <DataTable
                             columns={[
                                 { key: 'category', label: 'Category' },
@@ -1108,25 +1119,12 @@ const Reports = () => {
                 </div>
 
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                    <Card>
-                        <h3 className="text-lg font-semibold text-slate-800 dark:text-d-heading mb-4">Returns by Reason</h3>
-                        {byReason.length > 0 ? (
-                            <ResponsiveContainer width="100%" height={250}>
-                                <BarChart data={byReason.map(r => ({ ...r, reason: (r._id || 'unknown').replace('_', ' ') }))} layout="vertical">
-                                    <CartesianGrid strokeDasharray="3 3" className="dark:opacity-30" />
-                                    <XAxis type="number" stroke="#94a3b8" />
-                                    <YAxis type="category" dataKey="reason" width={120} stroke="#94a3b8" tick={{ fontSize: 12 }} />
-                                    <Tooltip />
-                                    <Bar dataKey="count" fill="#ef4444" radius={[0, 8, 8, 0]} name="Count" />
-                                </BarChart>
-                            </ResponsiveContainer>
-                        ) : (
-                            <div className="h-40 flex items-center justify-center text-slate-400 dark:text-d-muted">No returns</div>
-                        )}
-                    </Card>
+                    <ChartPanel className="lg:self-start" title="Returns by reason" description="How many returns gave each reason" isEmpty={!byReason.length} empty={{ title: 'No returns', description: 'No returns in this period.' }}>
+                        <HorizontalBarChart data={byReason.map((r) => ({ key: r._id || 'unknown', label: (r._id || 'unknown').replace(/_/g, ' '), value: r.count || 0 }))} format={(v) => `${v} return${v === 1 ? '' : 's'}`} />
+                    </ChartPanel>
 
                     <Card>
-                        <h3 className="text-lg font-semibold text-slate-800 dark:text-d-heading mb-4">Most Returned Products</h3>
+                        <h3 className="font-heading text-h4 text-foreground mb-3">Most Returned Products</h3>
                         <DataTable
                             columns={[
                                 { key: 'productName', label: 'Product' },
@@ -1160,7 +1158,7 @@ const Reports = () => {
 
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                     <Card>
-                        <h3 className="text-lg font-semibold text-slate-800 dark:text-d-heading mb-4">Discounts by Cashier</h3>
+                        <h3 className="font-heading text-h4 text-foreground mb-3">Discounts by Cashier</h3>
                         <DataTable
                             columns={[
                                 { key: 'cashierName', label: 'Cashier' },
@@ -1173,7 +1171,7 @@ const Reports = () => {
                     </Card>
 
                     <Card>
-                        <h3 className="text-lg font-semibold text-slate-800 dark:text-d-heading mb-4">Recent Discounted Bills</h3>
+                        <h3 className="font-heading text-h4 text-foreground mb-3">Recent Discounted Bills</h3>
                         <DataTable
                             columns={[
                                 { key: 'billNumber', label: 'Bill #', render: (r) => `#${r.billNumber}` },
@@ -1194,12 +1192,7 @@ const Reports = () => {
     const renderContent = () => {
         if (loading) {
             return (
-                <div className="flex items-center justify-center py-20">
-                    <div className="flex flex-col items-center gap-4">
-                        <div className="w-12 h-12 border-4 border-primary-500 border-t-transparent rounded-full animate-spin" />
-                        <p className="text-slate-500 dark:text-d-muted">Loading report...</p>
-                    </div>
-                </div>
+                <PageSkeleton variant="report" bare />
             );
         }
 
@@ -1223,96 +1216,59 @@ const Reports = () => {
     if (showDetailedReport) return renderDetailedReport();
 
     return (
-        <div className="p-6 animate-fadeIn bg-slate-50 dark:bg-d-bg min-h-full h-full overflow-auto">
+        <div className="p-6 animate-fadeIn min-h-full h-full overflow-auto">
             {/* Header */}
-            <div className="flex items-center justify-between mb-6">
-                <div>
-                    <h1 className="text-2xl font-bold text-slate-800 dark:text-d-heading">Reports</h1>
-                    <p className="text-slate-500 dark:text-d-muted text-sm">{TABS.find(t => t.key === tab)?.label} — {periodLabel}</p>
-                </div>
-                <div className="flex items-center gap-3">
-                    {/* Download Detailed Report */}
-                    <button
-                        onClick={fetchAllAndShowReport}
-                        disabled={detailedLoading}
-                        className="flex items-center gap-2 px-4 py-2 bg-primary-500 text-white hover:bg-primary-600 rounded-xl transition-colors font-medium disabled:opacity-50"
-                    >
-                        {detailedLoading ? (
-                            <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                        ) : (
-                            <FiFileText size={18} />
-                        )}
-                        Detailed Report
-                    </button>
-                    <button
-                        onClick={fetchData}
-                        className="flex items-center gap-2 px-4 py-2 text-slate-600 dark:text-d-text hover:bg-slate-100 dark:hover:bg-d-glass-hover rounded-xl transition-colors"
-                    >
-                        <FiRefreshCw size={18} />
-                    </button>
-                    <div className="flex items-center bg-white dark:bg-d-card rounded-xl p-1 shadow-sm border border-slate-200 dark:border-d-border">
-                        {TIME_FILTERS.map((f) => (
-                            <button
-                                key={f.key}
-                                onClick={() => setTimeFilter(f.key)}
-                                className={`px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
-                                    timeFilter === f.key
-                                        ? 'bg-primary-500 text-white'
-                                        : 'text-slate-600 dark:text-d-text hover:bg-slate-100 dark:hover:bg-d-glass-hover'
-                                }`}
-                            >
-                                {f.label}
-                            </button>
-                        ))}
-                    </div>
-                </div>
-            </div>
+            <PageHeader
+                title="Reports"
+                subtitle={`${TABS.find((t) => t.key === tab)?.label} — ${periodLabel}`}
+                actions={
+                    <>
+                        <IconButton label="Refresh" variant="outline" onClick={fetchData}>
+                            <FiRefreshCw className={loading ? 'animate-spin' : ''} />
+                        </IconButton>
+                        <Button onClick={fetchAllAndShowReport} loading={detailedLoading} disabled={detailedLoading}>
+                            <FiFileText aria-hidden="true" />
+                            Detailed report
+                        </Button>
+                    </>
+                }
+            />
 
-            {/* Custom date range */}
-            {timeFilter === 'custom' && (
-                <div className="flex items-center gap-3 mb-6 bg-white dark:bg-d-card rounded-xl p-4 shadow-sm border border-slate-200 dark:border-d-border">
-                    <FiCalendar className="text-slate-400" size={18} />
-                    <label className="text-sm text-slate-600 dark:text-d-text">From:</label>
-                    <input
-                        type="date"
-                        value={customStart}
-                        onChange={(e) => setCustomStart(e.target.value)}
-                        className="px-3 py-2 border border-slate-200 dark:border-d-border rounded-lg bg-slate-50 dark:bg-d-bg text-slate-700 dark:text-d-text text-sm"
-                    />
-                    <label className="text-sm text-slate-600 dark:text-d-text">To:</label>
-                    <input
-                        type="date"
-                        value={customEnd}
-                        onChange={(e) => setCustomEnd(e.target.value)}
-                        className="px-3 py-2 border border-slate-200 dark:border-d-border rounded-lg bg-slate-50 dark:bg-d-bg text-slate-700 dark:text-d-text text-sm"
-                    />
-                    {customStart && customEnd && (
-                        <span className="text-xs text-slate-400 dark:text-d-muted ml-2">
-                            {fmtDate(customStart)} — {fmtDate(customEnd)}
-                        </span>
+            {loadError ? (
+                <StateCard kind="error" onRetry={fetchData} className="mb-5" title="Couldn't load this report">
+                    {loadError} The figures below may be out of date.
+                </StateCard>
+            ) : null}
+
+            {/* Period + sections */}
+            <div className="mb-5 flex flex-wrap items-end justify-between gap-3">
+                <Tabs
+                    label="Report sections"
+                    value={tab}
+                    onChange={setTab}
+                    items={TABS.map((t) => ({ value: t.key, label: t.label }))}
+                />
+                <div className="flex flex-wrap items-end gap-2 pb-1.5">
+                    {timeFilter === 'custom' && (
+                        <>
+                            <Field label="From">
+                                <Input type="date" size="xs" className="w-[150px]" value={customStart} max={customEnd || undefined} onChange={(e) => setCustomStart(e.target.value)} />
+                            </Field>
+                            <Field label="To">
+                                <Input type="date" size="xs" className="w-[150px]" value={customEnd} min={customStart || undefined} onChange={(e) => setCustomEnd(e.target.value)} />
+                            </Field>
+                        </>
                     )}
+                    <SegmentedControl
+                        label="Period"
+                        value={timeFilter}
+                        onChange={(k) => {
+                            setTimeFilter(k);
+                            setGroupChoice(null);
+                        }}
+                        options={TIME_FILTERS.map((f) => ({ value: f.key, label: f.label }))}
+                    />
                 </div>
-            )}
-
-            {/* Tab Bar */}
-            <div className="flex items-center gap-1 mb-6 overflow-x-auto bg-white dark:bg-d-card rounded-xl p-1 shadow-sm border border-slate-200 dark:border-d-border">
-                {TABS.map((t) => {
-                    const Icon = t.icon;
-                    return (
-                        <button
-                            key={t.key}
-                            onClick={() => setTab(t.key)}
-                            className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium transition-colors whitespace-nowrap ${
-                                tab === t.key
-                                    ? 'bg-primary-500 text-white'
-                                    : 'text-slate-600 dark:text-d-text hover:bg-slate-100 dark:hover:bg-d-glass-hover'
-                            }`}
-                        >
-                            <Icon size={16} />
-                            {t.label}
-                        </button>
-                    );
-                })}
             </div>
 
             {/* Tab Content */}

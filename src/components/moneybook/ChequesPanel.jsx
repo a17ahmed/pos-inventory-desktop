@@ -3,7 +3,8 @@ import { FiCheckCircle, FiXCircle, FiFileText } from 'react-icons/fi';
 import { getCheques, clearCheque, cancelCheque } from '../../services/api/moneyBook';
 import { useMoneyBook } from '../../context/MoneyBookContext';
 import { apiErrorMessage, todayKey } from '../../utils/moneyBook';
-import { Spinner, Pager, ErrorBox, Modal, Field, inputCls, btnGhost, btnSolid, filterCls } from './ui';
+import { ErrorBox, Modal, Field, inputCls, btnGhost, btnSolid } from './ui';
+import { DataTable, Dash, Button, StatusBadge, SegmentedControl } from '../ui';
 
 /**
  * Outgoing cheques (only when the platform admin turned cheque tracking on).
@@ -69,85 +70,99 @@ const ChequesPanel = ({ fmt, reloadKey, canManage, onChanged }) => {
         }
     };
 
-    return (
-        <div>
-            <div className="flex flex-wrap items-center gap-3 mb-4">
-                <select value={status} onChange={(e) => setStatus(e.target.value)} className={filterCls}>
-                    <option value="pending">Pending</option>
-                    <option value="cleared">Cleared</option>
-                    <option value="cancelled">Cancelled</option>
-                    <option value="all">All</option>
-                </select>
-                {pending.count > 0 && (
-                    <span className="text-sm text-amber-700 dark:text-d-accent">
-                        {pending.count} pending · {fmt(pending.amount)} still to leave the bank
-                    </span>
-                )}
-            </div>
-            <ErrorBox>{error}</ErrorBox>
-            <div className="bg-white dark:bg-d-card border border-slate-200 dark:border-d-border rounded-2xl overflow-hidden mt-2">
-                {loading ? (
-                    <Spinner />
-                ) : rows.length === 0 ? (
-                    <div className="flex flex-col items-center justify-center py-16 text-slate-400 dark:text-d-faint">
-                        <FiFileText size={36} className="mb-3 opacity-40" />
-                        <p className="font-medium">No {status === 'all' ? '' : status} cheques</p>
+    const columns = [
+        {
+            id: 'issued',
+            header: 'Issued',
+            accessorFn: (c) => new Date(c.createdAt).getTime() || 0,
+            cell: ({ row: { original: c } }) => <span className="whitespace-nowrap">{new Date(c.createdAt).toLocaleDateString()}</span>,
+        },
+        {
+            id: 'cheque',
+            header: 'Cheque',
+            accessorFn: (c) => c.chequeNumber || '',
+            cell: ({ row: { original: c } }) => (
+                <div>
+                    <span className="font-mono text-mono-sm">{c.chequeNumber || '—'}</span>
+                    {c.chequeDate && <p className="text-body-sm text-muted-foreground">dated {new Date(c.chequeDate).toLocaleDateString()}</p>}
+                </div>
+            ),
+        },
+        {
+            id: 'for',
+            header: 'For',
+            accessorFn: (c) => c.description || '',
+            cell: ({ row: { original: c } }) => (
+                <div>
+                    {c.description}
+                    {c.referenceNumber && <p className="font-mono text-mono-xs text-muted-foreground">{c.referenceNumber}</p>}
+                </div>
+            ),
+        },
+        { id: 'account', header: 'Account', accessorFn: (c) => c.account?.name || '', cell: ({ getValue }) => getValue() || <Dash /> },
+        { id: 'amount', header: 'Amount', accessorFn: (c) => Number(c.amount) || 0, meta: { align: 'right' }, cell: ({ getValue }) => <span className="font-medium">{fmt(getValue())}</span> },
+        {
+            id: 'status',
+            header: 'Status',
+            accessorFn: (c) => c.chequeStatus || '',
+            meta: { align: 'right' },
+            cell: ({ row: { original: c } }) =>
+                c.chequeStatus === 'pending' && canManage ? (
+                    <div className="inline-flex gap-1">
+                        <Button variant="ghost" size="xs" onClick={() => open('clear', c)}>
+                            <FiCheckCircle aria-hidden="true" /> Clear
+                        </Button>
+                        <Button variant="ghost" size="xs" onClick={() => open('cancel', c)} className="text-destructive">
+                            <FiXCircle aria-hidden="true" /> Cancel
+                        </Button>
                     </div>
                 ) : (
-                    <div className="overflow-x-auto">
-                        <table className="w-full text-sm">
-                            <thead>
-                                <tr className="border-b border-slate-100 dark:border-d-border bg-slate-50 dark:bg-d-elevated text-slate-500 dark:text-d-muted">
-                                    <th className="text-left px-4 py-3 font-semibold">Issued</th>
-                                    <th className="text-left px-4 py-3 font-semibold">Cheque</th>
-                                    <th className="text-left px-4 py-3 font-semibold">For</th>
-                                    <th className="text-left px-4 py-3 font-semibold">Account</th>
-                                    <th className="text-right px-4 py-3 font-semibold">Amount</th>
-                                    <th className="text-right px-4 py-3 font-semibold">Status</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {rows.map((c) => (
-                                    <tr key={c._id} className="border-b border-slate-50 dark:border-d-border/50">
-                                        <td className="px-4 py-3 text-slate-600 dark:text-d-text whitespace-nowrap">{new Date(c.createdAt).toLocaleDateString()}</td>
-                                        <td className="px-4 py-3 text-slate-700 dark:text-d-text">
-                                            {c.chequeNumber || '—'}
-                                            {c.chequeDate && <p className="text-xs text-slate-400 dark:text-d-faint">dated {new Date(c.chequeDate).toLocaleDateString()}</p>}
-                                        </td>
-                                        <td className="px-4 py-3 text-slate-700 dark:text-d-text">
-                                            {c.description}
-                                            {c.referenceNumber && <p className="text-xs text-slate-400 dark:text-d-faint">{c.referenceNumber}</p>}
-                                        </td>
-                                        <td className="px-4 py-3 text-slate-600 dark:text-d-text">{c.account?.name || '—'}</td>
-                                        <td className="px-4 py-3 text-right font-semibold text-slate-800 dark:text-d-heading">{fmt(c.amount)}</td>
-                                        <td className="px-4 py-3 text-right whitespace-nowrap">
-                                            {c.chequeStatus === 'pending' && canManage ? (
-                                                <div className="inline-flex gap-2">
-                                                    <button onClick={() => open('clear', c)} className="inline-flex items-center gap-1 text-xs font-medium text-emerald-600 dark:text-d-green hover:underline">
-                                                        <FiCheckCircle size={12} /> Clear
-                                                    </button>
-                                                    <button onClick={() => open('cancel', c)} className="inline-flex items-center gap-1 text-xs font-medium text-red-600 dark:text-d-red hover:underline">
-                                                        <FiXCircle size={12} /> Cancel
-                                                    </button>
-                                                </div>
-                                            ) : (
-                                                <span className="text-xs px-2 py-1 rounded-lg bg-slate-100 dark:bg-d-elevated text-slate-500 dark:text-d-muted capitalize">{c.chequeStatus}</span>
-                                            )}
-                                        </td>
-                                    </tr>
-                                ))}
-                            </tbody>
-                        </table>
-                    </div>
-                )}
-                <Pager pagination={pagination} onPage={fetchPage} noun="cheques" />
-            </div>
+                    <StatusBadge kind="cheque" value={c.chequeStatus} size="sm" />
+                ),
+        },
+    ];
+
+    return (
+        <div>
+            <DataTable
+                caption="Cheques"
+                data={rows}
+                columns={columns}
+                getRowId={(c) => c._id}
+                loading={loading}
+                error={error ? { message: error, onRetry: () => fetchPage(pagination.page || 1) } : null}
+                filters={
+                    <>
+                        <SegmentedControl
+                            label="Cheque status"
+                            value={status}
+                            onChange={setStatus}
+                            options={[
+                                { value: 'pending', label: 'Pending' },
+                                { value: 'cleared', label: 'Cleared' },
+                                { value: 'cancelled', label: 'Cancelled' },
+                                { value: 'all', label: 'All' },
+                            ]}
+                        />
+                        {pending.count > 0 && (
+                            <span className="text-body text-warning-chip-foreground">
+                                {pending.count} pending · {fmt(pending.amount)} still to leave the bank
+                            </span>
+                        )}
+                    </>
+                }
+                isFiltered={status !== 'all'}
+                onClearFilters={() => setStatus('all')}
+                empty={{ icon: FiFileText, title: 'No cheques yet', description: 'Cheques you write appear here until they clear.' }}
+                rowTone={(c) => (c.chequeStatus === 'pending' && c.chequeDate && new Date(c.chequeDate) < new Date() ? 'attention' : null)}
+                server={{ page: pagination.page || 1, pageSize: pagination.limit || 50, total: pagination.total || 0, onPageChange: fetchPage, noun: 'cheques' }}
+            />
 
             {action && (
                 <Modal title={action.kind === 'clear' ? 'Cheque cleared' : 'Cancel cheque'} onClose={() => setAction(null)}>
                     <form onSubmit={submit} className="p-5 space-y-4">
                         <ErrorBox>{actionError}</ErrorBox>
-                        <p className="text-sm text-slate-600 dark:text-d-text">
+                        <p className="text-body text-foreground">
                             Cheque {action.cheque.chequeNumber || ''} · {fmt(action.cheque.amount)} from {action.cheque.account?.name}
                         </p>
                         {action.kind === 'clear' ? (
@@ -156,7 +171,7 @@ const ChequesPanel = ({ fmt, reloadKey, canManage, onChanged }) => {
                             </Field>
                         ) : (
                             <>
-                                <p className="text-[13px] text-amber-700 dark:text-d-accent">
+                                <p className="text-body-sm text-warning-chip-foreground">
                                     No money moves. The supplier / expense payment itself stays recorded — record a bounced cheque to a supplier separately.
                                 </p>
                                 <Field label="Reason">

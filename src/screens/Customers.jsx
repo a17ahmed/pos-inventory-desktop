@@ -1,4 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { PageHeader, DataTable, rowActions, Dash, SegmentedControl, KpiStrip, KpiCard } from '../components/ui';
+import { DialogShell } from '../components/ui/Dialog';
 import { useNavigate } from 'react-router-dom';
 import { useBusiness } from '../context/BusinessContext';
 import { useAuth } from '../context/AuthContext';
@@ -29,8 +31,6 @@ import {
     FiX,
     FiXCircle,
     FiUsers,
-    FiDollarSign,
-    FiAlertCircle,
     FiPhone,
     FiMail,
     FiMapPin,
@@ -69,6 +69,13 @@ const Customers = () => {
     const [summary, setSummary] = useState({ totalCustomers: 0, totalOutstandingDues: 0, customersWithDues: 0 });
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState(null);
+    const [pageSize, setPageSize] = useState(() => {
+        try {
+            return JSON.parse(localStorage.getItem('ds.table.customers.pageSize')) || 50;
+        } catch {
+            return 50;
+        }
+    });
 
     const [searchQuery, setSearchQuery] = useState('');
     const [duesFilter, setDuesFilter] = useState('all'); // 'all' | 'dues'
@@ -103,7 +110,7 @@ const Customers = () => {
         setLoading(true);
         setError(null);
         try {
-            const params = { page: pageNum, limit: 50 };
+            const params = { page: pageNum, limit: pageSize };
             if (duesFilter === 'dues') params.hasDues = 'true';
             if (searchQuery.trim()) params.search = searchQuery.trim();
             const res = await getCustomers(params);
@@ -124,7 +131,7 @@ const Customers = () => {
         } finally {
             setLoading(false);
         }
-    }, [duesFilter, searchQuery]);
+    }, [duesFilter, searchQuery, pageSize]);
 
     // KPI cards: business-wide totals from the server summary (independent of paging).
     const fetchSummary = useCallback(async () => {
@@ -154,6 +161,63 @@ const Customers = () => {
     // Search is server-side now (?search=), so the current page is already the
     // filtered result — no client-side filtering.
     const filteredCustomers = customers;
+
+    // Round to paisa so float noise like -0.0000001 shows as 0, not "Cr -0".
+    const balanceOf = (c) => Math.round((c.balance || 0) * 100) / 100;
+    const customerColumns = [
+        {
+            id: 'name',
+            header: 'Name',
+            accessorFn: (c) => c.name || '',
+            cell: ({ row: { original: c } }) => (
+                <div className="min-w-0">
+                    <p className="font-medium text-foreground truncate">{c.name}</p>
+                    {c.address ? (
+                        <p className="text-body-sm text-muted-foreground flex items-center gap-1 truncate">
+                            <FiMapPin size={11} aria-hidden="true" />
+                            {c.address}
+                        </p>
+                    ) : null}
+                </div>
+            ),
+        },
+        { id: 'phone', header: 'Phone', accessorFn: (c) => c.phone || '', meta: { mono: true }, cell: ({ getValue }) => getValue() || <Dash /> },
+        { id: 'email', header: 'Email', accessorFn: (c) => c.email || '', cell: ({ getValue }) => getValue() || <Dash /> },
+        {
+            id: 'creditLimit',
+            header: 'Credit limit',
+            accessorFn: (c) => Number(c.creditLimit) || 0,
+            meta: { align: 'right' },
+            cell: ({ getValue }) => (getValue() ? formatCurrency(getValue()) : <Dash />),
+        },
+        {
+            id: 'balance',
+            header: 'Balance',
+            accessorFn: balanceOf,
+            meta: { align: 'right' },
+            cell: ({ getValue }) => {
+                const b = getValue();
+                return (
+                    <div>
+                        <span className={b > 0 ? 'text-destructive font-medium' : b < 0 ? 'text-success font-medium' : 'text-muted-foreground'}>
+                            {formatCurrency(Math.abs(b))}
+                        </span>
+                        {b < 0 && <p className="text-body-sm text-success">Available credit</p>}
+                    </div>
+                );
+            },
+        },
+        { id: 'purchases', header: 'Purchases', accessorFn: (c) => c.totalPurchases || 0, meta: { align: 'right' } },
+        rowActions(
+            (c) => [
+                { label: 'View ledger', icon: FiBookOpen, onSelect: () => openLedger(c) },
+                { label: 'Edit', icon: FiEdit2, onSelect: () => openModal(c) },
+                { separator: true },
+                { label: 'Delete', icon: FiTrash2, danger: true, onSelect: () => handleDelete(c) },
+            ],
+            { label: 'Customer actions' }
+        ),
+    ];
 
     // =========================================================================
     // Modal handlers
@@ -305,280 +369,106 @@ const Customers = () => {
     // =========================================================================
 
     return (
-        <div className="h-full overflow-y-auto bg-slate-50 dark:bg-d-bg">
+        <div className="h-full overflow-y-auto">
             <div className="max-w-7xl mx-auto p-6">
                 {/* Header */}
-                <div className="flex items-center justify-between mb-6">
-                    <div>
-                        <h1 className="text-3xl font-bold text-slate-800 dark:text-d-heading">
-                            Customers
-                        </h1>
-                        <p className="text-sm text-slate-500 dark:text-d-muted mt-1">
-                            Manage your customers and their credit terms
-                        </p>
-                    </div>
-                    <button
+                <PageHeader
+                    title={<>Customers</>}
+                    subtitle={<>Manage your customers and their credit terms</>}
+                    actions={
+                        <>
+                            <button
                         onClick={() => openModal()}
-                        className="flex items-center gap-2 px-4 py-2.5 bg-primary-500 dark:bg-d-accent text-white dark:text-d-card rounded-xl font-medium hover:bg-primary-600 dark:hover:bg-d-accent-s transition-colors shadow-sm"
+                        className="flex items-center gap-2 px-4 py-2.5 bg-primary text-white rounded-xl font-medium hover:bg-primary/90 transition-colors shadow-sm"
                     >
                         <FiPlus size={18} />
                         Add Customer
                     </button>
-                </div>
+                        </>
+                    }
+                />
 
-                {/* Stats Cards */}
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-                    <div className="bg-white dark:bg-d-card rounded-2xl p-6 shadow-sm dark:shadow-[0_4px_20px_rgba(0,0,0,0.3)] border border-slate-100 dark:border-d-border">
-                        <div className="flex items-center gap-3 mb-2">
-                            <div className="w-10 h-10 bg-primary-100 dark:bg-[rgba(255,210,100,0.15)] rounded-xl flex items-center justify-center">
-                                <FiUsers className="text-primary-600 dark:text-d-accent" size={20} />
-                            </div>
-                            <p className="text-sm text-slate-500 dark:text-d-muted">Total Customers</p>
-                        </div>
-                        <p className="text-2xl font-bold text-slate-800 dark:text-d-heading">{summary.totalCustomers}</p>
-                    </div>
-                    <div className="bg-white dark:bg-d-card rounded-2xl p-6 shadow-sm dark:shadow-[0_4px_20px_rgba(0,0,0,0.3)] border border-slate-100 dark:border-d-border">
-                        <div className="flex items-center gap-3 mb-2">
-                            <div className="w-10 h-10 bg-red-100 dark:bg-[rgba(255,107,107,0.15)] rounded-xl flex items-center justify-center">
-                                <FiAlertCircle className="text-red-500 dark:text-d-red" size={20} />
-                            </div>
-                            <p className="text-sm text-slate-500 dark:text-d-muted">Outstanding Dues</p>
-                        </div>
-                        <p className="text-2xl font-bold text-red-600 dark:text-d-red">
-                            {formatCurrency(summary.totalOutstandingDues)}
-                        </p>
-                    </div>
-                    <div className="bg-white dark:bg-d-card rounded-2xl p-6 shadow-sm dark:shadow-[0_4px_20px_rgba(0,0,0,0.3)] border border-slate-100 dark:border-d-border">
-                        <div className="flex items-center gap-3 mb-2">
-                            <div className="w-10 h-10 bg-yellow-100 dark:bg-[rgba(255,210,100,0.15)] rounded-xl flex items-center justify-center">
-                                <FiDollarSign className="text-yellow-600 dark:text-d-accent" size={20} />
-                            </div>
-                            <p className="text-sm text-slate-500 dark:text-d-muted">Customers with Dues</p>
-                        </div>
-                        <p className="text-2xl font-bold text-slate-800 dark:text-d-heading">
-                            {summary.customersWithDues}
-                        </p>
-                    </div>
-                </div>
+                {/* Figures — "owed" tiles switch the list to customers with dues */}
+                <KpiStrip cols={3} className="mb-5">
+                    <KpiCard
+                        label="Customers"
+                        value={Number(summary.totalCustomers || 0).toLocaleString()}
+                        note={duesFilter === 'dues' ? 'Showing customers with dues' : 'All customers'}
+                        onClick={duesFilter === 'dues' ? () => setDuesFilter('all') : undefined}
+                        ariaLabel="Show all customers"
+                    />
+                    <KpiCard
+                        label="Owed to you"
+                        value={formatCurrency(summary.totalOutstandingDues)}
+                        tone={summary.totalOutstandingDues > 0 ? 'destructive' : undefined}
+                        note={summary.customersWithDues ? `by ${summary.customersWithDues} customer${summary.customersWithDues === 1 ? '' : 's'}` : 'Nobody owes anything'}
+                        onClick={summary.customersWithDues ? () => setDuesFilter('dues') : undefined}
+                        ariaLabel="Show customers who owe money"
+                    />
+                    <KpiCard
+                        label="Customers with dues"
+                        value={Number(summary.customersWithDues || 0).toLocaleString()}
+                        tone={summary.customersWithDues > 0 ? 'warning' : undefined}
+                        note={summary.totalCustomers ? `${Math.round(((summary.customersWithDues || 0) / summary.totalCustomers) * 100)}% of customers` : null}
+                        onClick={summary.customersWithDues ? () => setDuesFilter('dues') : undefined}
+                        ariaLabel="Show customers who owe money"
+                    />
+                </KpiStrip>
 
-                {/* Filters */}
-                <div className="flex flex-wrap items-center gap-4 mb-6">
-                    <div className="relative flex-1 max-w-md">
-                        <FiSearch className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 dark:text-d-faint" />
-                        <input
-                            type="text"
-                            value={searchQuery}
-                            onChange={(e) => setSearchQuery(e.target.value)}
-                            placeholder="Search by name, phone, or email..."
-                            className="w-full pl-12 pr-4 py-3 bg-white dark:bg-d-bg border border-slate-200 dark:border-d-border rounded-xl focus:ring-2 focus:ring-primary-500 dark:focus:border-d-border-hover focus:outline-none text-slate-800 dark:text-d-text placeholder-slate-400 dark:placeholder-d-faint"
+                <DataTable
+                    caption="Customers"
+                    data={filteredCustomers}
+                    columns={customerColumns}
+                    getRowId={(c) => c._id}
+                    loading={loading}
+                    error={error ? { message: error, onRetry: () => { fetchCustomers(1); fetchSummary(); } } : null}
+                    search={{ value: searchQuery, onChange: setSearchQuery, placeholder: 'Search by name, phone, or email' }}
+                    filters={
+                        <SegmentedControl
+                            label="Customers to show"
+                            value={duesFilter}
+                            onChange={setDuesFilter}
+                            options={[
+                                { value: 'all', label: 'All' },
+                                { value: 'dues', label: 'With dues' },
+                            ]}
                         />
-                    </div>
-                    <div className="flex items-center gap-2 bg-white dark:bg-d-card rounded-xl p-1 border border-slate-200 dark:border-d-border">
-                        {[
-                            { id: 'all', label: 'All' },
-                            { id: 'dues', label: 'With Dues' },
-                        ].map((f) => (
-                            <button
-                                key={f.id}
-                                onClick={() => setDuesFilter(f.id)}
-                                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-                                    duesFilter === f.id
-                                        ? 'bg-primary-500 dark:bg-d-accent text-white dark:text-d-card'
-                                        : 'text-slate-600 dark:text-d-text hover:bg-slate-100 dark:hover:bg-d-glass-hover'
-                                }`}
-                            >
-                                {f.label}
-                            </button>
-                        ))}
-                    </div>
-                </div>
-
-                {/* Table */}
-                {loading ? (
-                    <div className="flex items-center justify-center py-20">
-                        <div className="flex flex-col items-center gap-4">
-                            <div className="w-12 h-12 border-4 border-primary-500 dark:border-d-accent border-t-transparent rounded-full animate-spin" />
-                            <p className="text-slate-500 dark:text-d-muted">Loading customers...</p>
-                        </div>
-                    </div>
-                ) : error ? (
-                    <div className="flex items-center justify-center py-20">
-                        <div className="flex flex-col items-center gap-4 text-center">
-                            <div className="w-16 h-16 bg-red-100 dark:bg-[rgba(255,107,107,0.15)] rounded-full flex items-center justify-center">
-                                <FiXCircle size={32} className="text-red-500 dark:text-d-red" />
-                            </div>
-                            <h2 className="text-xl font-semibold text-slate-800 dark:text-d-heading">
-                                Failed to load customers
-                            </h2>
-                            <p className="text-slate-500 dark:text-d-muted">{error}</p>
-                            <button
-                                onClick={() => { fetchCustomers(1); fetchSummary(); }}
-                                className="px-4 py-2 bg-primary-500 dark:bg-d-accent text-white dark:text-d-card rounded-xl hover:bg-primary-600 transition-colors"
-                            >
-                                Try Again
-                            </button>
-                        </div>
-                    </div>
-                ) : (
-                    <div className="bg-white dark:bg-d-card rounded-2xl shadow-sm dark:shadow-[0_4px_20px_rgba(0,0,0,0.3)] border border-slate-100 dark:border-d-border overflow-hidden">
-                        <table className="w-full">
-                            <thead className="bg-slate-50 dark:bg-d-glass">
-                                <tr>
-                                    <th className="text-left py-4 px-6 font-medium text-slate-600 dark:text-d-muted">
-                                        Name
-                                    </th>
-                                    <th className="text-left py-4 px-6 font-medium text-slate-600 dark:text-d-muted">
-                                        Phone
-                                    </th>
-                                    <th className="text-left py-4 px-6 font-medium text-slate-600 dark:text-d-muted">
-                                        Email
-                                    </th>
-                                    <th className="text-right py-4 px-6 font-medium text-slate-600 dark:text-d-muted">
-                                        Credit Limit
-                                    </th>
-                                    <th className="text-right py-4 px-6 font-medium text-slate-600 dark:text-d-muted">
-                                        Balance
-                                    </th>
-                                    <th className="text-right py-4 px-6 font-medium text-slate-600 dark:text-d-muted">
-                                        Purchases
-                                    </th>
-                                    <th className="text-right py-4 px-6 font-medium text-slate-600 dark:text-d-muted">
-                                        Actions
-                                    </th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {filteredCustomers.map((customer) => {
-                                    // Round to paisa so float noise like -0.0000001 shows as 0, not "Cr -0".
-                                    const balance = Math.round((customer.balance || 0) * 100) / 100;
-                                    return (
-                                        <tr
-                                            key={customer._id}
-                                            onClick={() => openLedger(customer)}
-                                            className="border-t border-slate-100 dark:border-d-border hover:bg-slate-50 dark:hover:bg-[rgba(255,255,255,0.02)] transition-colors cursor-pointer"
-                                        >
-                                            <td className="py-4 px-6">
-                                                <div className="font-semibold text-slate-800 dark:text-d-heading">
-                                                    {customer.name}
-                                                </div>
-                                                {customer.address && (
-                                                    <div className="text-xs text-slate-500 dark:text-d-muted mt-0.5 flex items-center gap-1">
-                                                        <FiMapPin size={11} />
-                                                        {customer.address}
-                                                    </div>
-                                                )}
-                                            </td>
-                                            <td className="py-4 px-6 text-slate-600 dark:text-d-text text-sm">
-                                                {customer.phone}
-                                            </td>
-                                            <td className="py-4 px-6 text-slate-600 dark:text-d-text text-sm">
-                                                {customer.email || '—'}
-                                            </td>
-                                            <td className="py-4 px-6 text-right text-slate-600 dark:text-d-text">
-                                                {customer.creditLimit
-                                                    ? formatCurrency(customer.creditLimit)
-                                                    : '—'}
-                                            </td>
-                                            <td className="py-4 px-6 text-right font-semibold">
-                                                <span
-                                                    className={
-                                                        balance > 0
-                                                            ? 'text-red-600 dark:text-d-red'
-                                                            : balance < 0
-                                                                ? 'text-emerald-600 dark:text-d-green'
-                                                                : 'text-slate-500 dark:text-d-muted'
-                                                    }
-                                                >
-                                                    {balance < 0 ? formatCurrency(-balance) : formatCurrency(balance)}
-                                                </span>
-                                                {balance < 0 && (
-                                                    <div className="text-[11px] font-normal text-emerald-600 dark:text-d-green">Available credit</div>
-                                                )}
-                                            </td>
-                                            <td className="py-4 px-6 text-right">
-                                                <span className="px-2 py-1 bg-slate-100 dark:bg-d-glass text-slate-600 dark:text-d-muted rounded-full text-xs font-medium">
-                                                    {customer.totalPurchases || 0}
-                                                </span>
-                                            </td>
-                                            <td className="py-4 px-6">
-                                                <div className="flex items-center justify-end gap-1">
-                                                    <button
-                                                        onClick={(e) => { e.stopPropagation(); openLedger(customer); }}
-                                                        className="p-2 text-slate-500 dark:text-d-muted hover:text-primary-500 hover:bg-primary-50 dark:hover:bg-[rgba(255,255,255,0.06)] rounded-lg transition-colors"
-                                                        title="View Ledger"
-                                                    >
-                                                        <FiBookOpen size={15} />
-                                                    </button>
-                                                    <button
-                                                        onClick={(e) => { e.stopPropagation(); openModal(customer); }}
-                                                        className="p-2 text-slate-500 dark:text-d-muted hover:text-primary-500 hover:bg-primary-50 dark:hover:bg-[rgba(255,255,255,0.06)] rounded-lg transition-colors"
-                                                        title="Edit"
-                                                    >
-                                                        <FiEdit2 size={15} />
-                                                    </button>
-                                                    <button
-                                                        onClick={(e) => { e.stopPropagation(); handleDelete(customer); }}
-                                                        className="p-2 text-slate-500 dark:text-d-muted hover:text-red-500 dark:hover:text-d-red hover:bg-red-50 dark:hover:bg-[rgba(255,107,107,0.1)] rounded-lg transition-colors"
-                                                        title="Delete"
-                                                    >
-                                                        <FiTrash2 size={15} />
-                                                    </button>
-                                                </div>
-                                            </td>
-                                        </tr>
-                                    );
-                                })}
-                            </tbody>
-                        </table>
-                        {filteredCustomers.length === 0 && (
-                            <div className="flex flex-col items-center justify-center py-16 text-slate-400 dark:text-d-faint">
-                                <FiUsers size={48} />
-                                <p className="mt-4 text-base">No customers found</p>
-                                <p className="text-sm mt-1">
-                                    Add your first customer to get started
-                                </p>
-                            </div>
-                        )}
-
-                        {/* Pagination */}
-                        {pagination.totalPages > 1 && (
-                            <div className="flex items-center justify-between px-4 py-3 border-t border-slate-100 dark:border-d-border">
-                                <p className="text-sm text-slate-500 dark:text-d-muted">
-                                    Page {pagination.page} of {pagination.totalPages} ({pagination.total} customers)
-                                </p>
-                                <div className="flex gap-2">
-                                    <button
-                                        disabled={pagination.page <= 1 || loading}
-                                        onClick={() => fetchCustomers(pagination.page - 1)}
-                                        className="px-3 py-1.5 text-sm rounded-lg bg-slate-100 dark:bg-d-elevated hover:bg-slate-200 dark:hover:bg-d-glass disabled:opacity-40 transition-colors text-slate-700 dark:text-d-text"
-                                    >
-                                        Previous
-                                    </button>
-                                    <button
-                                        disabled={pagination.page >= pagination.totalPages || loading}
-                                        onClick={() => fetchCustomers(pagination.page + 1)}
-                                        className="px-3 py-1.5 text-sm rounded-lg bg-slate-100 dark:bg-d-elevated hover:bg-slate-200 dark:hover:bg-d-glass disabled:opacity-40 transition-colors text-slate-700 dark:text-d-text"
-                                    >
-                                        Next
-                                    </button>
-                                </div>
-                            </div>
-                        )}
-                    </div>
-                )}
+                    }
+                    isFiltered={!!searchQuery.trim() || duesFilter !== 'all'}
+                    onClearFilters={() => {
+                        setSearchQuery('');
+                        setDuesFilter('all');
+                    }}
+                    empty={{ icon: FiUsers, title: 'No customers yet', description: 'Add your first customer to get started.' }}
+                    onRowClick={openLedger}
+                    rowLabel={(c) => `Open ledger of ${c.name}`}
+                    server={{
+                        page: pagination.page,
+                        pageSize,
+                        total: pagination.total,
+                        onPageChange: (p) => fetchCustomers(p),
+                        onPageSizeChange: (n) => {
+                            setPageSize(n);
+                            try {
+                                localStorage.setItem('ds.table.customers.pageSize', JSON.stringify(n));
+                            } catch {
+                                /* storage blocked */
+                            }
+                        },
+                    }}
+                />
             </div>
 
             {/* Modal */}
             {showModal && (
-                <div className="fixed inset-0 bg-black/50 dark:bg-black/70 flex items-center justify-center z-50 p-4">
-                    <div className="bg-white dark:bg-d-card rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
-                        <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100 dark:border-d-border sticky top-0 bg-white dark:bg-d-card z-10">
-                            <h2 className="text-xl font-bold text-slate-800 dark:text-d-heading">
+                <DialogShell size="md" className="max-h-[90vh] overflow-y-auto">
+                        <div className="flex items-center justify-between px-6 py-4 border-b border-hairline sticky top-0 bg-card z-10">
+                            <h2 className="text-xl font-bold text-foreground">
                                 {editingCustomer ? 'Edit Customer' : 'Add Customer'}
                             </h2>
-                            <button
+                            <button data-dialog-close
                                 onClick={closeModal}
-                                className="p-2 text-slate-400 dark:text-d-faint hover:text-slate-600 dark:hover:text-d-text rounded-lg transition-colors"
+                                className="p-2 text-muted-foreground hover:text-foreground rounded-lg transition-colors"
                             >
                                 <FiX size={20} />
                             </button>
@@ -586,7 +476,7 @@ const Customers = () => {
 
                         <form onSubmit={handleSubmit} className="p-6 space-y-4">
                             {/* Tabs */}
-                            <div className="flex items-center gap-1 bg-slate-50 dark:bg-d-bg rounded-xl p-1 border border-slate-200 dark:border-d-border">
+                            <div className="flex items-center gap-1 bg-muted/40 rounded-xl p-1 border border-hairline">
                                 {[
                                     { id: 'details', label: 'Details' },
                                     { id: 'rates', label: `Special Rates${ratesDraft.length ? ` (${ratesDraft.length})` : ''}` },
@@ -597,8 +487,8 @@ const Customers = () => {
                                         onClick={() => setModalTab(t.id)}
                                         className={`flex-1 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
                                             modalTab === t.id
-                                                ? 'bg-white dark:bg-d-card text-slate-800 dark:text-d-heading shadow-sm'
-                                                : 'text-slate-500 dark:text-d-muted hover:text-slate-700 dark:hover:text-d-text'
+                                                ? 'bg-card text-foreground shadow-sm'
+                                                : 'text-muted-foreground hover:text-foreground'
                                         }`}
                                     >
                                         {t.label}
@@ -608,13 +498,14 @@ const Customers = () => {
 
                             {modalTab === 'rates' && (
                                 ratesLoading || !rateProducts ? (
-                                    <div className="py-8 text-center text-sm text-slate-400 dark:text-d-faint">Loading special rates…</div>
+                                    <div className="py-8 text-center text-sm text-muted-foreground">Loading special rates…</div>
                                 ) : (
                                     <>
                                         {!canSaveRates && (
-                                            <p className="text-xs text-amber-600 dark:text-d-accent">You don't have permission to change customer rates.</p>
+                                            <p className="text-xs text-primary">You don't have permission to change customer rates.</p>
                                         )}
                                         <SpecialRatesEditor
+                                            compact
                                             value={ratesDraft}
                                             onChange={setRatesDraft}
                                             products={rateProducts}
@@ -628,70 +519,70 @@ const Customers = () => {
                             {modalTab === 'details' && (<>
                             {/* Name */}
                             <div>
-                                <label className="block text-sm font-medium text-slate-700 dark:text-d-text mb-1.5">
-                                    Name <span className="text-red-500">*</span>
+                                <label className="block text-sm font-medium text-foreground mb-1.5">
+                                    Name <span className="text-destructive">*</span>
                                 </label>
                                 <div className="relative">
-                                    <FiUsers className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 dark:text-d-faint" size={16} />
+                                    <FiUsers className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" size={16} />
                                     <input
                                         type="text"
                                         value={form.name}
                                         onChange={(e) => setForm({ ...form, name: e.target.value })}
                                         required
                                         placeholder="Customer name"
-                                        className="w-full pl-10 pr-4 py-2.5 bg-slate-50 dark:bg-d-bg border border-slate-200 dark:border-d-border rounded-xl focus:ring-2 focus:ring-primary-500 dark:focus:border-d-border-hover focus:outline-none text-slate-800 dark:text-d-text"
+                                        className="w-full pl-10 pr-4 py-2.5 bg-muted/40 border border-hairline rounded-xl focus:ring-2 focus:ring-ring focus:outline-none text-foreground"
                                     />
                                 </div>
                             </div>
 
                             {/* Phone */}
                             <div>
-                                <label className="block text-sm font-medium text-slate-700 dark:text-d-text mb-1.5">
-                                    Phone <span className="text-red-500">*</span>
+                                <label className="block text-sm font-medium text-foreground mb-1.5">
+                                    Phone <span className="text-destructive">*</span>
                                 </label>
                                 <div className="relative">
-                                    <FiPhone className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 dark:text-d-faint" size={16} />
+                                    <FiPhone className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" size={16} />
                                     <input
                                         type="tel"
                                         value={form.phone}
                                         onChange={(e) => setForm({ ...form, phone: e.target.value })}
                                         required
                                         placeholder="+92 300 1234567"
-                                        className="w-full pl-10 pr-4 py-2.5 bg-slate-50 dark:bg-d-bg border border-slate-200 dark:border-d-border rounded-xl focus:ring-2 focus:ring-primary-500 dark:focus:border-d-border-hover focus:outline-none text-slate-800 dark:text-d-text"
+                                        className="w-full pl-10 pr-4 py-2.5 bg-muted/40 border border-hairline rounded-xl focus:ring-2 focus:ring-ring focus:outline-none text-foreground"
                                     />
                                 </div>
                             </div>
 
                             {/* Email */}
                             <div>
-                                <label className="block text-sm font-medium text-slate-700 dark:text-d-text mb-1.5">
+                                <label className="block text-sm font-medium text-foreground mb-1.5">
                                     Email
                                 </label>
                                 <div className="relative">
-                                    <FiMail className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 dark:text-d-faint" size={16} />
+                                    <FiMail className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" size={16} />
                                     <input
                                         type="email"
                                         value={form.email}
                                         onChange={(e) => setForm({ ...form, email: e.target.value })}
                                         placeholder="customer@example.com"
-                                        className="w-full pl-10 pr-4 py-2.5 bg-slate-50 dark:bg-d-bg border border-slate-200 dark:border-d-border rounded-xl focus:ring-2 focus:ring-primary-500 dark:focus:border-d-border-hover focus:outline-none text-slate-800 dark:text-d-text"
+                                        className="w-full pl-10 pr-4 py-2.5 bg-muted/40 border border-hairline rounded-xl focus:ring-2 focus:ring-ring focus:outline-none text-foreground"
                                     />
                                 </div>
                             </div>
 
                             {/* Address */}
                             <div>
-                                <label className="block text-sm font-medium text-slate-700 dark:text-d-text mb-1.5">
+                                <label className="block text-sm font-medium text-foreground mb-1.5">
                                     Address
                                 </label>
                                 <div className="relative">
-                                    <FiMapPin className="absolute left-3 top-3 text-slate-400 dark:text-d-faint" size={16} />
+                                    <FiMapPin className="absolute left-3 top-3 text-muted-foreground" size={16} />
                                     <textarea
                                         value={form.address}
                                         onChange={(e) => setForm({ ...form, address: e.target.value })}
                                         placeholder="Street, City"
                                         rows={2}
-                                        className="w-full pl-10 pr-4 py-2.5 bg-slate-50 dark:bg-d-bg border border-slate-200 dark:border-d-border rounded-xl focus:ring-2 focus:ring-primary-500 dark:focus:border-d-border-hover focus:outline-none text-slate-800 dark:text-d-text resize-none"
+                                        className="w-full pl-10 pr-4 py-2.5 bg-muted/40 border border-hairline rounded-xl focus:ring-2 focus:ring-ring focus:outline-none text-foreground resize-none"
                                     />
                                 </div>
                             </div>
@@ -699,7 +590,7 @@ const Customers = () => {
                             {/* Opening Balance — only when adding new customer */}
                             {!editingCustomer && (
                                 <div>
-                                    <label className="block text-sm font-medium text-slate-700 dark:text-d-text mb-1.5">
+                                    <label className="block text-sm font-medium text-foreground mb-1.5">
                                         Opening Balance
                                     </label>
                                     <input
@@ -710,9 +601,9 @@ const Customers = () => {
                                             setForm({ ...form, openingBalance: e.target.value })
                                         }
                                         placeholder="0"
-                                        className="w-full px-4 py-2.5 bg-slate-50 dark:bg-d-bg border border-slate-200 dark:border-d-border rounded-xl focus:ring-2 focus:ring-primary-500 dark:focus:border-d-border-hover focus:outline-none text-slate-800 dark:text-d-text"
+                                        className="w-full px-4 py-2.5 bg-muted/40 border border-hairline rounded-xl focus:ring-2 focus:ring-ring focus:outline-none text-foreground"
                                     />
-                                    <p className="text-xs text-slate-400 dark:text-d-faint mt-1">Previous balance from old system (if any)</p>
+                                    <p className="text-xs text-muted-foreground mt-1">Previous balance from old system (if any)</p>
                                 </div>
                             )}
 
@@ -720,7 +611,7 @@ const Customers = () => {
                             {editingCustomer && (
                                 <div className="grid grid-cols-2 gap-3">
                                     <div>
-                                        <label className="block text-sm font-medium text-slate-700 dark:text-d-text mb-1.5">
+                                        <label className="block text-sm font-medium text-foreground mb-1.5">
                                             Credit Days
                                         </label>
                                         <input
@@ -730,11 +621,11 @@ const Customers = () => {
                                             onChange={(e) =>
                                                 setForm({ ...form, creditDays: e.target.value })
                                             }
-                                            className="w-full px-4 py-2.5 bg-slate-50 dark:bg-d-bg border border-slate-200 dark:border-d-border rounded-xl focus:ring-2 focus:ring-primary-500 dark:focus:border-d-border-hover focus:outline-none text-slate-800 dark:text-d-text"
+                                            className="w-full px-4 py-2.5 bg-muted/40 border border-hairline rounded-xl focus:ring-2 focus:ring-ring focus:outline-none text-foreground"
                                         />
                                     </div>
                                     <div>
-                                        <label className="block text-sm font-medium text-slate-700 dark:text-d-text mb-1.5">
+                                        <label className="block text-sm font-medium text-foreground mb-1.5">
                                             Credit Limit
                                         </label>
                                         <input
@@ -744,7 +635,7 @@ const Customers = () => {
                                             onChange={(e) =>
                                                 setForm({ ...form, creditLimit: e.target.value })
                                             }
-                                            className="w-full px-4 py-2.5 bg-slate-50 dark:bg-d-bg border border-slate-200 dark:border-d-border rounded-xl focus:ring-2 focus:ring-primary-500 dark:focus:border-d-border-hover focus:outline-none text-slate-800 dark:text-d-text"
+                                            className="w-full px-4 py-2.5 bg-muted/40 border border-hairline rounded-xl focus:ring-2 focus:ring-ring focus:outline-none text-foreground"
                                         />
                                     </div>
                                 </div>
@@ -752,17 +643,17 @@ const Customers = () => {
 
                             {/* Notes */}
                             <div>
-                                <label className="block text-sm font-medium text-slate-700 dark:text-d-text mb-1.5">
+                                <label className="block text-sm font-medium text-foreground mb-1.5">
                                     Notes
                                 </label>
                                 <div className="relative">
-                                    <FiFileText className="absolute left-3 top-3 text-slate-400 dark:text-d-faint" size={16} />
+                                    <FiFileText className="absolute left-3 top-3 text-muted-foreground" size={16} />
                                     <textarea
                                         value={form.notes}
                                         onChange={(e) => setForm({ ...form, notes: e.target.value })}
                                         placeholder="Any notes about this customer..."
                                         rows={3}
-                                        className="w-full pl-10 pr-4 py-2.5 bg-slate-50 dark:bg-d-bg border border-slate-200 dark:border-d-border rounded-xl focus:ring-2 focus:ring-primary-500 dark:focus:border-d-border-hover focus:outline-none text-slate-800 dark:text-d-text resize-none"
+                                        className="w-full pl-10 pr-4 py-2.5 bg-muted/40 border border-hairline rounded-xl focus:ring-2 focus:ring-ring focus:outline-none text-foreground resize-none"
                                     />
                                 </div>
                             </div>
@@ -770,18 +661,18 @@ const Customers = () => {
                             </>)}
 
                             {/* Actions */}
-                            <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-100 dark:border-d-border">
+                            <div className="flex items-center justify-end gap-3 pt-4 border-t border-hairline">
                                 <button
                                     type="button"
                                     onClick={closeModal}
-                                    className="px-4 py-2.5 text-slate-600 dark:text-d-text hover:bg-slate-100 dark:hover:bg-d-glass-hover rounded-xl font-medium transition-colors"
+                                    className="px-4 py-2.5 text-muted-foreground hover:bg-[var(--hover-overlay)] rounded-xl font-medium transition-colors"
                                 >
                                     Cancel
                                 </button>
                                 <button
                                     type="submit"
                                     disabled={submitting}
-                                    className="flex items-center gap-2 px-5 py-2.5 bg-primary-500 dark:bg-d-accent text-white dark:text-d-card rounded-xl font-medium hover:bg-primary-600 dark:hover:bg-d-accent-s transition-colors disabled:opacity-60 disabled:cursor-not-allowed shadow-sm"
+                                    className="flex items-center gap-2 px-5 py-2.5 bg-primary text-white rounded-xl font-medium hover:bg-primary/90 transition-colors disabled:opacity-60 disabled:cursor-not-allowed shadow-sm"
                                 >
                                     <FiSave size={16} />
                                     {submitting
@@ -792,8 +683,7 @@ const Customers = () => {
                                 </button>
                             </div>
                         </form>
-                    </div>
-                </div>
+                    </DialogShell>
             )}
 
         </div>

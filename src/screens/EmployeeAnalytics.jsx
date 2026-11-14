@@ -1,29 +1,13 @@
 import React, { useState, useEffect, useMemo } from 'react';
+import { PageSkeleton } from '../components/ui/PageSkeleton';
+import { PageHeader } from '../components/ui/PageHeader';
 import { toLocalDateStr } from '../utils/date';
 import { useAuth } from '../context/AuthContext';
 import { useBusiness } from '../context/BusinessContext';
 import { getReceiptStats, getTopProducts } from '../services/api/receipts';
 import { getSalesByCashier } from '../services/api/bills';
-import {
-    FiTrendingUp,
-    FiShoppingCart,
-    FiDollarSign,
-    FiArrowUp,
-    FiArrowDown,
-    FiCalendar,
-    FiAward,
-    FiActivity,
-    FiPackage,
-} from 'react-icons/fi';
-import {
-    AreaChart,
-    Area,
-    XAxis,
-    YAxis,
-    CartesianGrid,
-    Tooltip,
-    ResponsiveContainer,
-} from 'recharts';
+import { FiBarChart2, FiPackage } from 'react-icons/fi';
+import { KpiCard, KpiStrip, ChartPanel, BarChart, HorizontalBarChart, SegmentedControl, StateCard } from '../components/ui';
 
 const EmployeeAnalytics = () => {
     const { user } = useAuth();
@@ -35,7 +19,9 @@ const EmployeeAnalytics = () => {
     const [chartData, setChartData] = useState([]);
     const [topProducts, setTopProducts] = useState([]);
     const [myStats, setMyStats] = useState(null);
+    const [canSeeMine, setCanSeeMine] = useState(true); // the by-cashier report needs the Reports permission
     const [loading, setLoading] = useState(true);
+    const [loadError, setLoadError] = useState(null);
     const [currentTime, setCurrentTime] = useState(new Date());
 
     // Live clock
@@ -50,6 +36,7 @@ const EmployeeAnalytics = () => {
 
     const fetchData = async () => {
         setLoading(true);
+        setLoadError(null);
         try {
             const now = new Date();
             let startDate = new Date();
@@ -63,7 +50,7 @@ const EmployeeAnalytics = () => {
             const [statsRes, topRes, cashierRes] = await Promise.all([
                 getReceiptStats({ filter: timeFilter, chart: 'true' }),
                 getTopProducts(5).catch(() => ({ data: [] })),
-                getSalesByCashier(dateParams).catch(() => ({ data: { cashiers: [] } })),
+                getSalesByCashier(dateParams).catch(() => null),
             ]);
 
             const s = statsRes.data;
@@ -77,16 +64,17 @@ const EmployeeAnalytics = () => {
             setTopProducts(Array.isArray(topRes.data) ? topRes.data : []);
 
             // Find this employee's stats from cashier data
-            const cashiers = cashierRes.data?.cashiers || [];
-            const me = cashiers.find(c =>
-                c.cashierId === user?._id || c.cashierName === user?.name
-            );
+            setCanSeeMine(!!cashierRes);
+            const cashiers = cashierRes?.data?.cashiers || [];
+            const myId = String(user?._id || user?.id || '');
+            const me = cashiers.find(c => (myId && String(c.cashierId) === myId) || c.cashierName === user?.name);
             setMyStats(me || null);
 
             // Build chart
             buildChart(s.chartData || [], startDate, now, timeFilter);
         } catch (error) {
             console.error('Error fetching analytics:', error);
+            setLoadError(error.response?.data?.message || (!navigator.onLine ? 'You seem to be offline.' : "The server didn't answer."));
         } finally {
             setLoading(false);
         }
@@ -103,6 +91,7 @@ const EmployeeAnalytics = () => {
             for (let h = 0; h < 24; h++) {
                 data.push({
                     name: `${h}:00`,
+                    full: `${h}:00 – ${h + 1}:00`,
                     sales: dataMap[h]?.revenue || 0,
                     orders: dataMap[h]?.orders || 0,
                 });
@@ -115,22 +104,18 @@ const EmployeeAnalytics = () => {
                 const dayName = day.toLocaleDateString('en', { weekday: 'short' });
                 data.push({
                     name: dayName,
+                    full: day.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'short' }),
                     sales: dataMap[key]?.revenue || 0,
                     orders: dataMap[key]?.orders || 0,
                 });
             }
         } else {
-            for (let w = 0; w < 5; w++) {
-                const ws = new Date(startDate);
-                ws.setDate(startDate.getDate() + w * 7);
-                const we = new Date(ws);
-                we.setDate(ws.getDate() + 7);
-                let weekSales = 0, weekOrders = 0;
-                Object.entries(dataMap).forEach(([key, val]) => {
-                    const d = new Date(key);
-                    if (d >= ws && d < we) { weekSales += val.revenue; weekOrders += val.orders; }
-                });
-                data.push({ name: `W${w + 1}`, sales: weekSales, orders: weekOrders });
+            // this month, one bar per day up to today
+            const today = new Date();
+            for (let d = 1; d <= today.getDate(); d++) {
+                const day = new Date(today.getFullYear(), today.getMonth(), d);
+                const key = toLocalDateStr(day);
+                data.push({ name: String(d), full: day.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' }), sales: dataMap[key]?.revenue || 0, orders: dataMap[key]?.orders || 0 });
             }
         }
         setChartData(data);
@@ -155,217 +140,130 @@ const EmployeeAnalytics = () => {
 
     if (loading) {
         return (
-            <div className="h-full flex items-center justify-center bg-slate-50 dark:bg-d-bg">
-                <div className="flex flex-col items-center gap-4">
-                    <div className="w-12 h-12 border-4 border-primary-500 border-t-transparent rounded-full animate-spin" />
-                    <p className="text-slate-500 dark:text-d-muted">Loading analytics...</p>
-                </div>
-            </div>
+            <PageSkeleton variant="report" cards={4} />
         );
     }
 
+    const money = (n) => `${currency} ${fmt(Math.round(n || 0))}`;
+    const share = stats.grossRevenue > 0 && myStats ? ((myStats.totalRevenue || 0) / stats.grossRevenue) * 100 : 0;
+    const now = new Date();
+    const highlight =
+        timeFilter === 'today' ? `${now.getHours()}:00` : timeFilter === 'week' ? now.toLocaleDateString('en', { weekday: 'short' }) : String(now.getDate());
+    const periodWord = { today: 'today', week: 'the last 7 days', month: 'this month' }[timeFilter];
+    const hasSales = chartData.some((d) => d.sales > 0);
+    const busiest = hasSales ? chartData.reduce((b, d) => (d.sales > b.sales ? d : b)) : null;
+
     return (
-        <div className="h-full overflow-y-auto bg-slate-50 dark:bg-d-bg p-6 animate-fade-slide-up">
-            {/* Header */}
-            <div className="flex items-center justify-between mb-6">
-                <div>
-                    <h1 className="text-2xl font-bold text-slate-800 dark:text-d-heading">
-                        {greeting}, {user?.name || 'Staff'}
-                    </h1>
-                    <p className="text-sm text-slate-500 dark:text-d-muted mt-1">
-                        {currentTime.toLocaleDateString('en', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
-                    </p>
-                </div>
+        <div className="h-full overflow-y-auto p-6 animate-fade-slide-up">
+            <PageHeader
+                title={`${greeting}, ${user?.name || 'Staff'}`}
+                subtitle={currentTime.toLocaleDateString('en', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
+                actions={
+                    <SegmentedControl
+                        label="Period"
+                        value={timeFilter}
+                        onChange={setTimeFilter}
+                        options={[
+                            { value: 'today', label: 'Today' },
+                            { value: 'week', label: 'Week' },
+                            { value: 'month', label: 'Month' },
+                        ]}
+                    />
+                }
+            />
 
-                {/* Time Filter */}
-                <div className="flex gap-1 bg-white dark:bg-d-card border border-slate-200 dark:border-d-border rounded-xl p-1">
-                    {[
-                        { key: 'today', label: 'Today' },
-                        { key: 'week', label: 'Week' },
-                        { key: 'month', label: 'Month' },
-                    ].map(f => (
-                        <button
-                            key={f.key}
-                            onClick={() => setTimeFilter(f.key)}
-                            className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
-                                timeFilter === f.key
-                                    ? 'bg-amber-100 dark:bg-[rgba(255,210,100,0.12)] text-amber-700 dark:text-d-accent'
-                                    : 'text-slate-500 dark:text-d-muted hover:text-slate-700 dark:hover:text-d-text'
-                            }`}
-                        >
-                            {f.label}
-                        </button>
-                    ))}
-                </div>
+            {loadError ? (
+                <StateCard kind="error" className="mb-5" title="Couldn't load the sales figures" onRetry={fetchData}>
+                    {loadError}
+                </StateCard>
+            ) : null}
+
+            <KpiStrip cols={canSeeMine ? 4 : 3} className="mb-5">
+                <KpiCard
+                    label="Shop sales"
+                    value={money(stats.grossRevenue)}
+                    note={`all counters, ${periodWord}`}
+                    delta={stats.growth ? { value: stats.growth, label: timeFilter === 'today' ? 'vs yesterday' : 'vs before' } : null}
+                />
+                <KpiCard label="Bills" value={fmt(stats.totalOrders)} note={`avg ${money(stats.avgOrderValue)}`} />
+                {canSeeMine ? (
+                    <KpiCard
+                        label="My sales"
+                        value={myStats ? money(myStats.totalRevenue) : money(0)}
+                        tone={myStats ? 'accent' : undefined}
+                        note={myStats ? `${myStats.totalBills || 0} bill${myStats.totalBills === 1 ? '' : 's'} · ${share.toFixed(0)}% of the shop` : `No bills by you ${periodWord}`}
+                    />
+                ) : null}
+                {timeFilter === 'today' ? (
+                    <KpiCard
+                        label="Daily target"
+                        value={`${Math.round(progressPercent)}%`}
+                        tone={progressPercent >= 100 ? 'success' : undefined}
+                        note={stats.grossRevenue >= target ? 'Target reached' : `${money(target - stats.grossRevenue)} to go of ${money(target)}`}
+                    >
+                        <div className="mt-2 h-1.5 rounded-full bg-muted overflow-hidden">
+                            <div className={`h-full rounded-full ${progressPercent >= 100 ? 'bg-success' : 'bg-primary'}`} style={{ width: `${progressPercent}%` }} />
+                        </div>
+                    </KpiCard>
+                ) : (
+                    <KpiCard
+                        label="Busiest day"
+                        value={busiest ? busiest.full || busiest.name : '—'}
+                        note={busiest ? `${money(busiest.sales)} · ${fmt(busiest.orders)} bills` : `No sales ${periodWord}`}
+                    />
+                )}
+            </KpiStrip>
+
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                <ChartPanel
+                    className="lg:col-span-2"
+                    title="Sales"
+                    description={timeFilter === 'today' ? 'By hour, today' : timeFilter === 'week' ? 'By day, last 7 days' : 'By day, this month'}
+                    isEmpty={!hasSales}
+                    empty={{ icon: FiBarChart2, title: 'No sales yet', description: `Nothing sold ${periodWord}.` }}
+                    table={{
+                        filename: `sales-${timeFilter}`,
+                        columns: [
+                            { key: 'full', label: timeFilter === 'today' ? 'Hour' : 'Day' },
+                            { key: 'orders', label: 'Bills', align: 'right' },
+                            { key: 'sales', label: 'Sales', align: 'right', format: money },
+                        ],
+                        rows: chartData.filter((d) => d.sales || d.orders),
+                    }}
+                >
+                    <BarChart
+                        data={chartData}
+                        xKey="name"
+                        yKey="sales"
+                        highlight={highlight}
+                        format={money}
+                        axisFormat={fmtShort}
+                        tooltipTitle={(d) => d.full || d.name}
+                        tooltipRows={(d) => [
+                            ['Sales', money(d.sales)],
+                            ['Bills', fmt(d.orders)],
+                        ]}
+                        height={240}
+                    />
+                </ChartPanel>
+
+                <ChartPanel
+                    title="Top sellers"
+                    description="Best-selling products in the shop, all time"
+                    isEmpty={!topProducts.length}
+                    empty={{ icon: FiPackage, title: 'No sales yet', description: 'Top products show here once things sell.' }}
+                >
+                    <HorizontalBarChart
+                        data={topProducts.slice(0, 5).map((p, i) => ({
+                            key: p._id || i,
+                            label: p.name,
+                            value: Number(p.totalQtySold ?? p.totalSold) || 0,
+                            note: `${p.category || 'General'} · ${money(p.totalRevenue ?? 0)} sold`,
+                        }))}
+                        format={(v) => `${fmt(v)} units`}
+                    />
+                </ChartPanel>
             </div>
-
-            {/* Stats Cards */}
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-                {/* Revenue */}
-                <div className="bg-white dark:bg-d-card border border-slate-200 dark:border-d-border rounded-2xl p-5">
-                    <div className="flex items-center justify-between mb-3">
-                        <div className="w-10 h-10 rounded-xl bg-emerald-100 dark:bg-[rgba(52,232,161,0.1)] flex items-center justify-center">
-                            <FiDollarSign className="text-emerald-600 dark:text-d-green" size={20} />
-                        </div>
-                        {stats.growth !== 0 && (
-                            <span className={`flex items-center gap-1 text-xs font-medium px-2 py-1 rounded-full ${
-                                stats.growth >= 0
-                                    ? 'text-emerald-700 dark:text-d-green bg-emerald-50 dark:bg-[rgba(52,232,161,0.08)]'
-                                    : 'text-red-600 dark:text-d-red bg-red-50 dark:bg-[rgba(255,107,107,0.08)]'
-                            }`}>
-                                {stats.growth >= 0 ? <FiArrowUp size={12} /> : <FiArrowDown size={12} />}
-                                {Math.abs(stats.growth).toFixed(1)}%
-                            </span>
-                        )}
-                    </div>
-                    <p className="text-2xl font-bold text-slate-800 dark:text-d-heading">{currency} {fmt(stats.grossRevenue)}</p>
-                    <p className="text-xs text-slate-500 dark:text-d-muted mt-1">Total Revenue</p>
-                </div>
-
-                {/* Orders */}
-                <div className="bg-white dark:bg-d-card border border-slate-200 dark:border-d-border rounded-2xl p-5">
-                    <div className="flex items-center justify-between mb-3">
-                        <div className="w-10 h-10 rounded-xl bg-blue-100 dark:bg-[rgba(91,156,246,0.1)] flex items-center justify-center">
-                            <FiShoppingCart className="text-blue-600 dark:text-d-blue" size={20} />
-                        </div>
-                    </div>
-                    <p className="text-2xl font-bold text-slate-800 dark:text-d-heading">{stats.totalOrders}</p>
-                    <p className="text-xs text-slate-500 dark:text-d-muted mt-1">Total Orders</p>
-                </div>
-
-                {/* Avg Order Value */}
-                <div className="bg-white dark:bg-d-card border border-slate-200 dark:border-d-border rounded-2xl p-5">
-                    <div className="flex items-center justify-between mb-3">
-                        <div className="w-10 h-10 rounded-xl bg-amber-100 dark:bg-[rgba(255,210,100,0.1)] flex items-center justify-center">
-                            <FiTrendingUp className="text-amber-600 dark:text-d-accent" size={20} />
-                        </div>
-                    </div>
-                    <p className="text-2xl font-bold text-slate-800 dark:text-d-heading">{currency} {fmt(Math.round(stats.avgOrderValue))}</p>
-                    <p className="text-xs text-slate-500 dark:text-d-muted mt-1">Avg Order Value</p>
-                </div>
-
-                {/* My Sales */}
-                <div className="bg-white dark:bg-d-card border border-slate-200 dark:border-d-border rounded-2xl p-5">
-                    <div className="flex items-center justify-between mb-3">
-                        <div className="w-10 h-10 rounded-xl bg-purple-100 dark:bg-[rgba(168,130,255,0.1)] flex items-center justify-center">
-                            <FiAward className="text-purple-600 dark:text-[#a882ff]" size={20} />
-                        </div>
-                    </div>
-                    <p className="text-2xl font-bold text-slate-800 dark:text-d-heading">
-                        {myStats ? `${currency} ${fmt(Math.round(myStats.totalRevenue || 0))}` : '-'}
-                    </p>
-                    <p className="text-xs text-slate-500 dark:text-d-muted mt-1">
-                        My Sales {myStats ? `(${myStats.totalBills || 0} bills)` : ''}
-                    </p>
-                </div>
-            </div>
-
-            {/* Chart + Target */}
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-6">
-                {/* Revenue Chart */}
-                <div className="lg:col-span-2 bg-white dark:bg-d-card border border-slate-200 dark:border-d-border rounded-2xl p-5">
-                    <h3 className="text-sm font-semibold text-slate-700 dark:text-d-text mb-4 flex items-center gap-2">
-                        <FiActivity size={16} className="text-slate-400 dark:text-d-muted" />
-                        Revenue Trend
-                    </h3>
-                    <div className="h-56">
-                        <ResponsiveContainer width="100%" height="100%">
-                            <AreaChart data={chartData}>
-                                <defs>
-                                    <linearGradient id="empRevenueGrad" x1="0" y1="0" x2="0" y2="1">
-                                        <stop offset="5%" stopColor="#f59e0b" stopOpacity={0.3} />
-                                        <stop offset="95%" stopColor="#f59e0b" stopOpacity={0} />
-                                    </linearGradient>
-                                </defs>
-                                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
-                                <XAxis dataKey="name" tick={{ fontSize: 11 }} stroke="#94a3b8" />
-                                <YAxis tick={{ fontSize: 11 }} stroke="#94a3b8" tickFormatter={fmtShort} />
-                                <Tooltip
-                                    contentStyle={{
-                                        background: 'rgba(13,15,23,0.95)',
-                                        border: '1px solid rgba(255,255,255,0.1)',
-                                        borderRadius: '12px',
-                                        fontSize: '12px',
-                                        color: '#f0f2f8',
-                                    }}
-                                    formatter={(v) => [`${currency} ${fmt(v)}`, 'Revenue']}
-                                />
-                                <Area
-                                    type="monotone"
-                                    dataKey="sales"
-                                    stroke="#f59e0b"
-                                    strokeWidth={2}
-                                    fill="url(#empRevenueGrad)"
-                                />
-                            </AreaChart>
-                        </ResponsiveContainer>
-                    </div>
-                </div>
-
-                {/* Target Progress */}
-                <div className="bg-white dark:bg-d-card border border-slate-200 dark:border-d-border rounded-2xl p-5 flex flex-col">
-                    <h3 className="text-sm font-semibold text-slate-700 dark:text-d-text mb-4 flex items-center gap-2">
-                        <FiCalendar size={16} className="text-slate-400 dark:text-d-muted" />
-                        Daily Target
-                    </h3>
-                    <div className="flex-1 flex flex-col items-center justify-center">
-                        <div className="relative w-32 h-32 mb-4">
-                            <svg className="w-full h-full -rotate-90" viewBox="0 0 120 120">
-                                <circle cx="60" cy="60" r="52" fill="none" stroke="rgba(255,255,255,0.06)" strokeWidth="10" />
-                                <circle
-                                    cx="60" cy="60" r="52" fill="none"
-                                    stroke={progressPercent >= 100 ? '#34e8a1' : '#f59e0b'}
-                                    strokeWidth="10"
-                                    strokeLinecap="round"
-                                    strokeDasharray={`${progressPercent * 3.267} 326.7`}
-                                />
-                            </svg>
-                            <div className="absolute inset-0 flex flex-col items-center justify-center">
-                                <span className="text-2xl font-bold text-slate-800 dark:text-d-heading">
-                                    {Math.round(progressPercent)}%
-                                </span>
-                            </div>
-                        </div>
-                        <p className="text-sm text-slate-600 dark:text-d-text font-medium">
-                            {currency} {fmt(stats.grossRevenue)} / {fmt(target)}
-                        </p>
-                        <p className="text-xs text-slate-400 dark:text-d-muted mt-1">
-                            {stats.grossRevenue >= target ? 'Target achieved!' : `${currency} ${fmt(target - stats.grossRevenue)} remaining`}
-                        </p>
-                    </div>
-                </div>
-            </div>
-
-            {/* Top Products */}
-            {topProducts.length > 0 && (
-                <div className="bg-white dark:bg-d-card border border-slate-200 dark:border-d-border rounded-2xl p-5">
-                    <h3 className="text-sm font-semibold text-slate-700 dark:text-d-text mb-4 flex items-center gap-2">
-                        <FiPackage size={16} className="text-slate-400 dark:text-d-muted" />
-                        Top Selling Products
-                    </h3>
-                    <div className="space-y-3">
-                        {topProducts.slice(0, 5).map((p, i) => (
-                            <div key={p._id || i} className="flex items-center gap-3">
-                                <span className="w-6 h-6 rounded-full bg-amber-100 dark:bg-[rgba(255,210,100,0.1)] flex items-center justify-center text-xs font-bold text-amber-700 dark:text-d-accent flex-shrink-0">
-                                    {i + 1}
-                                </span>
-                                <div className="flex-1 min-w-0">
-                                    <p className="text-sm font-medium text-slate-700 dark:text-d-text truncate">{p.name}</p>
-                                    <p className="text-xs text-slate-400 dark:text-d-muted">{p.category || 'General'}</p>
-                                </div>
-                                <div className="text-right">
-                                    <p className="text-sm font-semibold text-slate-700 dark:text-d-text">
-                                        {currency} {fmt(p.price || p.sellingPrice || 0)}
-                                    </p>
-                                    {p.totalSold != null && (
-                                        <p className="text-xs text-slate-400 dark:text-d-muted">{p.totalSold} sold</p>
-                                    )}
-                                </div>
-                            </div>
-                        ))}
-                    </div>
-                </div>
-            )}
         </div>
     );
 };

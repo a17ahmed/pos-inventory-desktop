@@ -1,4 +1,6 @@
 import React, { useState, useEffect } from 'react';
+import { PageHeader, DataTable, rowActions, Dash, StatusBadge, FilterButton, DateRangeFields, rangeLabel, Field, Select } from '../components/ui';
+import { DialogShell } from '../components/ui/Dialog';
 import { todayLocalDate, toLocalDateStr } from '../utils/date';
 import { useBusiness } from '../context/BusinessContext';
 import { getExpenses, getExpenseStats, createExpense, updateExpense, deleteExpense, approveExpense, rejectExpense } from '../services/api/expenses';
@@ -23,6 +25,8 @@ import {
     FiXCircle,
 } from 'react-icons/fi';
 
+const STATUS_LABEL = { pending: 'Pending', approved: 'Approved', rejected: 'Rejected' };
+
 const CATEGORIES = [
     { value: 'rent', label: 'Rent' },
     { value: 'utilities', label: 'Utilities' },
@@ -45,8 +49,17 @@ const Expenses = () => {
     const [stats, setStats] = useState({ totalExpenses: 0, monthExpenses: 0, pendingCount: 0, pendingTotal: 0 });
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
+    const [pageSize, setPageSize] = useState(() => {
+        try {
+            return JSON.parse(localStorage.getItem('ds.table.expenses.pageSize')) || 50;
+        } catch {
+            return 50;
+        }
+    });
     const [searchQuery, setSearchQuery] = useState('');
     const [statusFilter, setStatusFilter] = useState('all');
+    const [categoryFilter, setCategoryFilter] = useState('all');
+    const [range, setRange] = useState({ from: '', to: '' }); // '' = all dates
     const [showModal, setShowModal] = useState(false);
     const [editingExpense, setEditingExpense] = useState(null);
     const [rejectModal, setRejectModal] = useState({ show: false, expenseId: null, reason: '' });
@@ -72,7 +85,7 @@ const Expenses = () => {
     useEffect(() => {
         const t = setTimeout(() => fetchExpenses(1), 300);
         return () => clearTimeout(t);
-    }, [statusFilter, searchQuery]);
+    }, [statusFilter, categoryFilter, range.from, range.to, searchQuery, pageSize]);
 
     useEffect(() => {
         fetchStats();
@@ -83,8 +96,11 @@ const Expenses = () => {
         setLoading(true);
         setError(null);
         try {
-            const params = { page: pageNum, limit: 50 };
+            const params = { page: pageNum, limit: pageSize };
             if (statusFilter !== 'all') params.status = statusFilter;
+            if (categoryFilter !== 'all') params.category = categoryFilter;
+            if (range.from) params.startDate = range.from;
+            if (range.to) params.endDate = range.to;
             if (searchQuery.trim()) params.search = searchQuery.trim();
             const res = await getExpenses(params);
             const data = res.data;
@@ -126,6 +142,11 @@ const Expenses = () => {
     // Search is server-side now (?search= over description), so the current page
     // is already the filtered result — no client-side filtering.
     const filteredExpenses = Array.isArray(expenses) ? expenses : [];
+    const resetFilters = () => {
+        setStatusFilter('all');
+        setCategoryFilter('all');
+        setRange({ from: '', to: '' });
+    };
 
     const openModal = (expense = null) => {
         if (expense) {
@@ -296,11 +317,11 @@ const Expenses = () => {
     const getStatusBadge = (status) => {
         switch (status) {
             case 'approved':
-                return { icon: FiCheckCircle, color: 'bg-green-100 text-green-600 dark:bg-[rgba(52,232,161,0.15)] dark:text-d-green' };
+                return { icon: FiCheckCircle, color: 'bg-success-chip text-success' };
             case 'rejected':
-                return { icon: FiXCircle, color: 'bg-red-100 text-red-600 dark:bg-[rgba(255,107,107,0.15)] dark:text-d-red' };
+                return { icon: FiXCircle, color: 'bg-destructive-chip text-destructive' };
             default:
-                return { icon: FiClock, color: 'bg-yellow-100 text-yellow-600 dark:bg-[rgba(255,210,100,0.15)] dark:text-d-accent' };
+                return { icon: FiClock, color: 'bg-warning-chip text-warning-chip-foreground' };
         }
     };
 
@@ -308,230 +329,170 @@ const Expenses = () => {
         return CATEGORIES.find((c) => c.value === value)?.label || value;
     };
 
-    if (loading) {
-        return (
-            <div className="flex items-center justify-center h-full p-6 bg-slate-50 dark:bg-d-bg">
-                <div className="flex flex-col items-center gap-4">
-                    <div className="w-12 h-12 border-4 border-amber-500 dark:border-d-accent border-t-transparent rounded-full animate-spin" />
-                    <p className="text-slate-500 dark:text-d-muted">Loading expenses...</p>
-                </div>
-            </div>
-        );
-    }
-
-    if (error) {
-        return (
-            <div className="flex items-center justify-center h-full p-6 bg-slate-50 dark:bg-d-bg">
-                <div className="flex flex-col items-center gap-4 text-center">
-                    <div className="w-16 h-16 bg-red-100 dark:bg-[rgba(255,107,107,0.15)] rounded-full flex items-center justify-center">
-                        <FiXCircle size={32} className="text-red-500 dark:text-d-red" />
-                    </div>
-                    <h2 className="text-xl font-semibold text-slate-800 dark:text-d-heading">Failed to load expenses</h2>
-                    <p className="text-slate-500 dark:text-d-muted">{error}</p>
-                    <button
-                        onClick={() => { fetchExpenses(1); fetchStats(); }}
-                        className="px-4 py-2 bg-gradient-to-r from-amber-400 to-amber-500 dark:from-d-accent dark:to-d-accent-s text-white dark:text-d-card rounded-xl hover:shadow-md transition-all"
-                    >
-                        Try Again
-                    </button>
-                </div>
-            </div>
-        );
-    }
+    const expenseColumns = [
+        {
+            id: 'category',
+            header: 'Category',
+            accessorFn: (e) => getCategoryLabel(e.category) || '',
+            cell: ({ getValue }) => <span className="font-medium">{getValue()}</span>,
+        },
+        {
+            id: 'description',
+            header: 'Description',
+            accessorFn: (e) => e.description || '',
+            cell: ({ getValue }) => (getValue() ? <span className="text-muted-foreground">{getValue()}</span> : <Dash />),
+        },
+        {
+            id: 'amount',
+            header: 'Amount',
+            accessorFn: (e) => Number(e.amount) || 0,
+            meta: { align: 'right' },
+            cell: ({ getValue }) => <span className="font-medium">{formatCurrency(getValue())}</span>,
+        },
+        {
+            id: 'date',
+            header: 'Date',
+            accessorFn: (e) => new Date(e.date || e.createdAt).getTime() || 0,
+            cell: ({ row: { original: e } }) => <span className="text-muted-foreground">{new Date(e.date || e.createdAt).toLocaleDateString()}</span>,
+        },
+        {
+            id: 'status',
+            header: 'Status',
+            accessorFn: (e) => e.status || '',
+            cell: ({ getValue }) => <StatusBadge kind="expense" value={getValue()} size="sm" />,
+        },
+        rowActions(
+            (e) => [
+                ...(e.status === 'pending'
+                    ? [
+                          { label: approvingId === e._id ? 'Approving…' : 'Approve', icon: FiCheck, disabled: approvingId === e._id, onSelect: () => handleApprove(e._id) },
+                          { label: 'Reject', icon: FiX, onSelect: () => setRejectModal({ show: true, expenseId: e._id, reason: '' }) },
+                          { separator: true },
+                      ]
+                    : []),
+                { label: 'Edit', icon: FiEdit2, onSelect: () => openModal(e) },
+                { separator: true },
+                { label: 'Delete', icon: FiTrash2, danger: true, onSelect: () => handleDelete(e._id) },
+            ],
+            { label: 'Expense actions' }
+        ),
+    ];
 
     return (
-        <div className="p-6 animate-fadeIn bg-slate-50 dark:bg-d-bg min-h-full">
+        <div className="p-6 animate-fadeIn min-h-full">
             {/* Header */}
-            <div className="flex items-center justify-between mb-6">
-                <div>
-                    <h1 className="text-2xl font-bold text-slate-800 dark:text-d-heading">Expenses</h1>
-                    <p className="text-slate-500 dark:text-d-muted">{pagination.total} expenses recorded</p>
-                </div>
-                <button
+            <PageHeader
+                title={<>Expenses</>}
+                subtitle={<>{pagination.total} expenses recorded</>}
+                actions={
+                    <>
+                        <button
                     onClick={() => openModal()}
-                    className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-amber-400 to-amber-500 dark:from-d-accent dark:to-d-accent-s text-white dark:text-d-card rounded-xl font-semibold hover:shadow-md dark:hover:shadow-[0_4px_20px_rgba(255,210,100,0.4)] transition-all"
+                    className="flex items-center gap-2 px-5 py-2.5 bg-primary text-white rounded-xl font-semibold hover:shadow-md transition-all"
                 >
                     <FiPlus />
                     Add Expense
                 </button>
-            </div>
+                    </>
+                }
+            />
 
             {/* Stats */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-                <div className="bg-white dark:bg-d-card rounded-2xl p-6 shadow-sm border border-slate-100 dark:border-d-border">
-                    <p className="text-sm text-slate-500 dark:text-d-muted">Total Approved</p>
-                    <p className="text-2xl font-bold text-green-600 dark:text-d-green">{formatCurrency(stats.totalExpenses)}</p>
+                <div className="bg-card rounded-2xl p-6 shadow-sm border border-hairline">
+                    <p className="text-sm text-muted-foreground">Total Approved</p>
+                    <p className="text-2xl font-bold text-success">{formatCurrency(stats.totalExpenses)}</p>
                 </div>
-                <div className="bg-white dark:bg-d-card rounded-2xl p-6 shadow-sm border border-slate-100 dark:border-d-border">
-                    <p className="text-sm text-slate-500 dark:text-d-muted">Pending Approval</p>
-                    <p className="text-2xl font-bold text-yellow-600 dark:text-d-accent">
+                <div className="bg-card rounded-2xl p-6 shadow-sm border border-hairline">
+                    <p className="text-sm text-muted-foreground">Pending Approval</p>
+                    <p className="text-2xl font-bold text-warning-chip-foreground">
                         {formatCurrency(Math.round((stats.pendingTotal || 0) * 100) / 100)}
                     </p>
-                    <p className="text-xs text-slate-400 dark:text-d-faint mt-1">{stats.pendingCount} pending</p>
+                    <p className="text-xs text-muted-foreground mt-1">{stats.pendingCount} pending</p>
                 </div>
-                <div className="bg-white dark:bg-d-card rounded-2xl p-6 shadow-sm border border-slate-100 dark:border-d-border">
-                    <p className="text-sm text-slate-500 dark:text-d-muted">This Month</p>
-                    <p className="text-2xl font-bold text-slate-800 dark:text-d-heading">{formatCurrency(stats.monthExpenses)}</p>
-                </div>
-            </div>
-
-            {/* Filters */}
-            <div className="flex flex-wrap items-center gap-4 mb-6">
-                <div className="relative flex-1 max-w-md">
-                    <FiSearch className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 dark:text-d-faint" />
-                    <input
-                        type="text"
-                        value={searchQuery}
-                        onChange={(e) => setSearchQuery(e.target.value)}
-                        placeholder="Search expenses..."
-                        className="w-full pl-12 pr-4 py-3 bg-white dark:bg-d-card border border-slate-200 dark:border-d-border rounded-xl text-slate-800 dark:text-d-text placeholder-slate-400 dark:placeholder-d-faint focus:outline-none focus:border-amber-300 dark:focus:border-d-border-hover transition-colors"
-                    />
-                </div>
-
-                <div className="flex items-center gap-1 bg-white dark:bg-d-card rounded-xl p-1 border border-slate-200 dark:border-d-border">
-                    {['all', 'pending', 'approved', 'rejected'].map((status) => (
-                        <button
-                            key={status}
-                            onClick={() => setStatusFilter(status)}
-                            className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors capitalize ${
-                                statusFilter === status
-                                    ? 'bg-amber-500 dark:bg-d-accent text-white dark:text-d-card'
-                                    : 'text-slate-600 dark:text-d-muted hover:bg-slate-100 dark:hover:bg-d-glass-hover'
-                            }`}
-                        >
-                            {status}
-                        </button>
-                    ))}
+                <div className="bg-card rounded-2xl p-6 shadow-sm border border-hairline">
+                    <p className="text-sm text-muted-foreground">This Month</p>
+                    <p className="text-2xl font-bold text-foreground">{formatCurrency(stats.monthExpenses)}</p>
                 </div>
             </div>
 
-            {/* Expenses Table */}
-            <div className="bg-white dark:bg-d-card rounded-2xl shadow-sm border border-slate-100 dark:border-d-border overflow-hidden">
-                <table className="w-full">
-                    <thead className="bg-slate-50 dark:bg-d-glass">
-                        <tr>
-                            <th className="text-left py-4 px-6 font-medium text-slate-600 dark:text-d-muted">Category</th>
-                            <th className="text-left py-4 px-6 font-medium text-slate-600 dark:text-d-muted">Description</th>
-                            <th className="text-left py-4 px-6 font-medium text-slate-600 dark:text-d-muted">Amount</th>
-                            <th className="text-left py-4 px-6 font-medium text-slate-600 dark:text-d-muted">Date</th>
-                            <th className="text-left py-4 px-6 font-medium text-slate-600 dark:text-d-muted">Status</th>
-                            <th className="text-right py-4 px-6 font-medium text-slate-600 dark:text-d-muted">Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {filteredExpenses.map((expense) => {
-                            const status = getStatusBadge(expense.status);
-                            return (
-                                <tr
-                                    key={expense._id}
-                                    className="border-t border-slate-100 dark:border-d-border hover:bg-slate-50 dark:hover:bg-[rgba(255,255,255,0.02)] transition-colors"
-                                >
-                                    <td className="py-4 px-6">
-                                        <span className="px-3 py-1 bg-amber-100 dark:bg-[rgba(255,210,100,0.15)] text-amber-600 dark:text-d-accent rounded-full text-sm font-medium">
-                                            {getCategoryLabel(expense.category)}
-                                        </span>
-                                    </td>
-                                    <td className="py-4 px-6 text-slate-600 dark:text-d-muted">
-                                        {expense.description || '-'}
-                                    </td>
-                                    <td className="py-4 px-6 font-semibold text-red-600 dark:text-d-red">
-                                        {formatCurrency(expense.amount)}
-                                    </td>
-                                    <td className="py-4 px-6 text-slate-500 dark:text-d-muted">
-                                        {new Date(expense.date || expense.createdAt).toLocaleDateString()}
-                                    </td>
-                                    <td className="py-4 px-6">
-                                        <span
-                                            className={`inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-medium ${status.color}`}
-                                        >
-                                            <status.icon size={12} />
-                                            {expense.status}
-                                        </span>
-                                    </td>
-                                    <td className="py-4 px-6">
-                                        <div className="flex items-center justify-end gap-2">
-                                            {expense.status === 'pending' && (
-                                                <>
-                                                    <button
-                                                        onClick={() => handleApprove(expense._id)}
-                                                        disabled={approvingId === expense._id}
-                                                        className="p-2 text-green-500 dark:text-d-green hover:bg-green-50 dark:hover:bg-[rgba(52,232,161,0.1)] rounded-lg transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
-                                                        title="Approve"
-                                                    >
-                                                        <FiCheck />
-                                                    </button>
-                                                    <button
-                                                        onClick={() => setRejectModal({ show: true, expenseId: expense._id, reason: '' })}
-                                                        className="p-2 text-red-500 dark:text-d-red hover:bg-red-50 dark:hover:bg-[rgba(255,107,107,0.1)] rounded-lg transition-colors"
-                                                        title="Reject"
-                                                    >
-                                                        <FiX />
-                                                    </button>
-                                                </>
-                                            )}
-                                            <button
-                                                onClick={() => openModal(expense)}
-                                                className="p-2 text-slate-500 dark:text-d-faint hover:text-amber-500 dark:hover:text-d-accent hover:bg-amber-50 dark:hover:bg-[rgba(255,210,100,0.1)] rounded-lg transition-colors"
-                                            >
-                                                <FiEdit2 />
-                                            </button>
-                                            <button
-                                                onClick={() => handleDelete(expense._id)}
-                                                className="p-2 text-slate-500 dark:text-d-faint hover:text-red-500 dark:hover:text-d-red hover:bg-red-50 dark:hover:bg-[rgba(255,107,107,0.1)] rounded-lg transition-colors"
-                                            >
-                                                <FiTrash2 />
-                                            </button>
-                                        </div>
-                                    </td>
-                                </tr>
-                            );
-                        })}
-                    </tbody>
-                </table>
-                {filteredExpenses.length === 0 && (
-                    <div className="flex flex-col items-center justify-center py-16 text-slate-400 dark:text-d-faint">
-                        <FiDollarSign size={48} />
-                        <p className="mt-4 dark:text-d-muted">No expenses found</p>
-                    </div>
-                )}
-
-                {/* Pagination */}
-                {pagination.totalPages > 1 && (
-                    <div className="flex items-center justify-between px-4 py-3 border-t border-slate-100 dark:border-d-border">
-                        <p className="text-sm text-slate-500 dark:text-d-muted">
-                            Page {pagination.page} of {pagination.totalPages} ({pagination.total} expenses)
-                        </p>
-                        <div className="flex gap-2">
-                            <button
-                                disabled={pagination.page <= 1 || loading}
-                                onClick={() => fetchExpenses(pagination.page - 1)}
-                                className="px-3 py-1.5 text-sm rounded-lg bg-slate-100 dark:bg-d-elevated hover:bg-slate-200 dark:hover:bg-d-glass disabled:opacity-40 transition-colors text-slate-700 dark:text-d-text"
-                            >
-                                Previous
-                            </button>
-                            <button
-                                disabled={pagination.page >= pagination.totalPages || loading}
-                                onClick={() => fetchExpenses(pagination.page + 1)}
-                                className="px-3 py-1.5 text-sm rounded-lg bg-slate-100 dark:bg-d-elevated hover:bg-slate-200 dark:hover:bg-d-glass disabled:opacity-40 transition-colors text-slate-700 dark:text-d-text"
-                            >
-                                Next
-                            </button>
+            <DataTable
+                caption="Expenses"
+                data={filteredExpenses}
+                columns={expenseColumns}
+                getRowId={(e) => e._id}
+                loading={loading}
+                error={error ? { message: error, onRetry: () => { fetchExpenses(1); fetchStats(); } } : null}
+                search={{ value: searchQuery, onChange: setSearchQuery, placeholder: 'Search expenses' }}
+                filters={
+                    <FilterButton
+                        label="Filter expenses"
+                        summary={[
+                            rangeLabel(range),
+                            statusFilter !== 'all' && STATUS_LABEL[statusFilter],
+                            categoryFilter !== 'all' && getCategoryLabel(categoryFilter),
+                        ].filter(Boolean).join(' · ')}
+                        count={(statusFilter !== 'all') + (categoryFilter !== 'all')}
+                        onReset={resetFilters}
+                    >
+                        <DateRangeFields value={range} onChange={setRange} />
+                        <div className="grid grid-cols-2 gap-2">
+                            <Field label="Status">
+                                <Select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
+                                    <option value="all">All</option>
+                                    <option value="pending">Pending</option>
+                                    <option value="approved">Approved</option>
+                                    <option value="rejected">Rejected</option>
+                                </Select>
+                            </Field>
+                            <Field label="Category">
+                                <Select value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value)}>
+                                    <option value="all">All</option>
+                                    {CATEGORIES.map((c) => (
+                                        <option key={c.value} value={c.value}>
+                                            {c.label}
+                                        </option>
+                                    ))}
+                                </Select>
+                            </Field>
                         </div>
-                    </div>
-                )}
-            </div>
+                    </FilterButton>
+                }
+                isFiltered={!!searchQuery.trim() || statusFilter !== 'all' || categoryFilter !== 'all' || !!range.from || !!range.to}
+                onClearFilters={() => {
+                    setSearchQuery('');
+                    resetFilters();
+                }}
+                empty={{ icon: FiDollarSign, title: 'No expenses yet', description: 'Record rent, bills and other costs here.' }}
+                onRowClick={(e) => openModal(e)}
+                rowLabel={(e) => `Edit expense: ${getCategoryLabel(e.category)} ${formatCurrency(e.amount)}`}
+                rowTone={(e) => (e.status === 'pending' ? 'attention' : null)}
+                server={{
+                    page: pagination.page,
+                    pageSize,
+                    total: pagination.total,
+                    onPageChange: (p) => fetchExpenses(p),
+                    onPageSizeChange: (n) => {
+                        setPageSize(n);
+                        try {
+                            localStorage.setItem('ds.table.expenses.pageSize', JSON.stringify(n));
+                        } catch {
+                            /* storage blocked */
+                        }
+                    },
+                }}
+            />
 
             {/* Add/Edit Modal */}
             {showModal && (
-                <div className="fixed inset-0 bg-black/50 dark:bg-black/60 flex items-center justify-center z-50 p-4">
-                    <div className="bg-white dark:bg-d-card dark:border dark:border-d-border rounded-2xl w-full max-w-lg animate-fadeIn max-h-[90vh] overflow-y-auto">
-                        <div className="flex items-center justify-between p-6 border-b border-slate-200 dark:border-d-border">
-                            <h3 className="text-xl font-semibold text-slate-800 dark:text-d-heading">
+                <DialogShell size="md" className="max-h-[90vh] overflow-y-auto">
+                        <div className="flex items-center justify-between p-6 border-b border-hairline">
+                            <h3 className="text-xl font-semibold text-foreground">
                                 {editingExpense ? 'Edit Expense' : 'Add Expense'}
                             </h3>
-                            <button
+                            <button data-dialog-close
                                 onClick={() => setShowModal(false)}
-                                className="p-2 hover:bg-slate-100 dark:hover:bg-d-glass-hover rounded-lg transition-colors text-slate-600 dark:text-d-muted"
+                                className="p-2 hover:bg-[var(--hover-overlay)] rounded-lg transition-colors text-muted-foreground"
                             >
                                 <FiX />
                             </button>
@@ -539,7 +500,7 @@ const Expenses = () => {
 
                         <form onSubmit={handleSubmit} className="p-6 space-y-4">
                             <div>
-                                <label className="block text-sm font-medium text-slate-700 dark:text-d-muted mb-1">
+                                <label className="block text-sm font-medium text-foreground mb-1">
                                     Category *
                                 </label>
                                 <select
@@ -547,7 +508,7 @@ const Expenses = () => {
                                     onChange={(e) =>
                                         setFormData({ ...formData, category: e.target.value })
                                     }
-                                    className="w-full px-4 py-2 bg-white dark:bg-d-bg border border-slate-200 dark:border-d-border rounded-xl text-slate-800 dark:text-d-text focus:outline-none focus:border-amber-300 dark:focus:border-d-border-hover"
+                                    className="w-full px-4 py-2 bg-card border border-hairline rounded-xl text-foreground focus:outline-none focus:border-primary/30"
                                 >
                                     {CATEGORIES.map((cat) => (
                                         <option key={cat.value} value={cat.value}>
@@ -558,7 +519,7 @@ const Expenses = () => {
                             </div>
 
                             <div>
-                                <label className="block text-sm font-medium text-slate-700 dark:text-d-muted mb-1">
+                                <label className="block text-sm font-medium text-foreground mb-1">
                                     Amount *
                                 </label>
                                 <input
@@ -567,14 +528,14 @@ const Expenses = () => {
                                     onChange={(e) =>
                                         setFormData({ ...formData, amount: e.target.value })
                                     }
-                                    className="w-full px-4 py-2 bg-white dark:bg-d-bg border border-slate-200 dark:border-d-border rounded-xl text-slate-800 dark:text-d-text placeholder-slate-400 dark:placeholder-d-faint focus:outline-none focus:border-amber-300 dark:focus:border-d-border-hover"
+                                    className="w-full px-4 py-2 bg-card border border-hairline rounded-xl text-foreground placeholder:text-placeholder focus:outline-none focus:border-primary/30"
                                     required
                                     min="0"
                                 />
                             </div>
 
                             <div>
-                                <label className="block text-sm font-medium text-slate-700 dark:text-d-muted mb-1">
+                                <label className="block text-sm font-medium text-foreground mb-1">
                                     Description
                                 </label>
                                 <textarea
@@ -582,14 +543,14 @@ const Expenses = () => {
                                     onChange={(e) =>
                                         setFormData({ ...formData, description: e.target.value })
                                     }
-                                    className="w-full px-4 py-2 bg-white dark:bg-d-bg border border-slate-200 dark:border-d-border rounded-xl text-slate-800 dark:text-d-text placeholder-slate-400 dark:placeholder-d-faint focus:outline-none focus:border-amber-300 dark:focus:border-d-border-hover"
+                                    className="w-full px-4 py-2 bg-card border border-hairline rounded-xl text-foreground placeholder:text-placeholder focus:outline-none focus:border-primary/30"
                                     rows="3"
                                 />
                             </div>
 
                             <div className="grid grid-cols-2 gap-4">
                                 <div>
-                                    <label className="block text-sm font-medium text-slate-700 dark:text-d-muted mb-1">
+                                    <label className="block text-sm font-medium text-foreground mb-1">
                                         Date
                                     </label>
                                     <input
@@ -598,11 +559,11 @@ const Expenses = () => {
                                         onChange={(e) =>
                                             setFormData({ ...formData, date: e.target.value })
                                         }
-                                        className="w-full px-4 py-2 bg-white dark:bg-d-bg border border-slate-200 dark:border-d-border rounded-xl text-slate-800 dark:text-d-text focus:outline-none focus:border-amber-300 dark:focus:border-d-border-hover"
+                                        className="w-full px-4 py-2 bg-card border border-hairline rounded-xl text-foreground focus:outline-none focus:border-primary/30"
                                     />
                                 </div>
                                 <div>
-                                    <label className="block text-sm font-medium text-slate-700 dark:text-d-muted mb-1">
+                                    <label className="block text-sm font-medium text-foreground mb-1">
                                         Payment Method
                                     </label>
                                     <select
@@ -610,7 +571,7 @@ const Expenses = () => {
                                         onChange={(e) =>
                                             setFormData({ ...formData, paymentMethod: e.target.value })
                                         }
-                                        className="w-full px-4 py-2 bg-white dark:bg-d-bg border border-slate-200 dark:border-d-border rounded-xl text-slate-800 dark:text-d-text focus:outline-none focus:border-amber-300 dark:focus:border-d-border-hover"
+                                        className="w-full px-4 py-2 bg-card border border-hairline rounded-xl text-foreground focus:outline-none focus:border-primary/30"
                                     >
                                         <option value="cash">Cash</option>
                                         <option value="card">Card</option>
@@ -635,22 +596,22 @@ const Expenses = () => {
                             {moneyBookOn && chequeTracking && formData.paymentMethod === 'cheque' && (
                                 <div className="grid grid-cols-2 gap-4">
                                     <div>
-                                        <label className="block text-sm font-medium text-slate-700 dark:text-d-muted mb-1">Cheque number</label>
+                                        <label className="block text-sm font-medium text-foreground mb-1">Cheque number</label>
                                         <input
                                             type="text"
                                             maxLength={50}
                                             value={moneyForm.chequeNumber}
                                             onChange={(e) => setMoneyForm((m) => ({ ...m, chequeNumber: e.target.value }))}
-                                            className="w-full px-4 py-2 bg-white dark:bg-d-bg border border-slate-200 dark:border-d-border rounded-xl text-slate-800 dark:text-d-text focus:outline-none focus:border-amber-300 dark:focus:border-d-border-hover"
+                                            className="w-full px-4 py-2 bg-card border border-hairline rounded-xl text-foreground focus:outline-none focus:border-primary/30"
                                         />
                                     </div>
                                     <div>
-                                        <label className="block text-sm font-medium text-slate-700 dark:text-d-muted mb-1">Cheque date</label>
+                                        <label className="block text-sm font-medium text-foreground mb-1">Cheque date</label>
                                         <input
                                             type="date"
                                             value={moneyForm.chequeDate}
                                             onChange={(e) => setMoneyForm((m) => ({ ...m, chequeDate: e.target.value }))}
-                                            className="w-full px-4 py-2 bg-white dark:bg-d-bg border border-slate-200 dark:border-d-border rounded-xl text-slate-800 dark:text-d-text focus:outline-none focus:border-amber-300 dark:focus:border-d-border-hover"
+                                            className="w-full px-4 py-2 bg-card border border-hairline rounded-xl text-foreground focus:outline-none focus:border-primary/30"
                                         />
                                     </div>
                                 </div>
@@ -659,20 +620,20 @@ const Expenses = () => {
                             {!moneyBookOn && formData.paymentMethod === 'cash' && cashBalance != null && (
                                 <div className={`flex items-center justify-between p-3 rounded-xl border ${
                                     (Number(formData.amount) || 0) > cashBalance
-                                        ? 'bg-red-50 dark:bg-[rgba(239,68,68,0.08)] border-red-200 dark:border-[rgba(239,68,68,0.2)]'
-                                        : 'bg-slate-50 dark:bg-d-bg border-slate-200 dark:border-d-border'
+                                        ? 'bg-destructive-chip border-destructive/30'
+                                        : 'bg-muted/40 border-hairline'
                                 }`}>
-                                    <span className="text-xs font-medium text-slate-500 dark:text-d-muted">Cash in Hand</span>
+                                    <span className="text-xs font-medium text-muted-foreground">Cash in Hand</span>
                                     <span className={`text-sm font-bold ${
                                         (Number(formData.amount) || 0) > cashBalance
-                                            ? 'text-red-600 dark:text-d-red'
-                                            : 'text-slate-800 dark:text-d-heading'
+                                            ? 'text-destructive'
+                                            : 'text-foreground'
                                     }`}>{formatCurrency(cashBalance)}</span>
                                 </div>
                             )}
 
                             <div>
-                                <label className="block text-sm font-medium text-slate-700 dark:text-d-muted mb-1">
+                                <label className="block text-sm font-medium text-foreground mb-1">
                                     Notes
                                 </label>
                                 <textarea
@@ -680,7 +641,7 @@ const Expenses = () => {
                                     onChange={(e) =>
                                         setFormData({ ...formData, notes: e.target.value })
                                     }
-                                    className="w-full px-4 py-2 bg-white dark:bg-d-bg border border-slate-200 dark:border-d-border rounded-xl text-slate-800 dark:text-d-text placeholder-slate-400 dark:placeholder-d-faint focus:outline-none focus:border-amber-300 dark:focus:border-d-border-hover"
+                                    className="w-full px-4 py-2 bg-card border border-hairline rounded-xl text-foreground placeholder:text-placeholder focus:outline-none focus:border-primary/30"
                                     rows="2"
                                     placeholder="Additional notes..."
                                 />
@@ -690,29 +651,28 @@ const Expenses = () => {
                                 <button
                                     type="button"
                                     onClick={() => setShowModal(false)}
-                                    className="flex-1 py-3 border border-slate-200 dark:border-d-border rounded-xl font-medium text-slate-600 dark:text-d-muted hover:bg-slate-50 dark:hover:bg-d-glass transition-colors"
+                                    className="flex-1 py-3 border border-hairline rounded-xl font-medium text-muted-foreground hover:bg-[var(--hover-overlay)] transition-colors"
                                 >
                                     Cancel
                                 </button>
                                 <button
                                     type="submit"
                                     disabled={submitting}
-                                    className="flex-1 py-3 bg-gradient-to-r from-amber-400 to-amber-500 dark:from-d-accent dark:to-d-accent-s text-white dark:text-d-card rounded-xl font-medium hover:shadow-md dark:hover:shadow-[0_4px_20px_rgba(255,210,100,0.4)] transition-all flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
+                                    className="flex-1 py-3 bg-primary text-white rounded-xl font-medium hover:shadow-md transition-all flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
                                 >
                                     <FiSave />
                                     {submitting ? 'Saving...' : 'Save'}
                                 </button>
                             </div>
                         </form>
-                    </div>
-                </div>
+                    </DialogShell>
             )}
             {/* Approve: which account pays (Money Book on) */}
             {approveDialog && (
                 <Modal title="Approve expense" onClose={() => setApproveDialog(null)}>
                     <div className="p-5 space-y-4">
                         <ErrorBox>{approveDialog.error}</ErrorBox>
-                        <p className="text-sm text-slate-600 dark:text-d-text">
+                        <p className="text-sm text-muted-foreground">
                             {approveDialog.expense.description || getCategoryLabel(approveDialog.expense.category)} · <b>{formatCurrency(approveDialog.expense.amount)}</b>
                         </p>
                         <AccountPicker
@@ -740,46 +700,44 @@ const Expenses = () => {
             )}
             {/* Reject Reason Modal */}
             {rejectModal.show && (
-                <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-                    <div className="bg-white dark:bg-d-card rounded-2xl w-full max-w-md animate-fadeIn max-h-[90vh] overflow-y-auto">
-                        <div className="flex items-center justify-between p-6 border-b border-slate-200 dark:border-d-border">
-                            <h3 className="text-lg font-semibold text-slate-800 dark:text-d-heading">Reject Expense</h3>
-                            <button
+                <DialogShell size="md" className="max-h-[90vh] overflow-y-auto">
+                        <div className="flex items-center justify-between p-6 border-b border-hairline">
+                            <h3 className="text-lg font-semibold text-foreground">Reject Expense</h3>
+                            <button data-dialog-close
                                 onClick={() => setRejectModal({ show: false, expenseId: null, reason: '' })}
-                                className="p-2 hover:bg-slate-100 dark:hover:bg-d-glass-hover rounded-lg text-slate-600 dark:text-d-text"
+                                className="p-2 hover:bg-[var(--hover-overlay)] rounded-lg text-muted-foreground"
                             >
                                 <FiX />
                             </button>
                         </div>
                         <div className="p-6 space-y-4">
                             <div>
-                                <label className="block text-sm font-medium text-slate-700 dark:text-d-text mb-1">Rejection Reason</label>
+                                <label className="block text-sm font-medium text-foreground mb-1">Rejection Reason</label>
                                 <textarea
                                     value={rejectModal.reason}
                                     onChange={e => setRejectModal(prev => ({ ...prev, reason: e.target.value }))}
                                     placeholder="Enter reason for rejection..."
                                     rows={3}
-                                    className="w-full px-4 py-3 border border-slate-200 dark:border-d-border rounded-xl focus:ring-2 focus:ring-red-500 bg-white dark:bg-d-elevated text-slate-800 dark:text-d-heading resize-none"
+                                    className="w-full px-4 py-3 border border-hairline rounded-xl focus:ring-2 focus:ring-destructive bg-card text-foreground resize-none"
                                 />
                             </div>
                             <div className="flex gap-3">
                                 <button
                                     onClick={() => setRejectModal({ show: false, expenseId: null, reason: '' })}
-                                    className="flex-1 py-3 border border-slate-200 dark:border-d-border rounded-xl font-medium text-slate-600 dark:text-d-text hover:bg-slate-50 dark:hover:bg-d-glass-hover"
+                                    className="flex-1 py-3 border border-hairline rounded-xl font-medium text-muted-foreground hover:bg-[var(--hover-overlay)]"
                                 >
                                     Cancel
                                 </button>
                                 <button
                                     onClick={handleReject}
                                     disabled={rejecting}
-                                    className="flex-1 py-3 bg-red-500 text-white rounded-xl font-medium hover:bg-red-600 disabled:opacity-60 disabled:cursor-not-allowed"
+                                    className="flex-1 py-3 bg-destructive text-white rounded-xl font-medium hover:bg-destructive/90 disabled:opacity-60 disabled:cursor-not-allowed"
                                 >
                                     {rejecting ? 'Rejecting...' : 'Reject'}
                                 </button>
                             </div>
                         </div>
-                    </div>
-                </div>
+                    </DialogShell>
             )}
         </div>
     );

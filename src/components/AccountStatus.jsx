@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { createPortal } from 'react-dom';
-import { FiLock, FiX } from 'react-icons/fi';
+import { FiAlertTriangle, FiLock, FiX } from 'react-icons/fi';
 import { useAuth } from '../context/AuthContext';
 import { getAccountStatus } from '../services/api/account';
 import {
@@ -132,37 +132,37 @@ export default function AccountStatusHost() {
     };
 
     return createPortal(
-        <div className="fixed inset-0 z-[10001] flex items-center justify-center bg-black/60 dark:bg-black/70 backdrop-blur-sm p-4">
+        <div className="fixed inset-0 z-[10001] flex items-center justify-center bg-[var(--overlay)] p-4 animate-ds-fade">
             <div
                 ref={dialogRef}
                 role="alertdialog"
                 aria-modal="true"
                 aria-labelledby="account-blocked-title"
-                className="w-full max-w-sm bg-white dark:bg-d-card border border-slate-200 dark:border-d-border rounded-2xl shadow-2xl p-6 animate-fade-in"
+                className="w-full max-w-[400px] bg-popover text-popover-foreground border border-hairline rounded-pop shadow-2 p-5 animate-ds-dialog-in"
             >
-                <div className="flex items-start gap-3">
-                    <div className="flex-shrink-0 w-10 h-10 rounded-full flex items-center justify-center bg-red-50 text-red-500 dark:bg-[rgba(255,107,107,0.12)] dark:text-d-red">
-                        <FiLock size={20} />
+                <div className="flex items-start gap-3.5">
+                    <div className="flex-none w-[42px] h-[42px] rounded-xl inline-flex items-center justify-center bg-destructive-chip text-destructive-chip-foreground">
+                        <FiLock className="w-5 h-5" aria-hidden="true" />
                     </div>
                     <div className="flex-1 min-w-0">
-                        <h3 id="account-blocked-title" className="text-base font-semibold text-slate-800 dark:text-d-heading mb-1">
+                        <h3 id="account-blocked-title" className="font-heading text-h4 text-foreground mb-1">
                             Account blocked
                         </h3>
-                        <p className="text-sm text-slate-600 dark:text-d-text whitespace-pre-line break-words">
+                        <p className="text-body text-muted-foreground whitespace-pre-line break-words">
                             {blocked.message || 'Your account has been suspended.'}
                         </p>
-                        <p className="mt-3 text-sm text-slate-600 dark:text-d-text">Please contact your administrator.</p>
-                        <p className="text-sm font-medium text-slate-800 dark:text-d-heading break-words">{blocked.contact || SUPPORT_CONTACT}</p>
+                        <p className="mt-3 text-body text-muted-foreground">Please contact your administrator.</p>
+                        <p className="text-body font-medium text-foreground break-words">{blocked.contact || SUPPORT_CONTACT}</p>
                     </div>
                 </div>
 
-                <div className="mt-6 flex items-center justify-end gap-2">
-                    {note && <span className="mr-auto text-xs text-red-500 dark:text-d-red" role="status">{note}</span>}
+                <div className="mt-5 flex items-center justify-end gap-2">
+                    {note && <span className="mr-auto text-body-sm text-destructive" role="status">{note}</span>}
                     {blocked.onLogin ? (
                         <button
                             type="button"
                             onClick={clearBlocked}
-                            className="px-4 py-2 rounded-xl text-sm font-medium text-white bg-primary-600 hover:bg-primary-700 dark:bg-d-accent dark:hover:bg-d-accent-s dark:text-d-card transition-colors"
+                            className="h-9 px-4 rounded-xl text-body-lg font-medium bg-primary text-primary-foreground hover:[filter:var(--hover-brighten)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
                         >
                             OK
                         </button>
@@ -172,14 +172,14 @@ export default function AccountStatusHost() {
                                 type="button"
                                 onClick={() => recheck({ manual: true })}
                                 disabled={checking}
-                                className="px-4 py-2 rounded-xl text-sm font-medium text-slate-600 dark:text-d-text bg-slate-100 dark:bg-d-glass hover:bg-slate-200 dark:hover:bg-d-glass-hover transition-colors disabled:opacity-60"
+                                className="h-9 px-4 rounded-xl text-body-lg font-medium text-muted-foreground hover:text-foreground hover:bg-[var(--hover-overlay)] disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
                             >
                                 {checking ? 'Checking…' : 'Check again'}
                             </button>
                             <button
                                 type="button"
                                 onClick={handleLogout}
-                                className="px-4 py-2 rounded-xl text-sm font-medium text-white bg-red-500 hover:bg-red-600 dark:bg-d-red dark:hover:bg-red-500 transition-colors"
+                                className="h-9 px-4 rounded-xl text-body-lg font-medium bg-destructive text-destructive-foreground hover:[filter:var(--hover-brighten)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
                             >
                                 Log out
                             </button>
@@ -208,14 +208,16 @@ export const PaymentDueBanner = ({ className = '' }) => {
     return (
         <div
             role="status"
-            className={`flex items-center gap-2 h-8 px-4 text-xs font-medium bg-amber-100 text-amber-900 border-b border-amber-200 dark:bg-[rgba(255,190,80,0.12)] dark:text-amber-200 dark:border-[rgba(255,190,80,0.2)] print:hidden ${className}`}
+            className={`flex items-center gap-2 h-8 px-4 text-body-sm font-medium bg-warning-chip text-warning-chip-foreground border-b border-warning-chip-foreground/20 print:hidden ${className}`}
         >
+            <FiAlertTriangle aria-hidden="true" className="w-3.5 h-3.5 flex-none" />
             <span className="flex-1 min-w-0 truncate">{text}</span>
             <button
                 type="button"
                 onClick={dismissWarning}
                 aria-label="Hide payment reminder"
-                className="app-no-drag flex-shrink-0 p-1 rounded-md hover:bg-amber-200/70 dark:hover:bg-[rgba(255,190,80,0.15)]"
+                title="Hide payment reminder"
+                className="app-no-drag flex-shrink-0 p-1 rounded-md hover:bg-[var(--hover-overlay)]"
             >
                 <FiX size={13} />
             </button>

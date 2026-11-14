@@ -6,7 +6,7 @@ import api from '../api';
 // remaps the response shape so Receipts.jsx keeps working.
 
 // Map a backend bill doc → legacy receipt shape the screen expects
-const billToReceipt = (bill) => ({
+export const billToReceipt = (bill) => ({
     ...bill,
     // Field name aliases
     receiptNumber: bill.billNumber,
@@ -29,6 +29,9 @@ const remapListResponse = (res) => {
         },
     };
 };
+
+/** One bill in the receipt shape (Receipts opens it from a link: /receipts?bill=<id>). */
+export const getReceipt = (id) => api.get(`/bill/${id}`).then((res) => ({ ...res, data: billToReceipt(res.data) }));
 
 export const getReceipts = (params) =>
     api.get('/bill', { params }).then(remapListResponse);

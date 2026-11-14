@@ -1,6 +1,8 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { FiAlertTriangle, FiInfo } from 'react-icons/fi';
 import { getAccountState } from '../services/accountStatus';
+import { Dialog } from './ui/Dialog';
+import { Button } from './ui/Button';
 
 /**
  * In-app alert/confirm dialog — a drop-in replacement for the browser's
@@ -23,6 +25,7 @@ import { getAccountState } from '../services/accountStatus';
 // ── module-level queue so any code can raise a dialog without a React hook ──
 let listeners = [];
 let queue = [];
+let nextId = 0;
 
 const emit = () => listeners.forEach((l) => l());
 
@@ -34,7 +37,7 @@ const request = (config) =>
             resolve(config.type === 'confirm' ? false : config.type === 'choice' ? config.defaultValue : undefined);
             return;
         }
-        queue.push({ ...config, resolve });
+        queue.push({ ...config, resolve, id: ++nextId });
         emit();
     });
 
@@ -85,24 +88,15 @@ export default function AppDialogHost() {
         show(queue.shift() || null);
     }, []);
 
-    // Enter = confirm/OK, Escape = cancel
+    // Enter = confirm/OK (Escape = cancel is handled by Dialog, which only answers when this
+    // dialog is the top layer)
     useEffect(() => {
         if (!current) return undefined;
         const onKey = (e) => {
-            if (current.type === 'choice') {
-                if (e.key === 'Enter' || e.key === 'Escape') {
-                    e.preventDefault();
-                    close(current.defaultValue);
-                }
-                return;
-            }
-            if (e.key === 'Enter') {
-                e.preventDefault();
-                close(current.type === 'confirm' ? true : undefined);
-            } else if (e.key === 'Escape') {
-                e.preventDefault();
-                close(current.type === 'confirm' ? false : undefined);
-            }
+            if (e.key !== 'Enter') return;
+            e.preventDefault();
+            if (current.type === 'choice') close(current.defaultValue);
+            else close(current.type === 'confirm' ? true : undefined);
         };
         window.addEventListener('keydown', onKey);
         return () => window.removeEventListener('keydown', onKey);
@@ -118,86 +112,60 @@ export default function AppDialogHost() {
     const confirmText =
         current.confirmText || (isConfirm ? 'Confirm' : 'OK');
     const cancelText = current.cancelText || 'Cancel';
+    const cancelResult = isChoice ? current.defaultValue : isConfirm ? false : undefined;
 
     const Icon = isDanger ? FiAlertTriangle : FiInfo;
 
+    // Look: design/03-components.md "Dialog" (ConfirmDialog layout). Esc and a click outside
+    // answer "cancel" (Dialog handles both); Enter is handled above, as before.
     return (
-        <div
-            className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/40 dark:bg-black/60 backdrop-blur-sm p-4"
-            onMouseDown={(e) => {
-                // click on the backdrop dismisses (cancel for confirm)
-                if (e.target === e.currentTarget) {
-                    close(isChoice ? current.defaultValue : isConfirm ? false : undefined);
-                }
-            }}
-        >
-            <div className="w-full max-w-sm bg-white dark:bg-d-card border border-slate-200 dark:border-d-border rounded-2xl shadow-2xl p-6 animate-fade-in">
-                <div className="flex items-start gap-3">
-                    <div
-                        className={`flex-shrink-0 w-10 h-10 rounded-full flex items-center justify-center ${
-                            isDanger
-                                ? 'bg-red-50 text-red-500 dark:bg-[rgba(255,107,107,0.12)] dark:text-d-red'
-                                : 'bg-primary-50 text-primary-600 dark:bg-[rgba(255,210,100,0.12)] dark:text-d-accent'
-                        }`}
-                    >
-                        <Icon size={20} />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                        <h3 className="text-base font-semibold text-slate-800 dark:text-d-heading mb-1">
-                            {title}
-                        </h3>
-                        <p className="text-sm text-slate-600 dark:text-d-text whitespace-pre-line break-words">
-                            {current.message}
-                        </p>
-                    </div>
+        <Dialog key={current.id} open onClose={() => close(cancelResult)} size="sm" closeOnScrim hideClose zIndex={10000} labelledBy="app-dialog-title">
+            <div className="flex items-start gap-3.5">
+                <div
+                    className={`flex-none w-[42px] h-[42px] rounded-xl inline-flex items-center justify-center ${
+                        isDanger ? 'bg-destructive-chip text-destructive-chip-foreground' : 'bg-accent text-accent-foreground'
+                    }`}
+                >
+                    <Icon className="w-5 h-5" aria-hidden="true" />
                 </div>
+                <div className="flex-1 min-w-0 pt-0.5">
+                    <h2 id="app-dialog-title" className="font-heading text-h4 text-foreground">
+                        {title}
+                    </h2>
+                    <p className="mt-1 text-body text-muted-foreground whitespace-pre-line break-words">{current.message}</p>
+                </div>
+            </div>
 
-                {isChoice ? (
-                <div className="mt-6 flex flex-col gap-2">
+            {isChoice ? (
+                <div className="mt-5 flex flex-col gap-2">
                     {current.choices.map((c) => (
-                        <button
+                        <Button
                             key={String(c.value)}
-                            type="button"
                             onClick={() => close(c.value)}
-                            className={`w-full px-4 py-2.5 rounded-xl text-sm font-medium transition-colors ${
-                                c.danger
-                                    ? 'text-white bg-red-500 hover:bg-red-600 dark:bg-d-red dark:hover:bg-red-500'
-                                    : c.value === current.defaultValue
-                                        ? 'text-white bg-primary-600 hover:bg-primary-700 dark:bg-d-accent dark:hover:bg-d-accent-s dark:text-d-card'
-                                        : 'text-slate-700 dark:text-d-text bg-slate-100 dark:bg-d-glass hover:bg-slate-200 dark:hover:bg-d-glass-hover'
-                            }`}
+                            variant={c.danger ? 'destructive' : c.value === current.defaultValue ? 'primary' : 'secondary'}
+                            size="action"
+                            className="w-full"
                         >
                             {c.label}
-                        </button>
+                        </Button>
                     ))}
                 </div>
-                ) : (
-                <div className="mt-6 flex justify-end gap-2">
+            ) : (
+                <div className="mt-5 flex justify-end gap-2">
                     {isConfirm && (
-                        <button
-                            type="button"
-                            autoFocus
-                            onClick={() => close(false)}
-                            className="px-4 py-2 rounded-xl text-sm font-medium text-slate-600 dark:text-d-text bg-slate-100 dark:bg-d-glass hover:bg-slate-200 dark:hover:bg-d-glass-hover transition-colors"
-                        >
+                        <Button variant="ghost" data-autofocus onClick={() => close(false)}>
                             {cancelText}
-                        </button>
+                        </Button>
                     )}
-                    <button
-                        type="button"
-                        autoFocus={!isConfirm}
+                    <Button
+                        variant={isDanger ? 'destructive' : 'primary'}
+                        data-autofocus={!isConfirm || undefined}
                         onClick={() => close(isConfirm ? true : undefined)}
-                        className={`px-4 py-2 rounded-xl text-sm font-medium text-white transition-colors ${
-                            isDanger
-                                ? 'bg-red-500 hover:bg-red-600 dark:bg-d-red dark:hover:bg-red-500'
-                                : 'bg-primary-600 hover:bg-primary-700 dark:bg-d-accent dark:hover:bg-d-accent-s dark:text-d-card'
-                        }`}
                     >
                         {confirmText}
-                    </button>
+                    </Button>
                 </div>
-                )}
-            </div>
-        </div>
+            )}
+        </Dialog>
     );
 }

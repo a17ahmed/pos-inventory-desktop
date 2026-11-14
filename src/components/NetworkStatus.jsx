@@ -1,17 +1,17 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { FiWifiOff, FiWifi } from 'react-icons/fi';
+import { Dialog } from './ui/Dialog';
+import { toast } from './ui/Toast';
 
 const NetworkStatus = ({ children }) => {
     const [isOnline, setIsOnline] = useState(navigator.onLine);
-    const [showReconnected, setShowReconnected] = useState(false);
     const wasOffline = useRef(false);
 
     useEffect(() => {
         const goOnline = () => {
             setIsOnline(true);
             if (wasOffline.current) {
-                setShowReconnected(true);
-                setTimeout(() => setShowReconnected(false), 3000);
+                toast.success('Back online', { id: 'network', icon: FiWifi, duration: 3000 });
                 wasOffline.current = false;
             }
         };
@@ -34,36 +34,24 @@ const NetworkStatus = ({ children }) => {
         <>
             {children}
 
-            {/* Offline overlay */}
-            {!isOnline && (
-                <div className="fixed inset-0 z-[9999] bg-black/60 backdrop-blur-sm flex items-center justify-center">
-                    <div className="bg-white dark:bg-d-card rounded-2xl p-8 max-w-sm w-full mx-4 shadow-2xl border border-slate-200 dark:border-d-border text-center">
-                        <div className="w-20 h-20 rounded-full bg-red-50 dark:bg-[rgba(255,107,107,0.1)] flex items-center justify-center mx-auto mb-5">
-                            <FiWifiOff size={36} className="text-red-500 dark:text-d-red" />
-                        </div>
-                        <h2 className="text-xl font-bold text-slate-800 dark:text-d-heading mb-2">
-                            No Internet Connection
-                        </h2>
-                        <p className="text-slate-500 dark:text-d-muted text-sm mb-6">
-                            Please check your network connection. The app will reconnect automatically when the internet is back.
-                        </p>
-                        <div className="flex items-center justify-center gap-2 text-sm text-slate-400 dark:text-d-faint">
-                            <div className="w-2 h-2 bg-red-400 dark:bg-d-red rounded-full animate-pulse" />
-                            Waiting for connection...
-                        </div>
+            {/* Offline: blocks the app until the connection is back */}
+            <Dialog open={!isOnline} size="sm" zIndex={9999} labelledBy="offline-title">
+                <div className="text-center pt-2">
+                    <div className="w-14 h-14 rounded-2xl bg-destructive-chip text-destructive-chip-foreground inline-flex items-center justify-center mb-4">
+                        <FiWifiOff className="w-6 h-6" aria-hidden="true" />
+                    </div>
+                    <h2 id="offline-title" className="font-heading text-h3 text-foreground mb-1.5">
+                        No Internet Connection
+                    </h2>
+                    <p className="text-body text-muted-foreground mb-5">
+                        Please check your network connection. The app will reconnect automatically when the internet is back.
+                    </p>
+                    <div className="flex items-center justify-center gap-2 text-body-sm text-muted-foreground">
+                        <span className="w-2 h-2 bg-destructive rounded-full animate-ds-pulse" aria-hidden="true" />
+                        Waiting for connection...
                     </div>
                 </div>
-            )}
-
-            {/* Reconnected toast */}
-            {showReconnected && (
-                <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[9999] animate-fade-slide-up">
-                    <div className="flex items-center gap-3 px-5 py-3 bg-green-500 dark:bg-d-green text-white rounded-xl shadow-lg">
-                        <FiWifi size={18} />
-                        <span className="font-medium text-sm">Back online</span>
-                    </div>
-                </div>
-            )}
+            </Dialog>
         </>
     );
 };

@@ -7,16 +7,26 @@
     <title>POS Desktop</title>
     <link rel="icon" type="image/png" href="/icon.png" />
     <script>
-        // Sync theme immediately to prevent flash
+        // Apply the saved appearance before the app starts, so it never flashes the wrong
+        // theme or colour. Same keys as src/utils/appearance.js; ThemeContext takes over after.
         (function() {
-            const theme = localStorage.getItem('theme');
-            const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-            const isDark = theme === 'dark' || (!theme && prefersDark);
+            var get = function (k) { try { return localStorage.getItem(k); } catch (e) { return null; } };
+            var mode = get('theme'); // 'light' | 'dark' | 'system' (or nothing = system)
+            var prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+            var isDark = mode === 'dark' || ((mode !== 'light') && prefersDark);
+            var accents = ['steel', 'teal', 'green', 'violet', 'gold', 'rose'];
+            var accent = get('ds.accent');
+            var sidebar = get('ds.sidebar');
+            var density = get('ds.density');
+            var root = document.documentElement;
 
-            document.documentElement.classList.remove('dark', 'light');
-            document.documentElement.classList.add(isDark ? 'dark' : 'light');
-            document.documentElement.setAttribute('data-theme', isDark ? 'dark' : 'light');
-            document.documentElement.style.colorScheme = isDark ? 'dark' : 'light';
+            root.classList.remove('dark', 'light');
+            root.classList.add(isDark ? 'dark' : 'light');
+            root.setAttribute('data-theme', isDark ? 'dark' : 'light');
+            root.style.colorScheme = isDark ? 'dark' : 'light';
+            root.setAttribute('data-accent', accents.indexOf(accent) >= 0 ? accent : 'steel');
+            root.setAttribute('data-sidebar', sidebar === 'light' ? 'light' : 'navy');
+            root.setAttribute('data-density', density === 'compact' || density === 'comfortable' ? density : 'default');
         })();
     </script>
 </head>

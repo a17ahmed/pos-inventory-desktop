@@ -91,24 +91,24 @@ const AccountPicker = ({
     };
 
     const labelCls = compact
-        ? 'block mb-1 text-[12px] text-slate-500 dark:text-d-muted'
-        : 'block text-sm font-medium text-slate-600 dark:text-d-muted mb-1.5';
-    const boxCls = `w-full px-3 ${compact ? 'py-2 text-sm' : 'py-2.5 text-sm'} bg-slate-50 dark:bg-[rgba(255,255,255,0.05)] border rounded-xl text-slate-800 dark:text-d-text focus:outline-none ${
-        insufficient ? 'border-red-300 dark:border-[rgba(239,68,68,0.4)]' : 'border-slate-200 dark:border-d-border focus:border-amber-300 dark:focus:border-d-border-hover'
+        ? 'block mb-1 text-body-sm text-muted-foreground'
+        : 'block text-sm font-medium text-muted-foreground mb-1.5';
+    const boxCls = `w-full px-3 ${compact ? 'py-2 text-sm' : 'py-2.5 text-sm'} bg-muted/40 border rounded-xl text-foreground focus:outline-none ${
+        insufficient ? 'border-destructive/30' : 'border-hairline focus:border-primary/30'
     }`;
 
     return (
         <div className={className}>
             <span className={labelCls}>{caption}</span>
             {options.length === 0 ? (
-                <p className="text-[12px] text-slate-500 dark:text-d-muted">
+                <p className="text-body-sm text-muted-foreground">
                     No account takes this payment method — it won't be recorded in the Money Book.
                 </p>
             ) : options.length === 1 && !notRecordedByDefault ? (
                 <div className={`${boxCls} flex items-center justify-between`}>
                     <span className="font-medium">{options[0].name}</span>
                     {hasBalances && options[0].balance !== undefined && (
-                        <span className={`text-xs ${options[0].balance < 0 ? 'text-red-500 dark:text-d-red' : 'text-slate-500 dark:text-d-muted'}`}>
+                        <span className={`text-xs ${options[0].balance < 0 ? 'text-destructive' : 'text-muted-foreground'}`}>
                             {formatMoney(options[0].balance, currency)}
                         </span>
                     )}
@@ -129,7 +129,7 @@ const AccountPicker = ({
                 </select>
             )}
             {insufficient && (
-                <p className="mt-1.5 flex items-center gap-1.5 text-[12px] font-medium text-red-600 dark:text-d-red">
+                <p className="mt-1.5 flex items-center gap-1.5 text-body-sm font-medium text-destructive">
                     <FiAlertCircle size={12} />
                     Insufficient — available {formatMoney(selected.balance, currency)}
                 </p>

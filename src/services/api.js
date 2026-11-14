@@ -1,5 +1,6 @@
 import axios from 'axios';
 import { isAccountBlocked, reportBlocked, noteWarningHeader } from './accountStatus';
+import { requestStarted, requestFinished } from './loadingBar';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
 
@@ -44,6 +45,48 @@ const endSession = (reason) => {
 };
 
 const isLoginRequest = (url = '') => url.includes('/adminAuth/login') || url.includes('/employeeAuth/login');
+
+// Top loading bar: track every request that isn't marked { silent: true } (background checks).
+// The id rides on the config, so the matching response — success, failure or cancel — ends it
+// exactly once. Retries after a token refresh reuse the config and are not counted twice.
+api.interceptors.request.use((config) => {
+    if (!config.silent && config.__barId == null) {
+        config.__barId = requestStarted({ url: config.url, method: config.method });
+    }
+    return config;
+});
+const finishBar = (config) => {
+    if (config && config.__barId != null && !config.__barFinished) {
+        config.__barFinished = true;
+        requestFinished(config.__barId);
+    }
+};
+api.interceptors.response.use(
+    (response) => {
+        finishBar(response.config);
+        return response;
+    },
+    (error) => {
+        finishBar(error.config);
+        return Promise.reject(error);
+    }
+);
+
+// Same read twice at once → one request. If an identical GET (same address and filters) is
+// already on its way, a second caller gets that same answer instead of sending another request.
+// Covers React's double load in development and screens that ask for the same data from two
+// places. Requests with an AbortController signal, or { dedupe: false }, are always sent.
+const inFlightGets = new Map();
+const sendGet = api.get.bind(api);
+api.get = (url, config = {}) => {
+    if (config.signal || config.dedupe === false) return sendGet(url, config);
+    const key = `${url}?${JSON.stringify(config.params || {})}`;
+    const existing = inFlightGets.get(key);
+    if (existing) return existing;
+    const p = sendGet(url, config).finally(() => inFlightGets.delete(key));
+    inFlightGets.set(key, p);
+    return p;
+};
 
 // Request interceptor - add auth token
 api.interceptors.request.use(

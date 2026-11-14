@@ -119,7 +119,7 @@ const MoneyActionModal = ({ kind, initialAccountId, fmt, onClose, onDone }) => {
 
                 <Field label={kind === 'transfer' ? 'From' : 'Account'}>{accountSelect('accountId')}</Field>
                 {account && outgoing && (
-                    <p className={`-mt-2 text-[12px] ${short ? 'text-red-600 dark:text-d-red font-medium' : 'text-slate-500 dark:text-d-muted'}`}>
+                    <p className={`-mt-2 text-caption ${short ? 'text-destructive font-medium' : 'text-muted-foreground'}`}>
                         Available: {fmt(account.balance)}{short ? ` — not enough for ${fmt(needed)}` : ''}
                     </p>
                 )}
@@ -127,16 +127,18 @@ const MoneyActionModal = ({ kind, initialAccountId, fmt, onClose, onDone }) => {
 
                 {kind === 'adjustment' && (
                     <Field label="Direction" hint="Adjustments correct the book to match reality and may take an account below zero.">
-                        <div className="grid grid-cols-2 gap-2">
+                        <div role="radiogroup" aria-label="Direction" className="grid grid-cols-2 gap-2">
                             {[['in', 'Add money (in)'], ['out', 'Remove money (out)']].map(([v, t]) => (
                                 <button
                                     key={v}
                                     type="button"
                                     onClick={() => setForm((f) => ({ ...f, direction: v }))}
-                                    className={`py-2 rounded-xl text-sm font-medium transition-colors ${
+                                    role="radio"
+                                    aria-checked={form.direction === v}
+                                    className={`h-9 rounded-xl border text-body font-medium focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring ${
                                         form.direction === v
-                                            ? 'bg-amber-500 dark:bg-d-accent text-white dark:text-d-card'
-                                            : 'bg-slate-100 dark:bg-d-elevated text-slate-600 dark:text-d-muted'
+                                            ? 'border-primary bg-accent text-accent-foreground'
+                                            : 'border-border bg-card text-foreground hover:bg-[var(--hover-overlay)]'
                                     }`}
                                 >
                                     {t}
@@ -148,7 +150,7 @@ const MoneyActionModal = ({ kind, initialAccountId, fmt, onClose, onDone }) => {
 
                 <div className={kind === 'transfer' ? 'grid grid-cols-2 gap-3' : ''}>
                     <Field label="Amount">
-                        <input type="number" min="0" step="0.01" value={form.amount} onChange={set('amount')} className={`${inputCls} text-lg font-bold`} placeholder="0.00" autoFocus required />
+                        <input type="number" min="0" step="0.01" value={form.amount} onChange={set('amount')} className={`${inputCls} font-semibold tabular-nums`} placeholder="0.00" autoFocus required />
                     </Field>
                     {kind === 'transfer' && (
                         <Field label="Fee (optional)">
@@ -157,7 +159,7 @@ const MoneyActionModal = ({ kind, initialAccountId, fmt, onClose, onDone }) => {
                     )}
                 </div>
                 {kind === 'transfer' && fee > 0 && (
-                    <p className="-mt-2 text-[12px] text-slate-500 dark:text-d-muted">
+                    <p className="-mt-2 text-caption text-muted-foreground">
                         {fmt(needed)} leaves {account?.name || 'the account'}; {fmt(amount)} arrives. The fee is money spent.
                     </p>
                 )}

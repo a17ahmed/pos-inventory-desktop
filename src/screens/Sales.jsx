@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { newIdempotencyKey } from '../utils/idempotency';
 import { useBusiness } from '../context/BusinessContext';
 import { useAuth } from '../context/AuthContext';
 import { getProducts } from '../services/api/products';
@@ -48,7 +49,7 @@ const Sales = () => {
     // Generate idempotency key when cart changes
     useEffect(() => {
         if (cart.length > 0 && !idempotencyKey) {
-            setIdempotencyKey(`${Date.now()}-${Math.random().toString(36).slice(2, 11)}`);
+            setIdempotencyKey(newIdempotencyKey());
         }
         if (cart.length === 0) {
             setIdempotencyKey(null);
@@ -283,19 +284,19 @@ const Sales = () => {
                 {/* Header */}
                 <div className="flex items-center gap-4 mb-6">
                     <div className="flex-1 relative">
-                        <FiSearch className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" />
+                        <FiSearch className="absolute left-4 top-1/2 -translate-y-1/2 text-muted-foreground" />
                         <input
                             ref={searchRef}
                             type="text"
                             value={searchQuery}
                             onChange={(e) => setSearchQuery(e.target.value)}
                             placeholder="Search products or scan barcode..."
-                            className="w-full pl-12 pr-4 py-3 border border-slate-200 rounded-xl focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+                            className="w-full pl-12 pr-4 py-3 border border-hairline rounded-xl focus:ring-2 focus:ring-ring focus:border-primary"
                         />
                     </div>
                     {/* Shortcut hints */}
-                    <div className="flex gap-2 text-xs text-slate-400">
-                        <span className="px-2 py-1 bg-slate-100 rounded">F12 Pay</span>
+                    <div className="flex gap-2 text-xs text-muted-foreground">
+                        <span className="px-2 py-1 bg-muted rounded">F12 Pay</span>
                     </div>
                 </div>
 
@@ -305,8 +306,8 @@ const Sales = () => {
                         onClick={() => setSelectedCategory('all')}
                         className={`px-4 py-2 rounded-lg text-sm font-medium whitespace-nowrap transition-colors ${
                             selectedCategory === 'all'
-                                ? 'bg-primary-500 text-white'
-                                : 'bg-white text-slate-600 hover:bg-slate-100'
+                                ? 'bg-primary text-white'
+                                : 'bg-card text-muted-foreground hover:bg-[var(--hover-overlay)]'
                         }`}
                     >
                         All
@@ -317,8 +318,8 @@ const Sales = () => {
                             onClick={() => setSelectedCategory(cat)}
                             className={`px-4 py-2 rounded-lg text-sm font-medium whitespace-nowrap transition-colors ${
                                 selectedCategory === cat
-                                    ? 'bg-primary-500 text-white'
-                                    : 'bg-white text-slate-600 hover:bg-slate-100'
+                                    ? 'bg-primary text-white'
+                                    : 'bg-card text-muted-foreground hover:bg-[var(--hover-overlay)]'
                             }`}
                         >
                             {cat}
@@ -333,9 +334,9 @@ const Sales = () => {
                             <button
                                 key={product._id}
                                 onClick={() => addToCart(product)}
-                                className="bg-white rounded-xl p-4 border border-slate-200 hover:border-primary-500 hover:shadow-md transition-all text-left group"
+                                className="bg-card rounded-xl p-4 border border-hairline hover:border-primary hover:shadow-md transition-all text-left group"
                             >
-                                <div className="w-full aspect-square bg-slate-100 rounded-lg mb-3 flex items-center justify-center overflow-hidden">
+                                <div className="w-full aspect-square bg-muted rounded-lg mb-3 flex items-center justify-center overflow-hidden">
                                     {product.image ? (
                                         <img
                                             src={product.image}
@@ -343,23 +344,23 @@ const Sales = () => {
                                             className="w-full h-full object-cover"
                                         />
                                     ) : (
-                                        <span className="text-4xl text-slate-300">
+                                        <span className="text-4xl text-placeholder">
                                             {product.name?.charAt(0)}
                                         </span>
                                     )}
                                 </div>
-                                <h3 className="font-medium text-slate-800 truncate group-hover:text-primary-500">
+                                <h3 className="font-medium text-foreground truncate group-hover:text-primary">
                                     {product.name}
                                 </h3>
-                                <p className="text-sm text-slate-500">{product.category}</p>
-                                <p className="text-lg font-bold text-green-600 mt-1">
+                                <p className="text-sm text-muted-foreground">{product.category}</p>
+                                <p className="text-lg font-bold text-success mt-1">
                                     {formatCurrency(product.sellingPrice || product.price)}
                                 </p>
                             </button>
                         ))}
                     </div>
                     {filteredProducts.length === 0 && (
-                        <div className="flex flex-col items-center justify-center h-64 text-slate-400">
+                        <div className="flex flex-col items-center justify-center h-64 text-muted-foreground">
                             <FiShoppingCart size={48} />
                             <p className="mt-4">No products found</p>
                         </div>
@@ -368,18 +369,18 @@ const Sales = () => {
             </div>
 
             {/* Cart Section */}
-            <div className="w-96 bg-white border-l border-slate-200 flex flex-col">
+            <div className="w-96 bg-card border-l border-hairline flex flex-col">
                 {/* Cart Header */}
-                <div className="p-4 border-b border-slate-200">
+                <div className="p-4 border-b border-hairline">
                     <div className="flex items-center justify-between">
-                        <h2 className="text-lg font-semibold text-slate-800">
+                        <h2 className="text-lg font-semibold text-foreground">
                             <FiShoppingCart className="inline mr-2" />
                             Cart ({cart.length})
                         </h2>
                         {cart.length > 0 && (
                             <button
                                 onClick={clearCart}
-                                className="text-red-500 text-sm hover:underline"
+                                className="text-destructive text-sm hover:underline"
                             >
                                 Clear
                             </button>
@@ -392,31 +393,31 @@ const Sales = () => {
                     {cart.map((item) => (
                         <div
                             key={item._id}
-                            className="bg-slate-50 rounded-xl p-3 flex items-center gap-3"
+                            className="bg-muted/40 rounded-xl p-3 flex items-center gap-3"
                         >
                             <div className="flex-1 min-w-0">
-                                <h4 className="font-medium text-slate-800 truncate">{item.name}</h4>
-                                <p className="text-sm text-slate-500">
+                                <h4 className="font-medium text-foreground truncate">{item.name}</h4>
+                                <p className="text-sm text-muted-foreground">
                                     {formatCurrency(item.price)} x {item.qty}
                                 </p>
                             </div>
                             <div className="flex items-center gap-2">
                                 <button
                                     onClick={() => updateQuantity(item._id, -1)}
-                                    className="w-8 h-8 rounded-lg bg-white border border-slate-200 flex items-center justify-center hover:bg-slate-100"
+                                    className="w-8 h-8 rounded-lg bg-card border border-hairline flex items-center justify-center hover:bg-[var(--hover-overlay)]"
                                 >
                                     <FiMinus size={14} />
                                 </button>
                                 <span className="w-8 text-center font-medium">{item.qty}</span>
                                 <button
                                     onClick={() => updateQuantity(item._id, 1)}
-                                    className="w-8 h-8 rounded-lg bg-white border border-slate-200 flex items-center justify-center hover:bg-slate-100"
+                                    className="w-8 h-8 rounded-lg bg-card border border-hairline flex items-center justify-center hover:bg-[var(--hover-overlay)]"
                                 >
                                     <FiPlus size={14} />
                                 </button>
                                 <button
                                     onClick={() => removeFromCart(item._id)}
-                                    className="w-8 h-8 rounded-lg text-red-500 hover:bg-red-50 flex items-center justify-center"
+                                    className="w-8 h-8 rounded-lg text-destructive hover:bg-destructive-chip flex items-center justify-center"
                                 >
                                     <FiTrash2 size={14} />
                                 </button>
@@ -424,7 +425,7 @@ const Sales = () => {
                         </div>
                     ))}
                     {cart.length === 0 && (
-                        <div className="flex flex-col items-center justify-center h-32 text-slate-400">
+                        <div className="flex flex-col items-center justify-center h-32 text-muted-foreground">
                             <FiShoppingCart size={32} />
                             <p className="mt-2 text-sm">Cart is empty</p>
                         </div>
@@ -432,47 +433,47 @@ const Sales = () => {
                 </div>
 
                 {/* Customer & Discount */}
-                <div className="p-4 border-t border-slate-200 space-y-3">
+                <div className="p-4 border-t border-hairline space-y-3">
                     <div className="relative">
-                        <FiUser className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                        <FiUser className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
                         <input
                             type="text"
                             value={customerName}
                             onChange={(e) => setCustomerName(e.target.value)}
                             placeholder="Customer name (optional)"
-                            className="w-full pl-10 pr-4 py-2 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-primary-500"
+                            className="w-full pl-10 pr-4 py-2 border border-hairline rounded-lg text-sm focus:ring-2 focus:ring-ring"
                         />
                     </div>
 
                     <div className="flex items-center gap-2">
-                        <span className="text-sm text-slate-500">Discount:</span>
+                        <span className="text-sm text-muted-foreground">Discount:</span>
                         <input
                             type="number"
                             value={discount}
                             onChange={(e) => setDiscount(Math.max(0, Math.min(100, Number(e.target.value))))}
-                            className="w-20 px-3 py-1 border border-slate-200 rounded-lg text-sm text-center"
+                            className="w-20 px-3 py-1 border border-hairline rounded-lg text-sm text-center"
                             min="0"
                             max="100"
                         />
-                        <span className="text-sm text-slate-500">%</span>
+                        <span className="text-sm text-muted-foreground">%</span>
                     </div>
                 </div>
 
                 {/* Totals */}
-                <div className="p-4 border-t border-slate-200 bg-slate-50">
-                    <div className="flex justify-between text-sm text-slate-500 mb-2">
+                <div className="p-4 border-t border-hairline bg-muted/40">
+                    <div className="flex justify-between text-sm text-muted-foreground mb-2">
                         <span>Subtotal</span>
                         <span>{formatCurrency(subtotal)}</span>
                     </div>
                     {discount > 0 && (
-                        <div className="flex justify-between text-sm text-red-500 mb-2">
+                        <div className="flex justify-between text-sm text-destructive mb-2">
                             <span>Discount ({discount}%)</span>
                             <span>-{formatCurrency(discountAmount)}</span>
                         </div>
                     )}
-                    <div className="flex justify-between text-xl font-bold text-slate-800 pt-2 border-t border-slate-200">
+                    <div className="flex justify-between text-xl font-bold text-foreground pt-2 border-t border-hairline">
                         <span>Total</span>
-                        <span className="text-green-600">{formatCurrency(total)}</span>
+                        <span className="text-success">{formatCurrency(total)}</span>
                     </div>
                 </div>
 
@@ -482,7 +483,7 @@ const Sales = () => {
                     <button
                         onClick={openPaymentModal}
                         disabled={cart.length === 0}
-                        className="w-full py-4 bg-green-500 text-white font-semibold rounded-xl hover:bg-green-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                        className="w-full py-4 bg-success text-white font-semibold rounded-xl hover:bg-success/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
                     >
                         <FiCheck size={20} />
                         Pay (F12)
@@ -493,30 +494,30 @@ const Sales = () => {
             {/* Payment Modal */}
             {showPaymentModal && (
                 <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-                    <div className="bg-white rounded-2xl p-6 w-full max-w-md animate-fadeIn max-h-[90vh] overflow-y-auto">
+                    <div className="bg-card rounded-2xl p-6 w-full max-w-md animate-fadeIn max-h-[90vh] overflow-y-auto">
                         <div className="flex items-center justify-between mb-6">
-                            <h3 className="text-xl font-bold text-slate-800">Payment</h3>
+                            <h3 className="text-xl font-bold text-foreground">Payment</h3>
                             <button
                                 onClick={() => setShowPaymentModal(false)}
-                                className="p-2 hover:bg-slate-100 rounded-lg"
+                                className="p-2 hover:bg-[var(--hover-overlay)] rounded-lg"
                             >
                                 <FiX size={20} />
                             </button>
                         </div>
 
                         {/* Total Display */}
-                        <div className="text-center mb-6 p-4 bg-slate-50 rounded-xl">
-                            <p className="text-sm text-slate-500 mb-1">
+                        <div className="text-center mb-6 p-4 bg-muted/40 rounded-xl">
+                            <p className="text-sm text-muted-foreground mb-1">
                                 Total Amount
                             </p>
-                            <p className="text-3xl font-bold text-slate-800">
+                            <p className="text-3xl font-bold text-foreground">
                                 {formatCurrency(total)}
                             </p>
                         </div>
 
                         {/* Payment Method Selection */}
                         <div className="mb-6">
-                            <p className="text-sm font-medium text-slate-600 mb-2">Payment Method</p>
+                            <p className="text-sm font-medium text-muted-foreground mb-2">Payment Method</p>
                             <div className="flex gap-2">
                                 {[
                                     { id: 'cash', label: 'Cash', icon: FiDollarSign },
@@ -528,8 +529,8 @@ const Sales = () => {
                                         onClick={() => setPaymentMethod(method.id)}
                                         className={`flex-1 py-3 rounded-xl font-medium flex items-center justify-center gap-2 transition-colors ${
                                             paymentMethod === method.id
-                                                ? 'bg-primary-500 text-white'
-                                                : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                                                ? 'bg-primary text-white'
+                                                : 'bg-muted text-muted-foreground hover:bg-[var(--hover-overlay)]'
                                         }`}
                                     >
                                         <method.icon size={18} />
@@ -542,7 +543,7 @@ const Sales = () => {
                         {/* Cash Given Input (only for cash) */}
                         {paymentMethod === 'cash' && (
                             <div className="mb-6">
-                                <label className="text-sm font-medium text-slate-600 mb-2 block">
+                                <label className="text-sm font-medium text-muted-foreground mb-2 block">
                                     Cash Received
                                 </label>
                                 <input
@@ -551,7 +552,7 @@ const Sales = () => {
                                     value={cashGiven}
                                     onChange={(e) => setCashGiven(e.target.value)}
                                     placeholder="Enter amount..."
-                                    className="w-full px-4 py-3 border border-slate-200 rounded-xl text-lg focus:ring-2 focus:ring-primary-500"
+                                    className="w-full px-4 py-3 border border-hairline rounded-xl text-lg focus:ring-2 focus:ring-ring"
                                 />
 
                                 {/* Quick amount buttons */}
@@ -560,7 +561,7 @@ const Sales = () => {
                                         <button
                                             key={amount}
                                             onClick={() => setCashGiven(amount.toString())}
-                                            className="flex-1 py-2 bg-slate-100 text-slate-600 rounded-lg text-sm hover:bg-slate-200"
+                                            className="flex-1 py-2 bg-muted text-muted-foreground rounded-lg text-sm hover:bg-[var(--hover-overlay)]"
                                         >
                                             {amount.toLocaleString()}
                                         </button>
@@ -569,10 +570,10 @@ const Sales = () => {
 
                                 {/* Change Display */}
                                 {parseFloat(cashGiven || 0) >= total && (
-                                    <div className="mt-4 p-4 bg-green-50 rounded-xl">
+                                    <div className="mt-4 p-4 bg-success-chip rounded-xl">
                                         <div className="flex justify-between items-center">
-                                            <span className="text-green-700 font-medium">Change to Return</span>
-                                            <span className="text-2xl font-bold text-green-600">
+                                            <span className="text-success font-medium">Change to Return</span>
+                                            <span className="text-2xl font-bold text-success">
                                                 {formatCurrency(changeAmount)}
                                             </span>
                                         </div>
@@ -581,8 +582,8 @@ const Sales = () => {
 
                                 {/* Insufficient cash warning */}
                                 {cashGiven && parseFloat(cashGiven) < total && (
-                                    <div className="mt-2 p-3 bg-red-50 rounded-lg">
-                                        <p className="text-red-600 text-sm">
+                                    <div className="mt-2 p-3 bg-destructive-chip rounded-lg">
+                                        <p className="text-destructive text-sm">
                                             Insufficient amount. Need {formatCurrency(total - parseFloat(cashGiven))} more.
                                         </p>
                                     </div>
@@ -594,11 +595,11 @@ const Sales = () => {
                         <button
                             onClick={handleCheckout}
                             disabled={processing || (paymentMethod === 'cash' && parseFloat(cashGiven || 0) < total)}
-                            className="w-full py-4 bg-green-500 text-white font-semibold rounded-xl hover:bg-green-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                            className="w-full py-4 bg-success text-white font-semibold rounded-xl hover:bg-success/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
                         >
                             {processing ? (
                                 <>
-                                    <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                                    <div className="w-5 h-5 border-2 border-hairline border-t-transparent rounded-full animate-spin" />
                                     Processing...
                                 </>
                             ) : (
@@ -615,29 +616,29 @@ const Sales = () => {
             {/* Success Modal */}
             {showSuccess && (
                 <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-                    <div className="bg-white rounded-2xl p-8 text-center animate-fadeIn max-w-sm">
-                        <div className="w-20 h-20 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
-                            <FiCheck size={40} className="text-green-500" />
+                    <div className="bg-card rounded-2xl p-8 text-center animate-fadeIn max-w-sm">
+                        <div className="w-20 h-20 bg-success-chip rounded-full flex items-center justify-center mx-auto mb-4">
+                            <FiCheck size={40} className="text-success" />
                         </div>
-                        <h3 className="text-xl font-bold text-slate-800 mb-2">Sale Complete!</h3>
+                        <h3 className="text-xl font-bold text-foreground mb-2">Sale Complete!</h3>
                         {successData && (
-                            <div className="text-left bg-slate-50 rounded-xl p-4 mt-4 space-y-2">
+                            <div className="text-left bg-muted/40 rounded-xl p-4 mt-4 space-y-2">
                                 {successData.billNumber && (
                                     <div className="flex justify-between">
-                                        <span className="text-slate-500">Bill #</span>
+                                        <span className="text-muted-foreground">Bill #</span>
                                         <span className="font-medium">{successData.billNumber}</span>
                                     </div>
                                 )}
                                 <div className="flex justify-between">
-                                    <span className="text-slate-500">Total</span>
+                                    <span className="text-muted-foreground">Total</span>
                                     <span className="font-medium">{formatCurrency(successData.total)}</span>
                                 </div>
                                 <div className="flex justify-between">
-                                    <span className="text-slate-500">Payment</span>
+                                    <span className="text-muted-foreground">Payment</span>
                                     <span className="font-medium capitalize">{successData.paymentMethod}</span>
                                 </div>
                                 {successData.paymentMethod === 'cash' && successData.change > 0 && (
-                                    <div className="flex justify-between text-green-600 font-medium pt-2 border-t">
+                                    <div className="flex justify-between text-success font-medium pt-2 border-t">
                                         <span>Change</span>
                                         <span>{formatCurrency(successData.change)}</span>
                                     </div>
@@ -666,14 +667,14 @@ const Sales = () => {
                                     change: successData.change,
                                 });
                             }}
-                            className="mt-4 flex items-center justify-center gap-2 w-full py-3 bg-primary-500 text-white rounded-xl font-medium hover:bg-primary-600"
+                            className="mt-4 flex items-center justify-center gap-2 w-full py-3 bg-primary text-white rounded-xl font-medium hover:bg-primary/90"
                         >
                             <FiPrinter size={18} />
                             Print Receipt
                         </button>
                         <button
                             onClick={() => { setShowSuccess(false); setSuccessData(null); }}
-                            className="mt-2 w-full py-3 rounded-xl bg-slate-100 text-slate-600 font-medium hover:bg-slate-200"
+                            className="mt-2 w-full py-3 rounded-xl bg-muted text-muted-foreground font-medium hover:bg-[var(--hover-overlay)]"
                         >
                             Close
                         </button>

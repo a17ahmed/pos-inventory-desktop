@@ -1,0 +1,449 @@
+/* Pedant design tokens, ported for Tailwind CSS 3 (Electron 28 = Chromium 120: oklch(),
+   color-mix() and :has() are all supported natively, so the token values are used VERBATIM).
+   Token blocks (:root, .dark), keyframes, transitions and reduced-motion are copied unchanged from
+   pedant-web/src/styles/index.css. Only the Tailwind-4 plumbing (@import 'tailwindcss', @config,
+   @custom-variant, @theme, @layer base + @apply) is replaced with its Tailwind-3 equivalent. */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Self-hosted webfonts: npm i @fontsource/inter @fontsource/inter-tight @fontsource/jetbrains-mono */
+@import '@fontsource/inter/400.css';
+@import '@fontsource/inter/500.css';
+@import '@fontsource/inter/600.css';
+@import '@fontsource/inter-tight/400.css';
+@import '@fontsource/inter-tight/500.css';
+@import '@fontsource/inter-tight/600.css';
+@import '@fontsource/jetbrains-mono/400.css';
+@import '@fontsource/jetbrains-mono/500.css';
+
+:root {
+  /* Radius — one 1rem anchor, everything derived: 2xs 4 (control glyphs only) · xs 10 (rows,
+     chips) · sm 12 (buttons, inputs) · md 14 (menus, dialogs) · lg 16 (cards, panels) · xl 20.
+     Declared here as well as in @theme inline (below) so the derived steps also resolve
+     outside Tailwind. */
+  --radius: 1rem;
+  --radius-2xs: calc(var(--radius) - 12px);
+  --radius-xs: calc(var(--radius) - 6px);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+
+  /* Elevation with depth disabled (Round 3 level 0). Theme-independent. */
+  --shadow-1-flat: 0 1px 3px rgb(16 20 24 / 0.08);
+  --shadow-2-flat: 0 10px 24px rgb(16 20 24 / 0.12);
+  /* Modal scrim. Same value in both themes — it dims whatever is behind it. */
+  --overlay: rgb(8 12 14 / 0.42);
+
+  /* Interaction layer — hover/press, named once; every primitive reads these. */
+  --hover-overlay: color-mix(in oklab, var(--foreground) 6%, transparent);
+  --press-overlay: color-mix(in oklab, var(--foreground) 11%, transparent);
+  --press-shift: translateY(0.5px);
+  --hover-brighten: brightness(1.06);
+  --press-brighten: brightness(0.96);
+
+  /* Restricted fields — a withheld value is not an error, so no destructive
+     ramp; the hatch reads the foreground token, one definition per theme. */
+  --restricted-foreground: oklch(0.49 0.02 265);
+  --restricted-hatch: repeating-linear-gradient(
+    135deg,
+    var(--restricted-foreground) 0 1.5px,
+    transparent 1.5px 5px
+  );
+
+  /* Auth split screen. The two halves must read as distinct surfaces in BOTH
+     themes, so the hero surface and its washes are tokens, not component math. */
+  --auth-hero: color-mix(in oklab, var(--primary) 20%, var(--surface-tint));
+  --auth-hero-dots: radial-gradient(
+    circle at 1px 1px,
+    color-mix(in oklab, var(--primary) 46%, transparent) 1px,
+    transparent 0
+  );
+  --auth-form-wash:
+    radial-gradient(
+      78% 58% at 82% 6%,
+      color-mix(in oklab, var(--primary) 22%, transparent),
+      transparent 72%
+    ),
+    radial-gradient(
+      64% 52% at 4% 104%,
+      color-mix(in oklab, var(--primary) 15%, transparent),
+      transparent 74%
+    );
+  --auth-form-dots: radial-gradient(
+    circle at 1px 1px,
+    color-mix(in oklab, var(--primary) 30%, transparent) 1px,
+    transparent 0
+  );
+  --auth-rule: color-mix(in oklab, var(--primary) 38%, transparent);
+  --auth-rule-soft: color-mix(in oklab, var(--primary) 22%, transparent);
+  /* Control knob: reads as a lifted physical part in BOTH themes, so it does
+     not follow --card. */
+  --knob: oklch(1 0 0);
+  --knob-shadow: 0 1px 2px rgb(0 0 0 / 0.2);
+
+  --background: oklch(0.978 0.008 245);
+  --foreground: oklch(0.255 0.024 245);
+  --card: oklch(0.994 0.004 245);
+  --card-foreground: oklch(0.255 0.024 245);
+  --popover: oklch(0.995 0.0032 245);
+  --popover-foreground: oklch(0.255 0.024 245);
+  --muted: oklch(0.943 0.0176 245);
+  --muted-foreground: oklch(0.513 0.0176 245);
+  /* Example text in an empty control: lighter than a typed value and than muted copy
+     (3.57:1 on --card), so an example never reads as filled in. */
+  --placeholder: oklch(0.62 0.0176 245);
+  --border: oklch(0.6395 0.016 245);
+  /* A card's own edge (cards, the page band, the KPI strip, the table card): half the border,
+     so a page of cards reads light; the card shadow carries the lift. Never a control's edge. */
+  --hairline: color-mix(in oklab, var(--border) 50%, transparent);
+  --input: oklch(0.5545 0.0192 245);
+  --ring: oklch(0.545 0.125 242);
+  --primary: oklch(0.545 0.125 242);
+  --primary-foreground: oklch(0.985 0.008 242);
+  --secondary: oklch(0.925 0.024 245);
+  --secondary-foreground: oklch(0.467 0.024 245);
+  --brand-secondary: var(--chart-1);
+  --brand-secondary-foreground: var(--primary-foreground);
+  --brand-accent: var(--chart-2);
+  --brand-accent-foreground: var(--primary-foreground);
+  --accent: oklch(0.945 0.045 242);
+  --accent-foreground: oklch(0.513 0.1125 242);
+  --destructive: oklch(0.555 0.14 27);
+  --destructive-foreground: oklch(0.985 0.008 27);
+  --destructive-chip: oklch(0.945 0.055 27);
+  --destructive-chip-foreground: oklch(0.5245 0.119 27);
+  --warning: oklch(0.555 0.135 68);
+  --warning-foreground: oklch(0.985 0.008 68);
+  --warning-chip: oklch(0.945 0.055 68);
+  --warning-chip-foreground: oklch(0.5245 0.1148 68);
+  --success: oklch(0.5335 0.14 150);
+  --success-foreground: oklch(0.985 0.008 150);
+  --success-chip: oklch(0.945 0.055 150);
+  --success-chip-foreground: oklch(0.513 0.119 150);
+  --info: oklch(0.549 0.14 255);
+  --info-foreground: oklch(0.985 0.008 255);
+  --info-chip: oklch(0.945 0.055 255);
+  --info-chip-foreground: oklch(0.5245 0.119 255);
+  --sidebar: oklch(0.225 0.042 250);
+  --sidebar-foreground: oklch(0.955 0.012 250);
+  --sidebar-primary: oklch(0.595 0.125 242);
+  --sidebar-primary-foreground: oklch(0.191 0.03 242);
+  --sidebar-accent: oklch(0.31 0.0525 242);
+  --sidebar-accent-foreground: oklch(0.965 0.02 242);
+  --sidebar-border: oklch(0.5165 0.0378 250);
+  --sidebar-ring: oklch(0.595 0.125 242);
+  --sidebar-quiet: oklch(0.225 0.042 250);
+  --sidebar-quiet-foreground: oklch(0.955 0.012 250);
+  --sidebar-quiet-border: oklch(0.5165 0.0378 250);
+  --sidebar-quiet-accent: oklch(0.31 0.0567 242);
+  --sidebar-quiet-accent-foreground: oklch(0.965 0.02 242);
+  --sidebar-tinted: oklch(0.95 0.0208 245);
+  --sidebar-tinted-foreground: oklch(0.255 0.024 245);
+  --sidebar-tinted-border: oklch(0.6165 0.016 245);
+  --sidebar-tinted-accent: oklch(0.945 0.045 242);
+  --sidebar-tinted-accent-foreground: oklch(0.513 0.1125 242);
+  --sidebar-inverted: oklch(0.225 0.042 250);
+  --sidebar-inverted-foreground: oklch(0.955 0.012 250);
+  --sidebar-inverted-border: oklch(0.5165 0.0378 250);
+  --sidebar-inverted-accent: oklch(0.31 0.0525 242);
+  --sidebar-inverted-accent-foreground: oklch(0.965 0.02 242);
+  --surface-1: oklch(0.994 0.004 245);
+  --surface-2: oklch(0.995 0.0032 245);
+  --surface-tint: color-mix(in oklab, var(--primary) 8%, var(--card));
+  --table-pin-tint: color-mix(in oklab, var(--surface-tint) 50%, var(--card));
+  /* The dashboard's hero card: the surface tint at its head fading into the card, so the one
+     card a page leads with stands forward without a second hue (ADR-0045). */
+  --hero-wash: linear-gradient(180deg, var(--surface-tint) 0%, var(--card) 72%);
+  --chart-1: oklch(0.56 0.125 242);
+  /* L is pinned by rule 40's 3:1 graphic floor: 0.6585 reads 3.08:1 against
+     --background and 3.23:1 against --card, where 0.66 reads 3.07:1 — inside the
+     0.015 a browser can shift below this pipeline. Do not round this up. */
+  --chart-2: oklch(0.6585 0.125 304);
+  --chart-3: oklch(0.47 0.125 10);
+  --chart-4: oklch(0.64 0.125 78);
+  --chart-5: oklch(0.41 0.125 150);
+  --chart-6: oklch(0.6265 0.125 204);
+  --primary-gradient: linear-gradient(
+    103deg,
+    var(--primary) 0%,
+    color-mix(in oklab, var(--primary) 76%, var(--accent)) 100%
+  );
+  --nav-active: var(--primary);
+  --shadow-1: 0 1px 2px rgb(15 23 42 / 0.06), 0 4px 12px rgb(15 23 42 / 0.06);
+  --shadow-2: 0 12px 32px rgb(15 23 42 / 0.12);
+  --nav-active-shadow: none;
+}
+
+/* The two page surfaces, each readable from the OTHER scope. `--background` is
+   overridden by `.dark` for every descendant, so a subtree cannot ask for "the
+   light one" through it — and the theme swatch has to show Light as light while
+   the app is dark. Literals, and they must equal `--background` in `:root` and
+   in `.dark`; `design-tokens.lock.json` is where those two are checked. */
+:root {
+  --surface-light: oklch(0.978 0.008 245);
+  --surface-dark: oklch(0.19 0.0088 245);
+}
+
+.dark {
+  /* Dark needs a bigger interaction delta to register. */
+  --hover-overlay: color-mix(in oklab, var(--foreground) 9%, transparent);
+  --press-overlay: color-mix(in oklab, var(--foreground) 15%, transparent);
+  --hover-brighten: brightness(1.1);
+  --press-brighten: brightness(0.94);
+  --restricted-foreground: oklch(0.755 0.018 265);
+  --auth-hero: color-mix(in oklab, var(--primary) 24%, var(--card));
+  --auth-hero-dots: radial-gradient(
+    circle at 1px 1px,
+    color-mix(in oklab, var(--primary) 42%, transparent) 1px,
+    transparent 0
+  );
+  --auth-form-dots: radial-gradient(
+    circle at 1px 1px,
+    color-mix(in oklab, var(--foreground) 26%, transparent) 1px,
+    transparent 0
+  );
+  --auth-form-wash:
+    radial-gradient(
+      78% 58% at 82% 6%,
+      color-mix(in oklab, var(--primary) 20%, transparent),
+      transparent 72%
+    ),
+    radial-gradient(
+      64% 52% at 4% 104%,
+      color-mix(in oklab, var(--primary) 14%, transparent),
+      transparent 74%
+    );
+  --auth-rule: color-mix(in oklab, var(--primary) 26%, transparent);
+  --auth-rule-soft: color-mix(in oklab, var(--primary) 16%, transparent);
+  --background: oklch(0.19 0.0088 245);
+  --foreground: oklch(0.955 0.016 245);
+  --card: oklch(0.238 0.0104 245);
+  --card-foreground: oklch(0.955 0.016 245);
+  --popover: oklch(0.272 0.0104 245);
+  --popover-foreground: oklch(0.955 0.016 245);
+  --muted: oklch(0.295 0.0128 245);
+  --muted-foreground: oklch(0.6733 0.0176 245);
+  /* 3.71:1 on --card: below --muted-foreground, above the 3:1 floor. */
+  --placeholder: oklch(0.57 0.0176 245);
+  /* Dark separation is carried by this 1px border (rule 6), so L is pinned by
+     rule 40's 3:1 floor against --card: 0.53 measures 3.15:1, 0.50 measures 2.76:1. */
+  --border: oklch(0.53 0.016 245);
+  /* Stronger than light's half: in dark the edge, not the shadow, separates a card. */
+  --hairline: color-mix(in oklab, var(--border) 70%, transparent);
+  --input: oklch(0.63 0.0192 245);
+  /* The ring is the primary, as in light: a focus mark a shade off the button it circles read
+     as a second blue. */
+  --ring: oklch(0.72 0.135 242);
+  /* More chroma and a darker ink than the record's pale pair, which read as a disabled
+     button on the dark canvas; text-primary on the canvas stays above 4.5:1. */
+  --primary: oklch(0.72 0.135 242);
+  --primary-foreground: oklch(0.2 0.035 242);
+  --secondary: oklch(0.33 0.016 245);
+  --secondary-foreground: oklch(0.7558 0.024 245);
+  --brand-secondary: var(--chart-1);
+  --brand-secondary-foreground: var(--primary-foreground);
+  --brand-accent: var(--chart-2);
+  --brand-accent-foreground: var(--primary-foreground);
+  --accent: oklch(0.318 0.0425 242);
+  --accent-foreground: oklch(0.6897 0.1125 242);
+  --destructive: oklch(0.715 0.1148 27);
+  --destructive-foreground: oklch(0.331 0.03 27);
+  --destructive-chip: oklch(0.305 0.056 27);
+  --destructive-chip-foreground: oklch(0.6815 0.119 27);
+  --warning: oklch(0.715 0.1107 68);
+  --warning-foreground: oklch(0.338 0.03 68);
+  --warning-chip: oklch(0.305 0.054 68);
+  --warning-chip-foreground: oklch(0.6815 0.1148 68);
+  --success: oklch(0.715 0.1148 150);
+  --success-foreground: oklch(0.345 0.03 150);
+  --success-chip: oklch(0.305 0.056 150);
+  --success-chip-foreground: oklch(0.665 0.119 150);
+  --info: oklch(0.715 0.1148 255);
+  --info-foreground: oklch(0.338 0.03 255);
+  --info-chip: oklch(0.305 0.056 255);
+  --info-chip-foreground: oklch(0.6733 0.119 255);
+  /* A step DARKER than the 0.19 canvas, and low chroma, so the rail and the page never read
+     as one navy (live walk). */
+  --sidebar: oklch(0.165 0.012 250);
+  --sidebar-foreground: oklch(0.955 0.012 250);
+  --sidebar-primary: oklch(0.72 0.135 242);
+  --sidebar-primary-foreground: oklch(0.2 0.035 242);
+  --sidebar-accent: oklch(0.31 0.0567 242);
+  --sidebar-accent-foreground: oklch(0.965 0.02 242);
+  --sidebar-border: oklch(0.5165 0.0378 250);
+  --sidebar-ring: oklch(0.7 0.125 242);
+  --sidebar-quiet: oklch(0.225 0.042 250);
+  --sidebar-quiet-foreground: oklch(0.955 0.012 250);
+  --sidebar-quiet-border: oklch(0.5165 0.0378 250);
+  --sidebar-quiet-accent: oklch(0.31 0.0567 242);
+  --sidebar-quiet-accent-foreground: oklch(0.965 0.02 242);
+  --sidebar-tinted: oklch(0.222 0.0112 245);
+  --sidebar-tinted-foreground: oklch(0.955 0.016 245);
+  --sidebar-tinted-border: oklch(0.5165 0.016 245);
+  --sidebar-tinted-accent: oklch(0.318 0.0425 242);
+  --sidebar-tinted-accent-foreground: oklch(0.6897 0.1125 242);
+  --sidebar-inverted: oklch(0.158 0.026 250);
+  --sidebar-inverted-foreground: oklch(0.955 0.012 250);
+  --sidebar-inverted-border: oklch(0.5 0.0234 250);
+  --sidebar-inverted-accent: oklch(0.243 0.0325 242);
+  --sidebar-inverted-accent-foreground: oklch(0.965 0.02 242);
+  --surface-1: oklch(0.238 0.0104 245);
+  --surface-2: oklch(0.272 0.0104 245);
+  --surface-tint: color-mix(in oklab, var(--primary) 10%, var(--card));
+  --table-pin-tint: color-mix(in oklab, var(--surface-tint) 50%, var(--card));
+  --hero-wash: linear-gradient(170deg, var(--surface-tint) 0%, var(--card) 86%);
+  --chart-1: oklch(0.68 0.125 242);
+  --chart-2: oklch(0.79 0.125 304);
+  --chart-3: oklch(0.59 0.125 10);
+  --chart-4: oklch(0.735 0.125 78);
+  --chart-5: oklch(0.52 0.125 150);
+  --chart-6: oklch(0.845 0.125 204);
+  --primary-gradient: linear-gradient(
+    103deg,
+    var(--primary) 0%,
+    color-mix(in oklab, var(--primary) 76%, var(--accent-foreground)) 100%
+  );
+  --nav-active: var(--primary);
+  --shadow-1: 0 1px 2px rgb(0 0 0 / 0.45);
+  --shadow-2: 0 10px 30px rgb(0 0 0 / 0.55);
+  --nav-active-shadow: none;
+}
+
+@keyframes pedant-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes pedant-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+@keyframes pedant-toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes pedant-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes pedant-screen-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes pedant-menu-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.99);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes pedant-drawer-in {
+  from {
+    opacity: 0;
+    transform: translateX(24px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes pedant-bar {
+  from {
+    transform: translateX(-110%);
+  }
+  to {
+    transform: translateX(260%);
+  }
+}
+
+/* Interaction transitions — colour and elevation only; layout properties never
+   transition globally. Inline animation/transform styles are unaffected. */
+button,
+a,
+[role='checkbox'],
+[role='tab'],
+[role='row'],
+[role='option'] {
+  transition:
+    background-color 0.15s ease,
+    color 0.15s ease,
+    border-color 0.15s ease,
+    box-shadow 0.15s ease,
+    filter 0.15s ease,
+    transform 0.12s ease,
+    opacity 0.15s ease;
+}
+input,
+textarea,
+select {
+  transition:
+    background-color 0.15s ease,
+    color 0.15s ease,
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* Tailwind-3 replacement of the v4 `@layer base { * { @apply border-border outline-ring/50 } ... }` */
+@layer base {
+  * {
+    border-color: var(--border);
+    outline-color: color-mix(in oklab, var(--ring) 50%, transparent);
+  }
+  body {
+    background-color: var(--background);
+    color: var(--foreground);
+    font-family: 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  }
+  button:not(:disabled),
+  [role='button']:not([aria-disabled='true']) {
+    cursor: pointer;
+  }
+  label:has([role='checkbox'], [role='radio'], [role='switch']) {
+    cursor: pointer;
+  }
+}
+
+/* Dashboard cards rise in once, in reading order (--rise-index = card position). */
+@media (prefers-reduced-motion: no-preference) {
+  .dashboard-rise {
+    animation: pedant-screen-in 0.32s ease-out backwards;
+    animation-delay: calc(min(var(--rise-index, 0), 8) * 40ms);
+  }
+}

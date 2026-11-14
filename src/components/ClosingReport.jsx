@@ -8,30 +8,79 @@ import {
     FiDollarSign,
     FiCreditCard,
     FiSmartphone,
-    FiUsers,
     FiPackage,
     FiExternalLink,
-    FiX,
     FiPhone,
+    FiCheckCircle,
+    FiAlertTriangle,
 } from 'react-icons/fi';
+import {
+    cn,
+    KpiStrip,
+    KpiCard,
+    SectionCard,
+    StatusChip,
+    Button,
+    Dialog,
+    EmptyState,
+    TablePager,
+    CARD_FRAME,
+    TABLE_CARD,
+    TABLE_TH,
+    TABLE_TD,
+    TABLE_ROW,
+    TABLE_SCROLL,
+} from './ui';
+import { formatAmount } from '../utils/money';
 
-const PAYMENT_META = {
-    cash: { label: 'Cash', color: 'text-emerald-600 dark:text-d-green bg-emerald-50 dark:bg-[rgba(52,232,161,0.1)]' },
-    card: { label: 'Card', color: 'text-blue-600 dark:text-[#60a5fa] bg-blue-50 dark:bg-[rgba(96,165,250,0.1)]' },
-    upi: { label: 'UPI', color: 'text-purple-600 dark:text-[#c084fc] bg-purple-50 dark:bg-[rgba(168,85,247,0.1)]' },
-    online: { label: 'Online', color: 'text-purple-600 dark:text-[#c084fc] bg-purple-50 dark:bg-[rgba(168,85,247,0.1)]' },
-    store_credit: { label: 'Store Credit', color: 'text-amber-600 dark:text-d-accent bg-amber-50 dark:bg-[rgba(255,210,100,0.1)]' },
-    credit: { label: 'On Credit', color: 'text-red-600 dark:text-d-red bg-red-50 dark:bg-[rgba(255,107,107,0.1)]' },
-    mixed: { label: 'Mixed', color: 'text-slate-600 dark:text-d-text bg-slate-100 dark:bg-d-glass' },
+const METHOD = {
+    cash: { label: 'Cash', tone: 'success' },
+    card: { label: 'Card', tone: 'info' },
+    upi: { label: 'Online', tone: 'accent' },
+    online: { label: 'Online', tone: 'accent' },
+    store_credit: { label: 'Store credit', tone: 'warning' },
+    credit: { label: 'On credit', tone: 'destructive' },
+    mixed: { label: 'Mixed', tone: 'neutral' },
 };
 
 const TENDER_META = {
-    cash: { label: 'Cash', icon: FiDollarSign, iconColor: 'text-emerald-500', expectedLabel: 'Expected (drawer, all-time)', hint: 'Physically count the drawer' },
-    card: { label: 'Card', icon: FiCreditCard, iconColor: 'text-blue-500', expectedLabel: 'Expected (this period)', hint: 'Check your bank/merchant statement' },
-    online: { label: 'Online / UPI', icon: FiSmartphone, iconColor: 'text-purple-500', expectedLabel: 'Expected (this period)', hint: 'Check gateway/bank statement' },
+    cash: { label: 'Cash', icon: FiDollarSign, expectedLabel: 'Expected in drawer', hint: 'Count the drawer' },
+    card: { label: 'Card', icon: FiCreditCard, expectedLabel: 'Expected this period', hint: 'Check the card machine / bank statement' },
+    online: { label: 'Online', icon: FiSmartphone, expectedLabel: 'Expected this period', hint: 'Check the wallet / bank statement' },
 };
 
-const ClosingReport = ({ data, meta, tenderEditors, accountEditors }) => {
+/** label · value line in the Sales and Settlement cards. */
+const Line = ({ label, value, tone, strong, icon: Icon, onClick, className }) => {
+    const valueClass = cn(
+        'tabular-nums whitespace-nowrap',
+        strong ? 'font-semibold' : '',
+        tone === 'muted' ? 'text-muted-foreground' : tone === 'success' ? 'text-success' : tone === 'destructive' ? 'text-destructive' : 'text-foreground'
+    );
+    const inner = (
+        <>
+            <span className={cn('flex items-center gap-2 min-w-0', strong ? 'font-medium text-foreground' : 'text-muted-foreground')}>
+                {Icon ? <Icon className="w-3.5 h-3.5 shrink-0" aria-hidden="true" /> : null}
+                {label}
+            </span>
+            <span className="flex items-center gap-1">
+                <span className={valueClass}>{value}</span>
+                {onClick ? <FiChevronRight className="w-3.5 h-3.5 text-muted-foreground" aria-hidden="true" /> : null}
+            </span>
+        </>
+    );
+    const base = cn('flex items-center justify-between gap-3 py-1.5 text-body', className);
+    return onClick ? (
+        <button type="button" onClick={onClick} className={cn(base, 'w-full -mx-2 px-2 rounded-row text-left hover:bg-[var(--hover-overlay)]')} style={{ width: 'calc(100% + 1rem)' }}>
+            {inner}
+        </button>
+    ) : (
+        <div className={base}>{inner}</div>
+    );
+};
+
+const Rule = () => <div className="my-1.5 border-t border-hairline" />;
+
+const ClosingReport = ({ data, tenderEditors, accountEditors }) => {
     const navigate = useNavigate();
     const { business } = useBusiness();
     const [expandedBill, setExpandedBill] = useState(null);
@@ -39,14 +88,12 @@ const ClosingReport = ({ data, meta, tenderEditors, accountEditors }) => {
     const [showCreditModal, setShowCreditModal] = useState(false);
     const PAGE_SIZE = 10;
 
-    const currency = business?.currency || 'Rs.';
-    const fmt = (amount) =>
-        `${currency} ${Number(amount || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    const currency = business?.currency || 'PKR';
+    const fmt = (amount) => formatAmount(amount, { currency, decimals: 2 });
 
     if (!data) return null;
 
     const {
-        periodStart, periodEnd,
         grossSales, totalDiscounts, totalReturns, netSales, totalOrders, totalItemsSold,
         cogs, grossProfit, totalExpenses, netProfit,
         cashSales, cardSales, upiSales, storeCreditUsed, creditExtended, creditExtendedByCustomer = [],
@@ -64,442 +111,314 @@ const ClosingReport = ({ data, meta, tenderEditors, accountEditors }) => {
     const varianceLabel = (v) => {
         if (v == null) return '—';
         if (v === 0) return 'Exact match';
-        return v < 0 ? `Short by ${fmt(Math.abs(v))}` : `Over by ${fmt(Math.abs(v))}`;
+        return v < 0 ? `Short ${fmt(Math.abs(v))}` : `Over ${fmt(Math.abs(v))}`;
     };
+
+    const tenders = ['cash', 'card', 'online'].map((k) => ({
+        key: k,
+        t: tenderReconciliation[k] || { expected: 0, counted: null, variance: null, reconciled: null },
+    }));
+    const matched = tenders.filter(({ t }) => t.reconciled === true).length;
+    const mismatched = tenders.filter(({ t }) => t.reconciled === false).length;
 
     const billPages = Math.max(1, Math.ceil(bills.length / PAGE_SIZE));
-    const visibleBills = bills.slice((billPage - 1) * PAGE_SIZE, billPage * PAGE_SIZE);
-
-    const paymentBadge = (method) => {
-        const m = PAYMENT_META[method] || { label: method || 'Unknown', color: 'text-slate-600 dark:text-d-text bg-slate-100 dark:bg-d-glass' };
-        return (
-            <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium ${m.color}`}>
-                {m.label}
-            </span>
-        );
-    };
+    const page = Math.min(billPage, billPages);
+    const visibleBills = bills.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
 
     return (
-        <div className="space-y-5">
-            {/* Meta header (only present for saved/frozen closings) */}
-            {meta && (
-                <div className="bg-white dark:bg-d-card border border-slate-100 dark:border-d-border rounded-2xl p-5 shadow-sm">
-                    <div className="flex flex-wrap items-center justify-between gap-3">
-                        <div>
-                            <h2 className="text-lg font-bold text-slate-800 dark:text-d-heading">
-                                Closing #{meta.closingNumber}
-                            </h2>
-                            <p className="text-sm text-slate-500 dark:text-d-muted mt-0.5">
-                                {new Date(periodStart).toLocaleString()} &rarr; {new Date(periodEnd).toLocaleString()}
-                            </p>
-                        </div>
-                        <div className="text-right text-sm">
-                            <p className="text-slate-500 dark:text-d-muted">
-                                Closed by <span className="font-medium text-slate-700 dark:text-d-text">{meta.closedBy?.name || '—'}</span>
-                            </p>
-                            <p className="text-slate-400 dark:text-d-faint text-xs mt-0.5">
-                                {meta.closedAt ? new Date(meta.closedAt).toLocaleString() : ''}
-                            </p>
-                        </div>
-                    </div>
-                    {meta.countedNote && (
-                        <div className="mt-3 pt-3 border-t border-slate-100 dark:border-d-border text-sm text-slate-600 dark:text-d-text">
-                            <span className="font-medium">Note: </span>{meta.countedNote}
-                        </div>
-                    )}
-                </div>
-            )}
+        <div className="flex flex-col gap-5">
+            {/* Headline figures */}
+            <KpiStrip cols={4}>
+                <KpiCard size="sm" label="Net sales" value={fmt(netSales)} note={`${(totalOrders || 0).toLocaleString()} bills · ${(totalItemsSold || 0).toLocaleString()} items`} />
+                <KpiCard size="sm" label="Net profit" value={fmt(netProfit)} tone={bal(netProfit) < 0 ? 'destructive' : 'success'} note={`after ${fmt(totalExpenses)} expenses`} />
+                <KpiCard size="sm" label="Credit given" value={fmt(creditExtended)} note={creditExtendedByCustomer.length ? `${creditExtendedByCustomer.length} customer${creditExtendedByCustomer.length === 1 ? '' : 's'}` : 'none this period'} />
+                <KpiCard
+                    size="sm"
+                    label="Money check"
+                    value={`${matched} of 3 match`}
+                    tone={mismatched ? 'destructive' : matched === 3 ? 'success' : undefined}
+                    note={mismatched ? `${mismatched} with a difference` : matched === 3 ? 'Cash, card and online all match' : 'Type what you counted below'}
+                />
+            </KpiStrip>
 
-            {/* Money Book: per-account counted vs expected (closings made
-                before the Money Book have no rows and skip this) */}
-            <AccountReconciliation
-                rows={accountReconciliation}
-                totalMoneyExpected={totalMoneyExpected}
-                fmt={fmt}
-                editors={accountEditors}
-            />
+            {/* Money Book: per-account counted vs expected (closings before the Money Book skip this) */}
+            <AccountReconciliation rows={accountReconciliation} totalMoneyExpected={totalMoneyExpected} fmt={fmt} editors={accountEditors} />
 
-            {/* Tender Reconciliation — the real check: does each externally-verifiable
-                tender match what the books say? Cash/Card/Online are independent —
-                each is checked (or not) on its own. */}
-            <div className="bg-white dark:bg-d-card border border-slate-100 dark:border-d-border rounded-2xl overflow-hidden shadow-sm divide-y divide-slate-100 dark:divide-d-border">
-                {['cash', 'card', 'online'].map((key) => {
-                    const meta_ = TENDER_META[key];
-                    const t = tenderReconciliation[key] || { expected: 0, counted: null, variance: null, reconciled: null };
-                    const Icon = meta_.icon;
-                    const editor = tenderEditors?.[key];
-
-                    const badgeClass =
-                        t.reconciled === true
-                            ? 'bg-emerald-100 dark:bg-[rgba(52,232,161,0.15)] text-emerald-700 dark:text-d-green'
-                            : t.reconciled === false
-                                ? bal(t.variance) < 0
-                                    ? 'bg-red-100 dark:bg-[rgba(255,107,107,0.15)] text-red-700 dark:text-d-red'
-                                    : 'bg-amber-100 dark:bg-[rgba(255,210,100,0.15)] text-amber-700 dark:text-d-accent'
-                                : 'bg-slate-100 dark:bg-d-glass text-slate-500 dark:text-d-muted';
-
-                    const badgeLabel =
-                        t.reconciled === true ? 'Matches' : t.reconciled === false ? varianceLabel(t.variance) : 'Not checked';
-
-                    return (
-                        <div key={key} className="p-4 sm:p-5">
-                            <div className="flex items-center justify-between mb-3">
-                                <div className="flex items-center gap-2 font-semibold text-slate-800 dark:text-d-heading">
-                                    <Icon size={16} className={meta_.iconColor} />
-                                    {meta_.label}
-                                    {key === 'cash' && (
-                                        <button
-                                            type="button"
-                                            onClick={() => navigate('/cashbook')}
-                                            className="flex items-center gap-1 px-2 py-0.5 rounded-lg text-xs font-medium text-primary-600 dark:text-d-accent hover:bg-primary-50 dark:hover:bg-[rgba(255,210,100,0.1)] transition-colors"
+            {/* Tender check — does each tender match what the books say? Each is checked on its own. */}
+            <section aria-label="Cash, card and online check">
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                    {tenders.map(({ key, t }) => {
+                        const m = TENDER_META[key];
+                        const Icon = m.icon;
+                        const editor = tenderEditors?.[key];
+                        const tone = t.reconciled === true ? 'success' : t.reconciled === false ? (bal(t.variance) < 0 ? 'destructive' : 'warning') : 'neutral';
+                        return (
+                            <div
+                                key={key}
+                                className={cn(
+                                    CARD_FRAME,
+                                    'p-4 flex flex-col gap-3',
+                                    t.reconciled === false && 'border-destructive/40'
+                                )}
+                            >
+                                <div className="flex items-center justify-between gap-2">
+                                    <span className="flex items-center gap-2 font-heading text-h4 text-foreground">
+                                        <Icon className="w-4 h-4 text-muted-foreground" aria-hidden="true" />
+                                        {m.label}
+                                    </span>
+                                    <StatusChip
+                                        size="sm"
+                                        tone={tone}
+                                        icon={t.reconciled === true ? FiCheckCircle : t.reconciled === false ? FiAlertTriangle : null}
+                                        label={t.reconciled === true ? 'Matches' : t.reconciled === false ? varianceLabel(t.variance) : 'Not checked'}
+                                    />
+                                </div>
+                                <dl className="grid grid-cols-2 gap-3">
+                                    <div>
+                                        <dt className="font-mono text-overline-lg uppercase text-muted-foreground">{m.expectedLabel}</dt>
+                                        <dd className="mt-1 text-body-lg font-semibold tabular-nums text-foreground">{fmt(t.expected)}</dd>
+                                    </div>
+                                    <div>
+                                        <dt className="font-mono text-overline-lg uppercase text-muted-foreground">Difference</dt>
+                                        <dd
+                                            className={cn(
+                                                'mt-1 text-body-lg font-semibold tabular-nums',
+                                                t.reconciled === true ? 'text-success' : t.reconciled === false ? (bal(t.variance) < 0 ? 'text-destructive' : 'text-warning-chip-foreground') : 'text-muted-foreground'
+                                            )}
                                         >
-                                            <FiExternalLink size={12} />
-                                            View Detail
-                                        </button>
-                                    )}
-                                </div>
-                                <span className={`px-2.5 py-1 rounded-full text-xs font-medium ${badgeClass}`}>
-                                    {badgeLabel}
-                                </span>
-                            </div>
-                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                                            {t.variance != null ? `${t.variance > 0 ? '+' : ''}${fmt(t.variance)}` : '—'}
+                                        </dd>
+                                    </div>
+                                </dl>
                                 <div>
-                                    <p className="text-[11px] uppercase tracking-wide text-slate-400 dark:text-d-faint">{meta_.expectedLabel}</p>
-                                    <p className="text-base font-bold text-slate-800 dark:text-d-heading mt-0.5">{fmt(t.expected)}</p>
-                                </div>
-                                <div>
-                                    <p className="text-[11px] uppercase tracking-wide text-slate-400 dark:text-d-faint">Counted</p>
-                                    {editor ? (
-                                        <div className="mt-1">{editor}</div>
-                                    ) : (
-                                        <p className="text-base font-bold text-slate-800 dark:text-d-heading mt-0.5">
-                                            {t.counted != null ? fmt(t.counted) : '—'}
-                                        </p>
-                                    )}
-                                    <p className="text-[10px] text-slate-400 dark:text-d-faint mt-1">{meta_.hint}</p>
-                                </div>
-                                <div>
-                                    <p className="text-[11px] uppercase tracking-wide text-slate-400 dark:text-d-faint">Variance</p>
-                                    <p
-                                        className={`text-base font-bold mt-0.5 ${
-                                            t.reconciled === true
-                                                ? 'text-emerald-700 dark:text-d-green'
-                                                : t.reconciled === false
-                                                    ? bal(t.variance) < 0
-                                                        ? 'text-red-700 dark:text-d-red'
-                                                        : 'text-amber-700 dark:text-d-accent'
-                                                    : 'text-slate-400 dark:text-d-faint'
-                                        }`}
-                                    >
-                                        {t.variance != null ? fmt(t.variance) : '—'}
+                                    <p className="font-mono text-overline-lg uppercase text-muted-foreground mb-1">Counted</p>
+                                    {editor || <p className="text-body-lg font-semibold tabular-nums text-foreground">{t.counted != null ? fmt(t.counted) : '—'}</p>}
+                                    <p className="mt-1 text-caption text-muted-foreground">
+                                        {m.hint}
+                                        {key === 'cash' ? (
+                                            <>
+                                                {' · '}
+                                                <Button variant="link" className="text-caption" onClick={() => navigate('/cashbook')}>
+                                                    Drawer detail
+                                                    <FiExternalLink aria-hidden="true" />
+                                                </Button>
+                                            </>
+                                        ) : null}
                                     </p>
                                 </div>
                             </div>
-                        </div>
-                    );
-                })}
-            </div>
-
-            {/* Sales math check — secondary/internal consistency check only.
-                Cost+Profit vs Settlement is algebraically forced to match by the
-                bill schema (total = amountPaid + amountDue), so this can never
-                catch shrinkage or a miscount — it only flags a genuine data bug. */}
-            <div className="flex flex-wrap items-center justify-between gap-2 bg-slate-50 dark:bg-d-glass border border-slate-200 dark:border-d-border rounded-xl px-4 py-3 text-xs">
-                <div className="flex items-center gap-2 text-slate-500 dark:text-d-muted">
-                    <FiPackage size={13} />
-                    Sales Math Check
+                        );
+                    })}
                 </div>
-                <div className="flex flex-wrap items-center gap-4 text-slate-500 dark:text-d-muted">
-                    <span>Cost + Profit: <span className="font-medium text-slate-700 dark:text-d-text">{fmt(costPlusProfit)}</span></span>
-                    <span>Settlement: <span className="font-medium text-slate-700 dark:text-d-text">{fmt(settlementTotal)}</span></span>
+                {/* Internal consistency check only: cost + profit vs settlement is forced equal by the bill
+                    maths, so it can't catch a miscount — it only flags a data problem. */}
+                <p className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-caption text-muted-foreground">
+                    <span>Sales maths check:</span>
+                    <span>cost + profit {fmt(costPlusProfit)}</span>
+                    <span>· settled {fmt(settlementTotal)}</span>
                     {reconciled ? (
-                        <span className="text-emerald-600 dark:text-d-green font-medium">✓ Matches</span>
+                        <span className="inline-flex items-center gap-1 text-success">
+                            <FiCheckCircle className="w-3 h-3" aria-hidden="true" /> adds up
+                        </span>
                     ) : (
-                        <span className="text-red-600 dark:text-d-red font-medium">✗ {fmt(reconciliationDifference)} off — data issue</span>
+                        <span className="inline-flex items-center gap-1 text-destructive">
+                            <FiAlertTriangle className="w-3 h-3" aria-hidden="true" /> {fmt(reconciliationDifference)} off — a data problem, tell support
+                        </span>
                     )}
-                </div>
+                </p>
+            </section>
+
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                <SectionCard title="Sales and profit">
+                    <Line label="Gross sales" value={fmt(grossSales)} />
+                    <Line label="Discounts" value={`− ${fmt(totalDiscounts)}`} tone="muted" />
+                    <Line label="Returns" value={`− ${fmt(totalReturns)}`} tone="muted" />
+                    <Line label="Net sales" value={fmt(netSales)} strong />
+                    <Rule />
+                    <Line label="Cost of goods sold" value={`− ${fmt(cogs)}`} tone="muted" />
+                    <Line label="Gross profit" value={fmt(grossProfit)} strong />
+                    <Line label="Expenses" value={`− ${fmt(totalExpenses)}`} tone="muted" />
+                    <Line label="Net profit" value={fmt(netProfit)} strong tone={bal(netProfit) < 0 ? 'destructive' : 'success'} />
+                </SectionCard>
+
+                <SectionCard title="How it was paid">
+                    <Line icon={FiDollarSign} label="Cash" value={fmt(cashSales)} />
+                    <Line icon={FiCreditCard} label="Card" value={fmt(cardSales)} />
+                    <Line icon={FiSmartphone} label="Online" value={fmt(upiSales)} />
+                    <Line label="Store credit used" value={fmt(storeCreditUsed)} />
+                    <Line
+                        label="Given on credit"
+                        value={fmt(creditExtended)}
+                        onClick={creditExtendedByCustomer.length > 0 ? () => setShowCreditModal(true) : undefined}
+                    />
+                    <Rule />
+                    <Line label="Total" value={fmt(settlementTotal)} strong />
+                    <p className="mt-3 font-mono text-overline-lg uppercase text-muted-foreground">Customer balances — for information</p>
+                    <Line label="Old credit paid back" value={fmt(collectionsReceived)} tone="muted" />
+                    <Line
+                        label="Still owed by customers"
+                        value={isNegCredit ? `${fmt(Math.abs(bal(outstandingReceivable)))} (shop owes them)` : fmt(outstandingReceivable)}
+                    />
+                </SectionCard>
             </div>
 
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-                {/* Sales & Profit */}
-                <div className="bg-white dark:bg-d-card border border-slate-100 dark:border-d-border rounded-2xl p-5 shadow-sm">
-                    <h3 className="text-sm font-bold text-slate-800 dark:text-d-heading uppercase tracking-wide mb-4 flex items-center gap-2">
-                        <FiPackage size={14} /> Sales &amp; Profit
-                    </h3>
-                    <div className="space-y-2 text-sm">
-                        <Row label="Gross Sales" value={fmt(grossSales)} />
-                        <Row label="Discounts" value={`− ${fmt(totalDiscounts)}`} muted />
-                        <Row label="Returns" value={`− ${fmt(totalReturns)}`} muted />
-                        <Row label="Net Sales" value={fmt(netSales)} bold />
-                        <div className="border-t border-slate-100 dark:border-d-border my-2" />
-                        <Row label="Cost of Goods Sold" value={`− ${fmt(cogs)}`} muted />
-                        <Row label="Gross Profit" value={fmt(grossProfit)} bold />
-                        <Row label="Expenses" value={`− ${fmt(totalExpenses)}`} muted />
-                        <Row label="Net Profit" value={fmt(netProfit)} bold highlight />
-                        <div className="border-t border-slate-100 dark:border-d-border my-2" />
-                        <Row label="Total Orders" value={totalOrders?.toLocaleString() ?? 0} />
-                        <Row label="Items Sold" value={totalItemsSold?.toLocaleString() ?? 0} />
-                    </div>
-                </div>
-
-                {/* Settlement breakdown */}
-                <div className="bg-white dark:bg-d-card border border-slate-100 dark:border-d-border rounded-2xl p-5 shadow-sm">
-                    <h3 className="text-sm font-bold text-slate-800 dark:text-d-heading uppercase tracking-wide mb-4 flex items-center gap-2">
-                        <FiCreditCard size={14} /> Settlement Breakdown
-                    </h3>
-                    <div className="space-y-2 text-sm">
-                        <Row icon={<FiDollarSign size={13} className="text-emerald-500" />} label="Cash" value={fmt(cashSales)} />
-                        <Row icon={<FiCreditCard size={13} className="text-blue-500" />} label="Card" value={fmt(cardSales)} />
-                        <Row icon={<FiSmartphone size={13} className="text-purple-500" />} label="UPI / Online" value={fmt(upiSales)} />
-                        <Row icon={<FiDollarSign size={13} className="text-amber-500" />} label="Store Credit Used" value={fmt(storeCreditUsed)} />
-                        <Row
-                            icon={<FiUsers size={13} className="text-red-500" />}
-                            label="Credit Extended (new)"
-                            value={fmt(creditExtended)}
-                            onClick={creditExtendedByCustomer.length > 0 ? () => setShowCreditModal(true) : undefined}
-                        />
-                        <div className="border-t border-slate-100 dark:border-d-border my-2" />
-                        <Row label="Settlement Total" value={fmt(settlementTotal)} bold />
-                    </div>
-
-                    <div className="mt-4 pt-4 border-t border-slate-100 dark:border-d-border">
-                        <p className="text-[11px] uppercase tracking-wide text-slate-400 dark:text-d-faint mb-2">
-                            Receivables — informational only
+            {/* Bill by bill */}
+            <section className={TABLE_CARD} aria-labelledby="closing-bills-title">
+                <div className="px-5 pt-4 pb-3 flex items-center justify-between gap-3">
+                    <div>
+                        <h3 id="closing-bills-title" className="font-heading text-h4 text-foreground">
+                            Bills
+                        </h3>
+                        <p className="mt-0.5 text-caption text-muted-foreground">
+                            {bills.length} in this period · click one to see its items
                         </p>
-                        <div className="space-y-2 text-sm">
-                            <Row label="Collections Received (prior credit)" value={fmt(collectionsReceived)} muted />
-                            <Row
-                                label="Outstanding Receivable"
-                                value={isNegCredit ? `${fmt(Math.abs(bal(outstandingReceivable)))} (owed to customer)` : fmt(outstandingReceivable)}
-                            />
-                        </div>
                     </div>
-                </div>
-            </div>
-
-            {/* Bill-by-bill detail */}
-            <div className="bg-white dark:bg-d-card border border-slate-100 dark:border-d-border rounded-2xl overflow-hidden shadow-sm">
-                <div className="px-5 py-4 border-b border-slate-100 dark:border-d-border flex items-center justify-between">
-                    <h3 className="text-sm font-bold text-slate-800 dark:text-d-heading uppercase tracking-wide">
-                        Bill Detail ({bills.length})
-                    </h3>
                 </div>
                 {bills.length === 0 ? (
-                    <div className="flex flex-col items-center justify-center py-12 text-slate-400 dark:text-d-faint">
-                        <FiPackage size={36} />
-                        <p className="mt-3 text-sm">No bills in this period</p>
-                    </div>
+                    <EmptyState icon={FiPackage} title="No bills in this period" size="sm" />
                 ) : (
                     <>
-                        <table className="w-full">
-                            <thead className="bg-slate-50 dark:bg-d-glass">
-                                <tr>
-                                    <th className="w-8" />
-                                    <th className="text-left py-3 px-4 text-xs font-medium text-slate-500 dark:text-d-muted">Bill #</th>
-                                    <th className="text-left py-3 px-4 text-xs font-medium text-slate-500 dark:text-d-muted">Date</th>
-                                    <th className="text-left py-3 px-4 text-xs font-medium text-slate-500 dark:text-d-muted">Customer</th>
-                                    <th className="text-left py-3 px-4 text-xs font-medium text-slate-500 dark:text-d-muted">Method</th>
-                                    <th className="text-right py-3 px-4 text-xs font-medium text-slate-500 dark:text-d-muted">Total</th>
-                                    <th className="text-right py-3 px-4 text-xs font-medium text-slate-500 dark:text-d-muted">Profit</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {visibleBills.map((b, idx) => {
-                                    const key = b.billNumber ?? idx;
-                                    const isOpen = expandedBill === key;
-                                    const creditAmt = b.creditAmount ?? b.amountDue ?? 0;
-                                    return (
-                                        <React.Fragment key={key}>
-                                            <tr
-                                                className="border-t border-slate-100 dark:border-d-border hover:bg-slate-50 dark:hover:bg-[rgba(255,255,255,0.02)] cursor-pointer transition-colors"
-                                                onClick={() => setExpandedBill(isOpen ? null : key)}
-                                            >
-                                                <td className="pl-4 text-slate-400 dark:text-d-faint">
-                                                    {isOpen ? <FiChevronDown size={14} /> : <FiChevronRight size={14} />}
-                                                </td>
-                                                <td className="py-3 px-4 text-sm font-medium text-slate-800 dark:text-d-heading">
-                                                    #{b.billNumber}
-                                                </td>
-                                                <td className="py-3 px-4 text-sm text-slate-500 dark:text-d-muted">
-                                                    {b.date ? new Date(b.date).toLocaleString() : '—'}
-                                                </td>
-                                                <td className="py-3 px-4 text-sm text-slate-600 dark:text-d-text">
-                                                    {b.customerName || 'Walk-in'}
-                                                </td>
-                                                <td className="py-3 px-4">{paymentBadge(b.paymentMethod)}</td>
-                                                <td className="py-3 px-4 text-sm text-right font-semibold text-slate-800 dark:text-d-heading">
-                                                    {fmt(b.billTotal)}
-                                                </td>
-                                                <td className="py-3 px-4 text-sm text-right font-semibold text-emerald-600 dark:text-d-green">
-                                                    {fmt(b.billProfit)}
-                                                </td>
-                                            </tr>
-                                            {isOpen && (
-                                                <tr className="bg-slate-50 dark:bg-[rgba(255,255,255,0.02)]">
-                                                    <td colSpan={7} className="px-4 pb-4 pt-1">
-                                                        <div className="bg-white dark:bg-d-card border border-slate-200 dark:border-d-border rounded-xl overflow-hidden">
-                                                            <table className="w-full text-xs">
-                                                                <thead className="bg-slate-100 dark:bg-d-glass">
-                                                                    <tr>
-                                                                        <th className="text-left py-2 px-3 font-medium text-slate-500 dark:text-d-muted">Item</th>
-                                                                        <th className="text-center py-2 px-3 font-medium text-slate-500 dark:text-d-muted">Qty</th>
-                                                                        <th className="text-right py-2 px-3 font-medium text-slate-500 dark:text-d-muted">Price</th>
-                                                                        <th className="text-right py-2 px-3 font-medium text-slate-500 dark:text-d-muted">Cost</th>
-                                                                        <th className="text-right py-2 px-3 font-medium text-slate-500 dark:text-d-muted">Profit</th>
-                                                                    </tr>
-                                                                </thead>
-                                                                <tbody>
-                                                                    {(b.items || []).map((it, i) => (
-                                                                        <tr key={i} className="border-t border-slate-100 dark:border-d-border">
-                                                                            <td className="py-2 px-3 text-slate-700 dark:text-d-text">{it.name}</td>
-                                                                            <td className="py-2 px-3 text-center text-slate-600 dark:text-d-muted">× {it.qty}</td>
-                                                                            <td className="py-2 px-3 text-right text-slate-600 dark:text-d-muted">{fmt(it.price)}</td>
-                                                                            <td className="py-2 px-3 text-right text-slate-600 dark:text-d-muted">{fmt(it.costPrice)}</td>
-                                                                            <td className="py-2 px-3 text-right font-semibold text-emerald-600 dark:text-d-green">
-                                                                                {fmt(it.lineProfit ?? ((it.price || 0) - (it.costPrice || 0)) * (it.qty || 0))}
-                                                                            </td>
-                                                                        </tr>
-                                                                    ))}
-                                                                </tbody>
-                                                            </table>
-                                                            <div className="flex items-center justify-between px-3 py-2 bg-slate-50 dark:bg-d-glass text-xs text-slate-500 dark:text-d-muted">
-                                                                <span>Paid: {fmt(b.amountPaid)}</span>
-                                                                <span className={creditAmt < 0 ? 'text-blue-600 dark:text-[#60a5fa]' : creditAmt > 0 ? 'text-red-600 dark:text-d-red' : ''}>
-                                                                    {creditAmt < 0
-                                                                        ? `Store owes customer: ${fmt(Math.abs(creditAmt))}`
-                                                                        : creditAmt > 0
-                                                                            ? `On credit: ${fmt(creditAmt)}`
-                                                                            : 'Fully settled'}
-                                                                </span>
-                                                            </div>
-                                                        </div>
+                        <div className={TABLE_SCROLL}>
+                            <table className="w-full border-collapse">
+                                <thead>
+                                    <tr>
+                                        <th className={cn(TABLE_TH, 'w-8')}>
+                                            <span className="sr-only">Open</span>
+                                        </th>
+                                        <th className={TABLE_TH}>Bill</th>
+                                        <th className={TABLE_TH}>Date</th>
+                                        <th className={TABLE_TH}>Customer</th>
+                                        <th className={TABLE_TH}>Paid by</th>
+                                        <th className={cn(TABLE_TH, 'text-right')}>Total</th>
+                                        <th className={cn(TABLE_TH, 'text-right')}>Profit</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {visibleBills.map((b, idx) => {
+                                        const key = b.billNumber ?? idx;
+                                        const isOpen = expandedBill === key;
+                                        const creditAmt = b.creditAmount ?? b.amountDue ?? 0;
+                                        const method = METHOD[b.paymentMethod] || { label: b.paymentMethod || 'Unknown', tone: 'neutral' };
+                                        return (
+                                            <React.Fragment key={key}>
+                                                <tr
+                                                    className={cn(TABLE_ROW, 'cursor-pointer', isOpen && 'bg-muted/40')}
+                                                    onClick={() => setExpandedBill(isOpen ? null : key)}
+                                                    onKeyDown={(e) => {
+                                                        if (e.key === 'Enter' || e.key === ' ') {
+                                                            e.preventDefault();
+                                                            setExpandedBill(isOpen ? null : key);
+                                                        }
+                                                    }}
+                                                    tabIndex={0}
+                                                    aria-expanded={isOpen}
+                                                    aria-label={`Bill #${b.billNumber}, ${isOpen ? 'hide' : 'show'} items`}
+                                                >
+                                                    <td className={cn(TABLE_TD, 'text-muted-foreground')}>
+                                                        {isOpen ? <FiChevronDown className="w-3.5 h-3.5" aria-hidden="true" /> : <FiChevronRight className="w-3.5 h-3.5" aria-hidden="true" />}
+                                                    </td>
+                                                    <td className={cn(TABLE_TD, 'font-mono font-medium')}>#{b.billNumber}</td>
+                                                    <td className={cn(TABLE_TD, 'text-muted-foreground whitespace-nowrap')}>
+                                                        {b.date ? new Date(b.date).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' }) : '—'}
+                                                    </td>
+                                                    <td className={TABLE_TD}>{b.customerName || <span className="text-muted-foreground">Walk-in</span>}</td>
+                                                    <td className={TABLE_TD}>
+                                                        <StatusChip size="sm" tone={method.tone} label={method.label} />
+                                                    </td>
+                                                    <td className={cn(TABLE_TD, 'text-right tabular-nums font-medium whitespace-nowrap')}>{fmt(b.billTotal)}</td>
+                                                    <td className={cn(TABLE_TD, 'text-right tabular-nums whitespace-nowrap', bal(b.billProfit) < 0 ? 'text-destructive' : 'text-success')}>
+                                                        {fmt(b.billProfit)}
                                                     </td>
                                                 </tr>
-                                            )}
-                                        </React.Fragment>
-                                    );
-                                })}
-                            </tbody>
-                        </table>
-
-                        {billPages > 1 && (
-                            <div className="flex items-center justify-between px-4 py-3 border-t border-slate-100 dark:border-d-border">
-                                <p className="text-sm text-slate-500 dark:text-d-muted">
-                                    Page {billPage} of {billPages} ({bills.length} bills)
-                                </p>
-                                <div className="flex gap-2">
-                                    <button
-                                        disabled={billPage <= 1}
-                                        onClick={() => setBillPage((p) => p - 1)}
-                                        className="px-3 py-1.5 text-sm rounded-lg bg-slate-100 dark:bg-d-elevated hover:bg-slate-200 dark:hover:bg-d-glass disabled:opacity-40 transition-colors text-slate-700 dark:text-d-text"
-                                    >
-                                        Previous
-                                    </button>
-                                    <button
-                                        disabled={billPage >= billPages}
-                                        onClick={() => setBillPage((p) => p + 1)}
-                                        className="px-3 py-1.5 text-sm rounded-lg bg-slate-100 dark:bg-d-elevated hover:bg-slate-200 dark:hover:bg-d-glass disabled:opacity-40 transition-colors text-slate-700 dark:text-d-text"
-                                    >
-                                        Next
-                                    </button>
-                                </div>
-                            </div>
-                        )}
+                                                {isOpen && (
+                                                    <tr className="bg-muted/40 shadow-[inset_0_-1px_0_var(--hairline)]">
+                                                        <td colSpan={7} className="px-4 pb-3 pt-1">
+                                                            <div className="rounded-xl border border-hairline bg-card overflow-hidden">
+                                                                <table className="w-full border-collapse text-body-sm">
+                                                                    <thead>
+                                                                        <tr className="text-muted-foreground">
+                                                                            <th className="text-left font-medium py-1.5 px-3">Item</th>
+                                                                            <th className="text-right font-medium py-1.5 px-3">Qty</th>
+                                                                            <th className="text-right font-medium py-1.5 px-3">Price</th>
+                                                                            <th className="text-right font-medium py-1.5 px-3">Cost</th>
+                                                                            <th className="text-right font-medium py-1.5 px-3">Profit</th>
+                                                                        </tr>
+                                                                    </thead>
+                                                                    <tbody>
+                                                                        {(b.items || []).map((it, i) => {
+                                                                            const lp = it.lineProfit ?? ((it.price || 0) - (it.costPrice || 0)) * (it.qty || 0);
+                                                                            return (
+                                                                                <tr key={i} className="border-t border-hairline">
+                                                                                    <td className="py-1.5 px-3 text-foreground">{it.name}</td>
+                                                                                    <td className="py-1.5 px-3 text-right tabular-nums">× {it.qty}</td>
+                                                                                    <td className="py-1.5 px-3 text-right tabular-nums">{fmt(it.price)}</td>
+                                                                                    <td className="py-1.5 px-3 text-right tabular-nums text-muted-foreground">{fmt(it.costPrice)}</td>
+                                                                                    <td className={cn('py-1.5 px-3 text-right tabular-nums font-medium', lp < 0 ? 'text-destructive' : 'text-success')}>{fmt(lp)}</td>
+                                                                                </tr>
+                                                                            );
+                                                                        })}
+                                                                    </tbody>
+                                                                </table>
+                                                                <div className="flex items-center justify-between gap-3 px-3 py-2 bg-muted/40 border-t border-hairline text-body-sm text-muted-foreground">
+                                                                    <span>Paid {fmt(b.amountPaid)}</span>
+                                                                    <span className={creditAmt < 0 ? 'text-info' : creditAmt > 0 ? 'text-destructive' : ''}>
+                                                                        {creditAmt < 0
+                                                                            ? `Shop owes the customer ${fmt(Math.abs(creditAmt))}`
+                                                                            : creditAmt > 0
+                                                                              ? `On credit ${fmt(creditAmt)}`
+                                                                              : 'Fully paid'}
+                                                                    </span>
+                                                                </div>
+                                                            </div>
+                                                        </td>
+                                                    </tr>
+                                                )}
+                                            </React.Fragment>
+                                        );
+                                    })}
+                                </tbody>
+                            </table>
+                        </div>
+                        {billPages > 1 ? (
+                            <TablePager page={page} pageSize={PAGE_SIZE} total={bills.length} onPageChange={setBillPage} noun="bills" />
+                        ) : null}
                     </>
                 )}
-            </div>
+            </section>
 
-            {/* Credit Extended — who owes what */}
-            {showCreditModal && (
-                <div className="fixed inset-0 bg-black/50 dark:bg-black/60 flex items-center justify-center z-50 p-4">
-                    <div className="bg-white dark:bg-d-card dark:border dark:border-d-border rounded-2xl w-full max-w-md max-h-[80vh] flex flex-col animate-fadeIn">
-                        <div className="flex items-center justify-between p-6 border-b border-slate-200 dark:border-d-border shrink-0">
-                            <div>
-                                <h3 className="text-lg font-semibold text-slate-800 dark:text-d-heading">Credit Extended</h3>
-                                <p className="text-sm text-slate-500 dark:text-d-muted mt-0.5">
-                                    {creditExtendedByCustomer.length} customer{creditExtendedByCustomer.length === 1 ? '' : 's'} — {fmt(creditExtended)} total
+            {/* Given on credit — who owes what */}
+            <Dialog
+                open={showCreditModal}
+                onClose={() => setShowCreditModal(false)}
+                closeOnScrim
+                title="Given on credit"
+                description={`${creditExtendedByCustomer.length} customer${creditExtendedByCustomer.length === 1 ? '' : 's'} · ${fmt(creditExtended)} in all`}
+                flush
+            >
+                <ul className="divide-y divide-[var(--hairline)] border-t border-hairline">
+                    {creditExtendedByCustomer.map((c, i) => (
+                        <li key={c.customerId || i} className="flex items-center justify-between gap-3 px-5 py-3">
+                            <div className="min-w-0">
+                                <p className="font-medium text-foreground truncate">{c.customerName || 'Unknown'}</p>
+                                {c.customerPhone ? (
+                                    <a href={`tel:${c.customerPhone}`} className="mt-0.5 inline-flex items-center gap-1 text-body-sm text-primary hover:underline">
+                                        <FiPhone className="w-3 h-3" aria-hidden="true" />
+                                        {c.customerPhone}
+                                    </a>
+                                ) : null}
+                            </div>
+                            <div className="text-right shrink-0">
+                                <p className="font-semibold tabular-nums text-foreground">{fmt(c.amount)}</p>
+                                <p className="text-caption text-muted-foreground">
+                                    {c.billCount} bill{c.billCount === 1 ? '' : 's'}
                                 </p>
                             </div>
-                            <button
-                                onClick={() => setShowCreditModal(false)}
-                                className="p-2 hover:bg-slate-100 dark:hover:bg-d-glass-hover rounded-lg transition-colors text-slate-500 dark:text-d-muted shrink-0"
-                            >
-                                <FiX />
-                            </button>
-                        </div>
-                        <div className="overflow-y-auto flex-1">
-                            {creditExtendedByCustomer.map((c, i) => (
-                                <div
-                                    key={c.customerId || i}
-                                    className="flex items-center justify-between px-6 py-4 border-b border-slate-100 dark:border-d-border last:border-b-0"
-                                >
-                                    <div className="min-w-0">
-                                        <p className="font-medium text-slate-800 dark:text-d-heading truncate">{c.customerName || 'Unknown'}</p>
-                                        {c.customerPhone && (
-                                            <a
-                                                href={`tel:${c.customerPhone}`}
-                                                className="flex items-center gap-1 text-xs text-primary-600 dark:text-d-accent hover:underline mt-0.5"
-                                            >
-                                                <FiPhone size={11} />
-                                                {c.customerPhone}
-                                            </a>
-                                        )}
-                                    </div>
-                                    <div className="text-right shrink-0 ml-3">
-                                        <p className="font-bold text-slate-800 dark:text-d-heading tabular-nums">{fmt(c.amount)}</p>
-                                        <p className="text-xs text-slate-400 dark:text-d-faint">
-                                            {c.billCount} bill{c.billCount === 1 ? '' : 's'}
-                                        </p>
-                                    </div>
-                                </div>
-                            ))}
-                        </div>
-                    </div>
-                </div>
-            )}
+                        </li>
+                    ))}
+                </ul>
+            </Dialog>
         </div>
     );
-};
-
-const Row = ({ label, value, icon, muted, bold, highlight, onClick }) => {
-    const content = (
-        <>
-            <span className={`flex items-center gap-1.5 ${muted ? 'text-slate-400 dark:text-d-faint' : 'text-slate-600 dark:text-d-text'}`}>
-                {icon}
-                {label}
-            </span>
-            <span className="flex items-center gap-1">
-                <span
-                    className={`tabular-nums ${
-                        highlight
-                            ? 'font-bold text-emerald-600 dark:text-d-green text-base'
-                            : bold
-                                ? 'font-bold text-slate-800 dark:text-d-heading'
-                                : muted
-                                    ? 'text-slate-400 dark:text-d-faint'
-                                    : 'font-medium text-slate-700 dark:text-d-text'
-                    }`}
-                >
-                    {value}
-                </span>
-                {onClick && <FiChevronRight size={13} className="text-slate-400 dark:text-d-faint" />}
-            </span>
-        </>
-    );
-
-    if (onClick) {
-        return (
-            <button
-                type="button"
-                onClick={onClick}
-                className="w-full flex items-center justify-between -mx-1 px-1 py-0.5 rounded-lg hover:bg-slate-50 dark:hover:bg-d-glass transition-colors text-left"
-            >
-                {content}
-            </button>
-        );
-    }
-
-    return <div className="flex items-center justify-between">{content}</div>;
 };
 
 export default ClosingReport;

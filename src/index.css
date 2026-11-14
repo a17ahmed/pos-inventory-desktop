@@ -1,60 +1,283 @@
-/* Fonts — @import must come before everything else in CSS, or browsers
-   (and the production build) drop it and the app falls back to system fonts. */
-@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@500;600;700&family=Outfit:wght@300;400;500;600;700&display=swap');
-/* Bebas Neue / DM Mono for dashboard numbers */
-@import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Mono:wght@300;400;500&display=swap');
+/* Fonts are bundled (see src/main.jsx) — no Google Fonts, so the app works offline. */
 
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-/* Premium POS Theme Variables */
+/* ═══════════════════════════════════════════════════════════════════════════
+   DESIGN TOKENS — the single source of every colour, shadow and radius.
+   Values from design/reference/source/tokens/globals.css (OKLCH, verbatim).
+   Light on :root, dark on .dark (on <html>). Components never define colours;
+   Tailwind classes (bg-card, text-muted-foreground, bg-primary…) read these.
+   See design/02-foundations.md.
+   ═══════════════════════════════════════════════════════════════════════════ */
 :root {
-    /* Dark mode backgrounds */
-    --d-bg: #06080f;
-    --d-card: #0b0e1a;
-    --d-elevated: #0f1525;
+    --radius: 1rem;
 
-    /* Dark mode borders & glass */
-    --d-border: rgba(255,255,255,0.09);
-    --d-border-hover: rgba(255,210,100,0.35);
-    --d-glass: rgba(255,255,255,0.04);
-    --d-glass-hover: rgba(255,255,255,0.08);
+    --overlay: rgb(8 12 14 / 0.42);
+    --hover-overlay: color-mix(in oklab, var(--foreground) 6%, transparent);
+    --press-overlay: color-mix(in oklab, var(--foreground) 11%, transparent);
+    --press-shift: translateY(0.5px);
+    --hover-brighten: brightness(1.06);
+    --press-brighten: brightness(0.96);
+    --knob: oklch(1 0 0);
+    --knob-shadow: 0 1px 2px rgb(0 0 0 / 0.2);
 
-    /* Dark mode accent */
-    --d-accent: #ffd264;
-    --d-accent-secondary: #e8b73a;
-    --d-accent-glow: rgba(255,210,100,0.12);
+    --background: oklch(0.978 0.008 245);
+    --foreground: oklch(0.255 0.024 245);
+    --card: oklch(0.994 0.004 245);
+    --card-foreground: oklch(0.255 0.024 245);
+    --popover: oklch(0.995 0.0032 245);
+    --popover-foreground: oklch(0.255 0.024 245);
+    --muted: oklch(0.943 0.0176 245);
+    --muted-foreground: oklch(0.513 0.0176 245);
+    --placeholder: oklch(0.62 0.0176 245);
+    --border: oklch(0.6395 0.016 245);
+    --hairline: color-mix(in oklab, var(--border) 50%, transparent);
+    --input: oklch(0.5545 0.0192 245);
+    --secondary: oklch(0.925 0.024 245);
+    --secondary-foreground: oklch(0.467 0.024 245);
 
-    /* Dark mode text */
-    --d-heading: #fef9ec;
-    --d-text: #eef0f7;
-    --d-muted: #8b93a8;
-    --d-faint: #3d4560;
+    /* Accent group — the only part a shop's accent colour changes (Stage 2).
+       Default = steel blue, hue 242. */
+    --ring: oklch(0.545 0.125 242);
+    --primary: oklch(0.545 0.125 242);
+    --primary-foreground: oklch(0.985 0.008 242);
+    --accent: oklch(0.945 0.045 242);
+    --accent-foreground: oklch(0.513 0.1125 242);
+    --sidebar-primary: oklch(0.595 0.125 242);
+    --sidebar-accent: oklch(0.31 0.0525 242);
 
-    /* Dark mode semantic */
-    --d-green: #34e8a1;
-    --d-blue: #5b9cf6;
-    --d-red: #ff6b6b;
+    --destructive: oklch(0.555 0.14 27);
+    --destructive-foreground: oklch(0.985 0.008 27);
+    --destructive-chip: oklch(0.945 0.055 27);
+    --destructive-chip-foreground: oklch(0.5245 0.119 27);
+    --warning: oklch(0.555 0.135 68);
+    --warning-foreground: oklch(0.985 0.008 68);
+    --warning-chip: oklch(0.945 0.055 68);
+    --warning-chip-foreground: oklch(0.5245 0.1148 68);
+    --success: oklch(0.5335 0.14 150);
+    --success-foreground: oklch(0.985 0.008 150);
+    --success-chip: oklch(0.945 0.055 150);
+    --success-chip-foreground: oklch(0.513 0.119 150);
+    --info: oklch(0.549 0.14 255);
+    --info-foreground: oklch(0.985 0.008 255);
+    --info-chip: oklch(0.945 0.055 255);
+    --info-chip-foreground: oklch(0.5245 0.119 255);
 
-    /* Legacy aliases */
-    --ink: var(--d-bg);
-    --deep: var(--d-card);
-    --navy: var(--d-elevated);
-    --glass: var(--d-glass);
-    --glass-b: var(--d-glass-hover);
-    --rim: var(--d-border);
-    --rim-hot: var(--d-border-hover);
-    --amber: var(--d-accent);
-    --amber-s: var(--d-accent-secondary);
-    --amber-d: var(--d-accent-glow);
-    --cream: var(--d-heading);
-    --green: var(--d-green);
-    --blue: var(--d-blue);
-    --red: var(--d-red);
-    --text: var(--d-text);
-    --soft: var(--d-muted);
-    --dim: var(--d-faint);
+    --sidebar: oklch(0.225 0.042 250);
+    --sidebar-foreground: oklch(0.955 0.012 250);
+    --sidebar-primary-foreground: oklch(0.191 0.03 242);
+    --sidebar-accent-foreground: oklch(0.965 0.02 242);
+    --sidebar-border: oklch(0.5165 0.0378 250);
+
+    --surface-tint: color-mix(in oklab, var(--primary) 8%, var(--card));
+    --hero-wash: linear-gradient(180deg, var(--surface-tint) 0%, var(--card) 72%);
+
+    --chart-1: var(--primary);
+    --chart-2: oklch(0.6585 0.125 304);
+    --chart-3: oklch(0.47 0.125 10);
+    --chart-4: oklch(0.64 0.125 78);
+    --chart-5: oklch(0.41 0.125 150);
+    --chart-6: oklch(0.6265 0.125 204);
+
+    --shadow-1: 0 1px 2px rgb(15 23 42 / 0.06), 0 4px 12px rgb(15 23 42 / 0.06);
+    --shadow-2: 0 12px 32px rgb(15 23 42 / 0.12);
+}
+
+.dark {
+    --hover-overlay: color-mix(in oklab, var(--foreground) 9%, transparent);
+    --press-overlay: color-mix(in oklab, var(--foreground) 15%, transparent);
+    --hover-brighten: brightness(1.1);
+    --press-brighten: brightness(0.94);
+
+    --background: oklch(0.19 0.0088 245);
+    --foreground: oklch(0.955 0.016 245);
+    --card: oklch(0.238 0.0104 245);
+    --card-foreground: oklch(0.955 0.016 245);
+    --popover: oklch(0.272 0.0104 245);
+    --popover-foreground: oklch(0.955 0.016 245);
+    --muted: oklch(0.295 0.0128 245);
+    --muted-foreground: oklch(0.6733 0.0176 245);
+    --placeholder: oklch(0.57 0.0176 245);
+    --border: oklch(0.53 0.016 245);
+    --hairline: color-mix(in oklab, var(--border) 70%, transparent);
+    --input: oklch(0.63 0.0192 245);
+    --secondary: oklch(0.33 0.016 245);
+    --secondary-foreground: oklch(0.7558 0.024 245);
+
+    --ring: oklch(0.72 0.135 242);
+    --primary: oklch(0.72 0.135 242);
+    --primary-foreground: oklch(0.2 0.035 242);
+    --accent: oklch(0.318 0.0425 242);
+    --accent-foreground: oklch(0.6897 0.1125 242);
+    --sidebar-primary: oklch(0.72 0.135 242);
+    --sidebar-accent: oklch(0.31 0.0567 242);
+
+    --destructive: oklch(0.715 0.1148 27);
+    --destructive-foreground: oklch(0.331 0.03 27);
+    --destructive-chip: oklch(0.305 0.056 27);
+    --destructive-chip-foreground: oklch(0.6815 0.119 27);
+    --warning: oklch(0.715 0.1107 68);
+    --warning-foreground: oklch(0.338 0.03 68);
+    --warning-chip: oklch(0.305 0.054 68);
+    --warning-chip-foreground: oklch(0.6815 0.1148 68);
+    --success: oklch(0.715 0.1148 150);
+    --success-foreground: oklch(0.345 0.03 150);
+    --success-chip: oklch(0.305 0.056 150);
+    --success-chip-foreground: oklch(0.665 0.119 150);
+    --info: oklch(0.715 0.1148 255);
+    --info-foreground: oklch(0.338 0.03 255);
+    --info-chip: oklch(0.305 0.056 255);
+    --info-chip-foreground: oklch(0.6733 0.119 255);
+
+    --sidebar: oklch(0.165 0.012 250);
+    --sidebar-foreground: oklch(0.955 0.012 250);
+    --sidebar-primary-foreground: oklch(0.2 0.035 242);
+    --sidebar-accent-foreground: oklch(0.965 0.02 242);
+    --sidebar-border: oklch(0.5165 0.0378 250);
+
+    --surface-tint: color-mix(in oklab, var(--primary) 10%, var(--card));
+    --hero-wash: linear-gradient(170deg, var(--surface-tint) 0%, var(--card) 86%);
+
+    --chart-1: var(--primary);
+    --chart-2: oklch(0.79 0.125 304);
+    --chart-3: oklch(0.59 0.125 10);
+    --chart-4: oklch(0.735 0.125 78);
+    --chart-5: oklch(0.52 0.125 150);
+    --chart-6: oklch(0.845 0.125 204);
+
+    --shadow-1: 0 1px 2px rgb(0 0 0 / 0.45);
+    --shadow-2: 0 10px 30px rgb(0 0 0 / 0.55);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   SHOP ACCENT COLOUR — <html data-accent="…"> (Stage 2). Only the accent group
+   changes; neutrals and status colours never do. Steel blue is the default
+   (the :root / .dark values above). Lightness tuned per preset so text on the
+   accent and accent links on cards stay ≥ 4.5:1 in both themes.
+   ═══════════════════════════════════════════════════════════════════════════ */
+html[data-accent='teal']:not(.dark) {
+    --primary: oklch(0.515 0.125 195);
+    --ring: oklch(0.515 0.125 195);
+    --primary-foreground: oklch(0.985 0.008 195);
+    --accent: oklch(0.945 0.045 195);
+    --accent-foreground: oklch(0.49 0.1125 195);
+    --sidebar-primary: oklch(0.595 0.125 195);
+    --sidebar-accent: oklch(0.31 0.0525 195);
+}
+html.dark[data-accent='teal'] {
+    --primary: oklch(0.72 0.135 195);
+    --ring: oklch(0.72 0.135 195);
+    --primary-foreground: oklch(0.2 0.035 195);
+    --accent: oklch(0.318 0.0425 195);
+    --accent-foreground: oklch(0.6897 0.1125 195);
+    --sidebar-primary: oklch(0.72 0.135 195);
+    --sidebar-accent: oklch(0.31 0.0567 195);
+}
+
+html[data-accent='green']:not(.dark) {
+    --primary: oklch(0.525 0.125 155);
+    --ring: oklch(0.525 0.125 155);
+    --primary-foreground: oklch(0.985 0.008 155);
+    --accent: oklch(0.945 0.045 155);
+    --accent-foreground: oklch(0.49 0.1125 155);
+    --sidebar-primary: oklch(0.595 0.125 155);
+    --sidebar-accent: oklch(0.31 0.0525 155);
+}
+html.dark[data-accent='green'] {
+    --primary: oklch(0.72 0.135 155);
+    --ring: oklch(0.72 0.135 155);
+    --primary-foreground: oklch(0.2 0.035 155);
+    --accent: oklch(0.318 0.0425 155);
+    --accent-foreground: oklch(0.6897 0.1125 155);
+    --sidebar-primary: oklch(0.72 0.135 155);
+    --sidebar-accent: oklch(0.31 0.0567 155);
+}
+
+html[data-accent='violet']:not(.dark) {
+    --primary: oklch(0.545 0.125 295);
+    --ring: oklch(0.545 0.125 295);
+    --primary-foreground: oklch(0.985 0.008 295);
+    --accent: oklch(0.945 0.045 295);
+    --accent-foreground: oklch(0.513 0.1125 295);
+    --sidebar-primary: oklch(0.595 0.125 295);
+    --sidebar-accent: oklch(0.31 0.0525 295);
+}
+html.dark[data-accent='violet'] {
+    --primary: oklch(0.72 0.135 295);
+    --ring: oklch(0.72 0.135 295);
+    --primary-foreground: oklch(0.2 0.035 295);
+    --accent: oklch(0.318 0.0425 295);
+    --accent-foreground: oklch(0.7 0.1125 295);
+    --sidebar-primary: oklch(0.72 0.135 295);
+    --sidebar-accent: oklch(0.31 0.0567 295);
+}
+
+html[data-accent='gold']:not(.dark) {
+    --primary: oklch(0.545 0.125 75);
+    --ring: oklch(0.545 0.125 75);
+    --primary-foreground: oklch(0.985 0.008 75);
+    --accent: oklch(0.945 0.045 75);
+    --accent-foreground: oklch(0.513 0.1125 75);
+    --sidebar-primary: oklch(0.595 0.125 75);
+    --sidebar-accent: oklch(0.31 0.0525 75);
+}
+html.dark[data-accent='gold'] {
+    --primary: oklch(0.72 0.135 75);
+    --ring: oklch(0.72 0.135 75);
+    --primary-foreground: oklch(0.2 0.035 75);
+    --accent: oklch(0.318 0.0425 75);
+    --accent-foreground: oklch(0.6897 0.1125 75);
+    --sidebar-primary: oklch(0.72 0.135 75);
+    --sidebar-accent: oklch(0.31 0.0567 75);
+}
+
+html[data-accent='rose']:not(.dark) {
+    --primary: oklch(0.545 0.125 12);
+    --ring: oklch(0.545 0.125 12);
+    --primary-foreground: oklch(0.985 0.008 12);
+    --accent: oklch(0.945 0.045 12);
+    --accent-foreground: oklch(0.513 0.1125 12);
+    --sidebar-primary: oklch(0.595 0.125 12);
+    --sidebar-accent: oklch(0.31 0.0525 12);
+}
+html.dark[data-accent='rose'] {
+    --primary: oklch(0.72 0.135 12);
+    --ring: oklch(0.72 0.135 12);
+    --primary-foreground: oklch(0.2 0.035 12);
+    --accent: oklch(0.318 0.0425 12);
+    --accent-foreground: oklch(0.7 0.1125 12);
+    --sidebar-primary: oklch(0.72 0.135 12);
+    --sidebar-accent: oklch(0.31 0.0567 12);
+}
+
+/* Sidebar style — <html data-sidebar="light">: a card-coloured sidebar instead of
+   the navy one (used by the new sidebar in Stage 5). Same specificity as the
+   accent blocks above and later in the file, so it wins over their sidebar values. */
+html[data-sidebar='light'][data-accent] {
+    --sidebar: var(--card);
+    --sidebar-foreground: var(--foreground);
+    --sidebar-primary: var(--primary);
+    --sidebar-primary-foreground: var(--primary-foreground);
+    --sidebar-accent: var(--accent);
+    --sidebar-accent-foreground: var(--accent-foreground);
+    --sidebar-border: var(--hairline);
+}
+
+/* Density — <html data-density="…">: table row / header height (used by the
+   DataTable in Stage 6). */
+:root {
+    --row-h: 44px;
+    --head-h: 36px;
+}
+html[data-density='compact'] {
+    --row-h: 36px;
+    --head-h: 32px;
+}
+html[data-density='comfortable'] {
+    --row-h: 56px;
+    --head-h: 40px;
 }
 
 * {
@@ -64,63 +287,54 @@
 }
 
 body {
-    font-family: 'Outfit', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    font-family: 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+    font-feature-settings: 'cv11', 'ss01';
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
     text-rendering: optimizeLegibility;
     transition: background-color 0.2s ease, color 0.2s ease;
 }
 
-/* Playfair Display for numbers/prices */
+/* Big numbers and prices (was Playfair Display): heading face, even-width digits */
 .font-display {
-    font-family: 'Playfair Display', serif;
+    font-family: 'Inter Tight', 'Inter', ui-sans-serif, system-ui, sans-serif;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.01em;
 }
 
-/* Light mode body styles (default) */
-html:not(.dark) body,
-html.light body {
-    background-color: #f8fafc !important;
-    color: #1e293b !important;
-}
-
-/* Dark mode body styles */
+html body,
+html.light body,
 html.dark body {
-    background-color: var(--d-bg) !important;
-    color: var(--d-text) !important;
+    background-color: var(--background) !important;
+    color: var(--foreground) !important;
 }
 
-/* Dark mode scrollbar */
-.dark ::-webkit-scrollbar-track {
-    background: var(--d-bg);
+/* Interaction transitions — colour and elevation only (low specificity, so a
+   component's own transition classes still win). */
+:where(button, a, [role='checkbox'], [role='tab'], [role='row'], [role='option']) {
+    transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease,
+        box-shadow 0.15s ease, filter 0.15s ease, transform 0.12s ease, opacity 0.15s ease;
 }
 
-.dark ::-webkit-scrollbar-thumb {
-    background: var(--d-faint);
-}
-
-.dark ::-webkit-scrollbar-thumb:hover {
-    background: var(--d-muted);
-}
-
-/* Custom scrollbar */
+/* Scrollbars */
 ::-webkit-scrollbar {
     width: 8px;
     height: 8px;
 }
 
 ::-webkit-scrollbar-track {
-    background: #f1f5f9;
-    border-radius: 4px;
+    background: transparent;
 }
 
 ::-webkit-scrollbar-thumb {
-    background: #cbd5e1;
-    border-radius: 4px;
+    background: color-mix(in oklab, var(--border) 55%, transparent);
+    border-radius: 999px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-    background: #94a3b8;
+    background: var(--border);
 }
+
 
 /* Animations */
 @keyframes fadeIn {
@@ -186,8 +400,8 @@ html.dark body {
 }
 
 @keyframes livePulse {
-    0%, 100% { box-shadow: 0 0 0 3px rgba(52,232,161,0.2); }
-    50% { box-shadow: 0 0 0 6px rgba(52,232,161,0.05); }
+    0%, 100% { box-shadow: 0 0 0 3px color-mix(in oklab, var(--success) 20%, transparent); }
+    50% { box-shadow: 0 0 0 6px color-mix(in oklab, var(--success) 5%, transparent); }
 }
 
 @keyframes spinRing {
@@ -236,23 +450,15 @@ html.dark body {
     position: relative;
 }
 
+/* The new design has no ambient colour washes (design/01-design-sense.md rule 8) */
 .bg-ambient::before {
-    content: '';
-    position: fixed;
-    inset: 0;
-    z-index: 0;
-    background:
-        radial-gradient(ellipse 60% 50% at 15% 20%, rgba(255,180,50,0.07) 0%, transparent 65%),
-        radial-gradient(ellipse 50% 60% at 85% 80%, rgba(91,156,246,0.06) 0%, transparent 60%),
-        radial-gradient(ellipse 40% 40% at 50% 50%, rgba(52,232,161,0.03) 0%, transparent 70%);
-    pointer-events: none;
+    content: none;
 }
 
-/* Glass effect */
+/* "Glass" panels become plain cards — no blur, no transparency */
 .glass {
-    background: var(--glass);
-    backdrop-filter: blur(12px);
-    border: 1px solid var(--rim);
+    background: var(--card);
+    border: 1px solid var(--hairline);
 }
 
 /* Premium scrollbar for dark theme */
@@ -265,21 +471,27 @@ html.dark body {
 }
 
 .dark-scrollbar::-webkit-scrollbar-thumb {
-    background: var(--dim);
+    background: var(--placeholder);
     border-radius: 4px;
 }
 
 .dark-scrollbar::-webkit-scrollbar-thumb:hover {
-    background: var(--soft);
+    background: var(--muted-foreground);
 }
 
-/* Focus styles */
+/* Focus: inputs show focus with their own border classes; buttons, links and
+   tabs get the design's 2px accent outline, keyboard focus only. Low
+   specificity, so an element's own focus classes still win. */
 input:focus,
 select:focus,
 textarea:focus,
 button:focus {
     outline: none;
-    ring: 2px;
+}
+
+:where(button, a, [role='button'], [role='tab']):focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
 }
 
 /* Print styles */
@@ -330,15 +542,9 @@ button:focus {
     -webkit-app-region: no-drag;
 }
 
-/* Grain texture overlay for premium dark theme */
+/* The old grain texture overlay is gone in the new design */
 .grain-overlay::after {
-    content: '';
-    position: fixed;
-    inset: 0;
-    z-index: 999;
-    pointer-events: none;
-    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.035'/%3E%3C/svg%3E");
-    opacity: 0.7;
+    content: none;
 }
 
 /* Bento card animation */
@@ -381,10 +587,55 @@ button:focus {
     animation: fadeInQuick 0.2s ease;
 }
 
+/* Old display faces mapped to the new ones (Stage 1); replaced by type roles later */
 .font-bebas {
-    font-family: 'Bebas Neue', sans-serif;
+    font-family: 'Inter Tight', 'Inter', ui-sans-serif, system-ui, sans-serif;
+    font-weight: 600;
 }
 
 .font-mono-dm {
-    font-family: 'DM Mono', monospace;
+    font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+/* Motion from the design (spinner, skeleton, toast, page enter, indeterminate bar) */
+@keyframes ds-spin { to { transform: rotate(360deg); } }
+@keyframes ds-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
+@keyframes ds-toast-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+@keyframes ds-fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes ds-screen-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@keyframes ds-drawer-in { from { opacity: 0; transform: translateX(24px); } to { opacity: 1; transform: none; } }
+@keyframes ds-dialog-in { from { opacity: 0; transform: translateY(6px) scale(.985); } to { opacity: 1; transform: none; } }
+@keyframes ds-menu-in { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: none; } }
+@keyframes ds-bar { from { transform: translateX(-110%); } to { transform: translateX(260%); } }
+
+@media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+    }
+}
+
+/* Page header band (Stage 5): faint dot grid + a large quiet arc on the right, as in
+   design/reference/components/layout-01-apppage.png. Decoration only. */
+.ds-band {
+    background-image: radial-gradient(color-mix(in oklab, var(--foreground) 9%, transparent) 0.8px, transparent 0.8px);
+    background-size: 14px 14px;
+}
+.ds-band::before {
+    content: '';
+    position: absolute;
+    right: -90px;
+    top: -170px;
+    width: 340px;
+    height: 340px;
+    border-radius: 9999px;
+    border: 1px solid color-mix(in oklab, var(--foreground) 10%, transparent);
+    pointer-events: none;
+}
+@media print {
+    .ds-band { background-image: none; }
+    .ds-band::before { display: none; }
 }

@@ -1,8 +1,37 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { FiCalendar, FiSearch, FiInbox, FiDownload, FiCornerUpLeft } from 'react-icons/fi';
+import { FiInbox, FiDownload, FiCornerUpLeft } from 'react-icons/fi';
 import { getMoneyEntries } from '../../services/api/moneyBook';
-import { ENTRY_TYPE_COLORS, entryTypeLabel, localDayKey, apiErrorMessage } from '../../utils/moneyBook';
-import { filterCls, Spinner, Pager, ErrorBox } from './ui';
+import { entryTypeLabel, localDayKey, apiErrorMessage } from '../../utils/moneyBook';
+import { getStatus } from '../../utils/statusTones';
+import { Pager } from './ui';
+import {
+    cn,
+    Button,
+    IconButton,
+    Select,
+    SearchInput,
+    Skeleton,
+    StatusBadge,
+    StatusChip,
+    StateCard,
+    EmptyState,
+    NoResults,
+    TableToolbar,
+    FilterButton,
+    DateRangeFields,
+    rangeLabel,
+    Field,
+    TABLE_CARD,
+    TABLE_HEAD_ROW,
+    TABLE_TH,
+    TABLE_ROW,
+    TABLE_TD,
+    TABLE_GROUP_ROW,
+    TABLE_GROUP_TD,
+    TABLE_SCROLL,
+    TableScroll,
+    skeletonRowsFor,
+} from '../ui';
 
 const TYPE_FILTERS = [
     'opening_balance', 'manual_deposit', 'manual_withdrawal', 'sale_collection', 'sale_cancel',
@@ -121,201 +150,232 @@ const EntriesTable = ({ account = 'all', fmt, reloadKey, canTransfer, onReverseT
         setSearch('');
     };
 
-    const balanceCell = (v, cls = '') => (
-        <td className={`px-4 py-2.5 text-right font-semibold text-sm ${(Number(v) || 0) < 0 ? 'text-d-red' : 'text-slate-700 dark:text-d-heading'} ${cls}`}>{fmt(v)}</td>
-    );
+    const money = (v, cls = '') => <span className={cn('tabular-nums', (Number(v) || 0) < 0 && 'text-destructive', cls)}>{fmt(v)}</span>;
+    const R = 'text-right tabular-nums';
 
     return (
         <div>
-            {/* Filters */}
-            <div className="flex flex-wrap items-center gap-3 mb-4 print:hidden">
-                <div className="relative flex-1 min-w-[180px] max-w-xs">
-                    <FiSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 dark:text-d-faint" />
-                    <input
-                        type="text"
-                        value={search}
-                        onChange={(e) => setSearch(e.target.value)}
-                        placeholder="Reference or description…"
-                        className={`${filterCls} w-full pl-10`}
-                    />
-                </div>
-                <select value={type} onChange={(e) => setType(e.target.value)} className={filterCls}>
-                    <option value="all">All types</option>
-                    {TYPE_FILTERS.map((t) => <option key={t} value={t}>{entryTypeLabel(t)}</option>)}
-                </select>
-                <select value={direction} onChange={(e) => setDirection(e.target.value)} className={filterCls}>
-                    <option value="all">In &amp; out</option>
-                    <option value="in">Money in</option>
-                    <option value="out">Money out</option>
-                </select>
-                <div className="flex items-center gap-2">
-                    <FiCalendar className="text-slate-400 dark:text-d-faint" size={16} />
-                    <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} className={filterCls} />
-                    <span className="text-slate-400 dark:text-d-faint text-sm">to</span>
-                    <input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} className={filterCls} />
-                </div>
-                {(filtered || startDate || endDate) && (
-                    <button onClick={clearFilters} className="px-3 py-2.5 text-slate-500 dark:text-d-muted hover:text-slate-700 dark:hover:text-d-text text-sm">
-                        Clear filters
-                    </button>
-                )}
-                <button onClick={downloadCsv} title="Download CSV" className="ml-auto flex items-center gap-2 px-3 py-2 text-slate-500 dark:text-d-muted hover:bg-slate-100 dark:hover:bg-d-glass rounded-xl transition-all">
-                    <FiDownload size={16} />
-                </button>
-            </div>
-
             {/* Range summary */}
             {rangeSummary && (
                 <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-4">
                     {[
                         ['Opening', rangeSummary.openingBalance],
-                        ['Money in', rangeSummary.totalIn, 'text-d-green'],
-                        ['Money out', rangeSummary.totalOut, 'text-d-red'],
+                        ['Money in', rangeSummary.totalIn, 'text-success'],
+                        ['Money out', rangeSummary.totalOut, 'text-destructive'],
                         ['Net', rangeSummary.net],
                         ['Closing', rangeSummary.closingBalance],
                     ].map(([label, v, cls]) => (
-                        <div key={label} className="bg-white dark:bg-d-card border border-slate-200 dark:border-d-border rounded-xl px-4 py-3">
-                            <p className="text-[11px] uppercase tracking-wide text-slate-400 dark:text-d-faint">{label}</p>
-                            <p className={`font-bold font-display ${cls || ((Number(v) || 0) < 0 ? 'text-d-red' : 'text-slate-800 dark:text-d-heading')}`}>{fmt(v)}</p>
+                        <div key={label} className="bg-card border border-hairline rounded-xl px-4 py-3">
+                            <p className="font-mono text-overline-lg uppercase text-muted-foreground">{label}</p>
+                            <p className="mt-0.5 font-heading text-h4">{money(v, cls)}</p>
                         </div>
                     ))}
                     {rangeSummary.type && (
-                        <p className="col-span-2 md:col-span-5 text-[12px] text-slate-500 dark:text-d-muted">
+                        <p className="col-span-2 md:col-span-5 text-body-sm text-muted-foreground">
                             {entryTypeLabel(rangeSummary.type.type)}: {rangeSummary.type.entryCount} entries · in {fmt(rangeSummary.type.totalIn)} · out {fmt(rangeSummary.type.totalOut)}
                         </p>
                     )}
                 </div>
             )}
 
-            <ErrorBox>{error}</ErrorBox>
+            <section className={TABLE_CARD} aria-label="Money Book entries">
+                <TableToolbar>
+                    <SearchInput
+                        className="w-full sm:w-[260px]"
+                        value={search}
+                        onChange={(e) => setSearch(e.target.value)}
+                        onClear={() => setSearch('')}
+                        placeholder="Reference or description"
+                        aria-label="Search reference or description"
+                    />
+                    <FilterButton
+                        label="Filter entries"
+                        summary={[
+                            rangeLabel({ from: startDate, to: endDate }),
+                            type !== 'all' && entryTypeLabel(type),
+                            direction !== 'all' && (direction === 'in' ? 'Money in' : 'Money out'),
+                        ].filter(Boolean).join(' · ')}
+                        count={(type !== 'all') + (direction !== 'all')}
+                        onReset={() => {
+                            setType('all');
+                            setDirection('all');
+                            setStartDate('');
+                            setEndDate('');
+                        }}
+                    >
+                        <DateRangeFields
+                            value={{ from: startDate, to: endDate }}
+                            onChange={(r) => {
+                                setStartDate(r.from);
+                                setEndDate(r.to);
+                            }}
+                        />
+                        <div className="grid grid-cols-2 gap-2">
+                            <Field label="Type">
+                                <Select value={type} onChange={(e) => setType(e.target.value)}>
+                                    <option value="all">All types</option>
+                                    {TYPE_FILTERS.map((t) => (
+                                        <option key={t} value={t}>
+                                            {entryTypeLabel(t)}
+                                        </option>
+                                    ))}
+                                </Select>
+                            </Field>
+                            <Field label="In / out">
+                                <Select value={direction} onChange={(e) => setDirection(e.target.value)}>
+                                    <option value="all">In &amp; out</option>
+                                    <option value="in">Money in</option>
+                                    <option value="out">Money out</option>
+                                </Select>
+                            </Field>
+                        </div>
+                    </FilterButton>
+                    {(filtered || startDate || endDate) && (
+                        <Button variant="ghost" onClick={clearFilters}>
+                            Clear filters
+                        </Button>
+                    )}
+                    <div className="ml-auto">
+                        <IconButton label="Download CSV" variant="outline" onClick={downloadCsv}>
+                            <FiDownload />
+                        </IconButton>
+                    </div>
+                </TableToolbar>
 
-            <div className="bg-white dark:bg-d-card border border-slate-200 dark:border-d-border rounded-2xl overflow-hidden mt-2">
-                {loading ? (
-                    <Spinner />
-                ) : entries.length === 0 ? (
-                    <div className="flex flex-col items-center justify-center py-16 text-slate-400 dark:text-d-faint">
-                        <FiInbox size={40} className="mb-3 opacity-40" />
-                        <p className="text-lg font-medium">No entries</p>
-                        <p className="text-sm mt-1">{filtered || startDate || endDate ? 'Nothing matches these filters' : 'Money movements will appear here'}</p>
+                {error ? (
+                    <div className="border-t border-hairline p-3">
+                        <StateCard kind="error" onRetry={() => fetchPage(pagination.page || 1)}>
+                            {error}
+                        </StateCard>
+                    </div>
+                ) : !loading && entries.length === 0 ? (
+                    <div className="border-t border-hairline">
+                        {filtered || startDate || endDate ? (
+                            <NoResults onClear={clearFilters} />
+                        ) : (
+                            <EmptyState icon={FiInbox} title="No entries">
+                                Money movements will appear here.
+                            </EmptyState>
+                        )}
                     </div>
                 ) : (
-                    <div className="overflow-x-auto">
+                    <TableScroll>
                         {filtered && (
-                            <p className="px-4 py-2 text-[12px] text-slate-500 dark:text-d-muted bg-slate-50 dark:bg-d-elevated border-b border-slate-100 dark:border-d-border">
+                            <p className="px-4 py-2 text-body-sm text-muted-foreground bg-muted/40 border-t border-hairline">
                                 Filtered list: running balance hidden. Day opening / closing still count every entry.
                             </p>
                         )}
-                        <table className="w-full text-sm">
+                        <table className="w-full border-collapse">
                             <thead>
-                                <tr className="border-b border-slate-100 dark:border-d-border bg-slate-50 dark:bg-d-elevated">
-                                    <th className="text-left px-4 py-3 font-semibold text-slate-500 dark:text-d-muted">#</th>
-                                    <th className="text-left px-4 py-3 font-semibold text-slate-500 dark:text-d-muted">Time</th>
-                                    {isAll && <th className="text-left px-4 py-3 font-semibold text-slate-500 dark:text-d-muted">Account</th>}
-                                    <th className="text-left px-4 py-3 font-semibold text-slate-500 dark:text-d-muted">Type</th>
-                                    <th className="text-left px-4 py-3 font-semibold text-slate-500 dark:text-d-muted">Description</th>
-                                    <th className="text-right px-4 py-3 font-semibold text-d-green">In</th>
-                                    <th className="text-right px-4 py-3 font-semibold text-d-red">Out</th>
-                                    {showBalance && <th className="text-right px-4 py-3 font-semibold text-slate-500 dark:text-d-muted">Balance</th>}
+                                <tr className={TABLE_HEAD_ROW}>
+                                    <th className={TABLE_TH}>#</th>
+                                    <th className={TABLE_TH}>Time</th>
+                                    {isAll && <th className={TABLE_TH}>Account</th>}
+                                    <th className={TABLE_TH}>Type</th>
+                                    <th className={TABLE_TH}>Description</th>
+                                    <th className={cn(TABLE_TH, 'text-right')}>In</th>
+                                    <th className={cn(TABLE_TH, 'text-right')}>Out</th>
+                                    {showBalance && <th className={cn(TABLE_TH, 'text-right')}>Balance</th>}
                                 </tr>
                             </thead>
                             <tbody>
-                                {groups.map((g) => (
-                                    <React.Fragment key={g.key}>
-                                        <tr className="bg-slate-100/80 dark:bg-d-elevated border-b border-slate-200 dark:border-d-border">
-                                            <td colSpan={labelSpan} className="px-4 py-2.5 font-semibold text-slate-700 dark:text-d-heading text-sm">
-                                                {g.date.toLocaleDateString('en-US', { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' })}
-                                            </td>
-                                            {g.summary ? (
-                                                <>
-                                                    <td colSpan={showBalance ? 2 : 1} className="px-4 py-2.5 text-right text-xs text-slate-500 dark:text-d-muted font-medium">Opening</td>
-                                                    {balanceCell(g.summary.openingBalance)}
-                                                </>
-                                            ) : (
-                                                <td colSpan={showBalance ? 3 : 2} />
-                                            )}
-                                        </tr>
-                                        {g.entries.map((e) => {
-                                            const d = new Date(e.effectiveDate || e.createdAt);
-                                            const isTransferLeg = e.type === 'transfer_out' || e.type === 'transfer_in';
-                                            const pendingCheque = e.chequeStatus === 'pending';
-                                            return (
-                                                <tr key={e._id} className="border-b border-slate-50 dark:border-d-border/50 hover:bg-slate-50 dark:hover:bg-[rgba(255,255,255,0.03)] transition-colors">
-                                                    <td className="px-4 py-3 text-slate-400 dark:text-d-faint">{e.entryNumber}</td>
-                                                    <td className="px-4 py-3 text-xs text-slate-400 dark:text-d-faint whitespace-nowrap">{d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</td>
-                                                    {isAll && (
-                                                        <td className="px-4 py-3">
-                                                            <span className="inline-block px-2 py-0.5 rounded-md text-[11px] font-medium bg-slate-100 dark:bg-d-elevated text-slate-600 dark:text-d-text whitespace-nowrap">
-                                                                {e.account?.name || '—'}
-                                                            </span>
-                                                        </td>
-                                                    )}
-                                                    <td className="px-4 py-3">
-                                                        <span className={`inline-block px-2.5 py-1 rounded-lg text-xs font-medium whitespace-nowrap ${ENTRY_TYPE_COLORS[e.type] || 'bg-slate-100 text-slate-600'}`}>
-                                                            {entryTypeLabel(e.type)}
-                                                        </span>
-                                                        {e.chequeStatus && (
-                                                            <span className="ml-1 inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase bg-slate-100 dark:bg-d-elevated text-slate-500 dark:text-d-muted">
-                                                                cheque {e.chequeStatus}
-                                                            </span>
-                                                        )}
-                                                    </td>
-                                                    <td className="px-4 py-3">
-                                                        <p className="text-slate-700 dark:text-d-text">{e.description}</p>
-                                                        {isTransferLeg && e.counterAccount?.name && (
-                                                            <p className="text-xs text-indigo-600 dark:text-indigo-400">
-                                                                {e.type === 'transfer_out' ? `→ To: ${e.counterAccount.name}` : `← From: ${e.counterAccount.name}`}
-                                                            </p>
-                                                        )}
-                                                        {e.referenceNumber && e.referenceNumber !== e.description && (
-                                                            <p className="text-xs text-slate-400 dark:text-d-faint">{e.referenceNumber}</p>
-                                                        )}
-                                                        {e.type === 'adjustment' && e.reason && (
-                                                            <p className="text-xs text-slate-500 dark:text-d-muted">Reason: {e.reason}</p>
-                                                        )}
-                                                        {e.note && <p className="text-xs text-slate-400 dark:text-d-faint italic">{e.note}</p>}
-                                                        <p className="text-xs text-slate-400 dark:text-d-faint">
-                                                            {e.performedBy ? `by ${e.performedBy}` : ''}
-                                                            {canTransfer && isTransferLeg && e.transferId && !e.reversalOf && (
-                                                                <button
-                                                                    onClick={() => onReverseTransfer?.(e)}
-                                                                    className="ml-2 inline-flex items-center gap-1 text-indigo-600 dark:text-indigo-400 hover:underline print:hidden"
-                                                                >
-                                                                    <FiCornerUpLeft size={11} /> Reverse
-                                                                </button>
-                                                            )}
-                                                        </p>
-                                                    </td>
-                                                    <td className={`px-4 py-3 text-right font-medium text-d-green ${pendingCheque ? 'opacity-50' : ''}`}>
-                                                        {e.direction === 'in' ? fmt(e.amount) : ''}
-                                                    </td>
-                                                    <td className={`px-4 py-3 text-right font-medium text-d-red ${pendingCheque ? 'opacity-50' : ''}`}>
-                                                        {e.direction === 'out' ? fmt(e.amount) : ''}
-                                                    </td>
-                                                    {showBalance && (
-                                                        <td className={`px-4 py-3 text-right font-bold ${(Number(e.balanceAfter) || 0) < 0 ? 'text-d-red' : 'text-slate-800 dark:text-d-heading'}`}>
-                                                            {fmt(e.balanceAfter)}
-                                                        </td>
-                                                    )}
-                                                </tr>
-                                            );
-                                        })}
-                                        {g.summary && (
-                                            <tr className="bg-slate-100 dark:bg-d-elevated border-b-2 border-slate-200 dark:border-d-border">
-                                                <td colSpan={labelSpan} className="px-4 py-2.5 text-xs text-slate-500 dark:text-d-muted">
-                                                    {g.summary.entryCount} entries · in {fmt(g.summary.totalIn)} · out {fmt(g.summary.totalOut)}
-                                                </td>
-                                                <td colSpan={showBalance ? 2 : 1} className="px-4 py-2.5 text-right text-xs font-semibold text-slate-600 dark:text-d-text">Closing</td>
-                                                {balanceCell(g.summary.closingBalance, 'font-bold')}
-                                            </tr>
-                                        )}
-                                    </React.Fragment>
-                                ))}
+                                {loading
+                                    ? Array.from({ length: skeletonRowsFor(window.innerHeight - 380) }).map((_, i) => (
+                                          <tr key={`sk-${i}`} className={TABLE_ROW}>
+                                              {Array.from({ length: colCount }).map((__, j) => (
+                                                  <td key={j} className={TABLE_TD}>
+                                                      <Skeleton className={cn('h-3.5', j === 4 ? 'w-48' : 'w-14')} />
+                                                  </td>
+                                              ))}
+                                          </tr>
+                                      ))
+                                    : groups.map((g) => (
+                                          <React.Fragment key={g.key}>
+                                              <tr className={TABLE_GROUP_ROW}>
+                                                  <td colSpan={labelSpan} className={cn(TABLE_GROUP_TD, 'font-semibold text-foreground text-body')}>
+                                                      {g.date.toLocaleDateString('en-US', { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' })}
+                                                  </td>
+                                                  {g.summary ? (
+                                                      <>
+                                                          <td colSpan={showBalance ? 2 : 1} className={cn(TABLE_GROUP_TD, 'text-right')}>
+                                                              Opening
+                                                          </td>
+                                                          <td className={cn(TABLE_GROUP_TD, R, 'font-semibold text-foreground')}>{money(g.summary.openingBalance)}</td>
+                                                      </>
+                                                  ) : (
+                                                      <td colSpan={showBalance ? 3 : 2} className={TABLE_GROUP_TD} />
+                                                  )}
+                                              </tr>
+                                              {g.entries.map((e) => {
+                                                  const d = new Date(e.effectiveDate || e.createdAt);
+                                                  const isTransferLeg = e.type === 'transfer_out' || e.type === 'transfer_in';
+                                                  const pendingCheque = e.chequeStatus === 'pending';
+                                                  const st = getStatus('entry', e.type);
+                                                  return (
+                                                      <tr key={e._id} className={TABLE_ROW}>
+                                                          <td className={cn(TABLE_TD, 'font-mono text-mono-sm text-muted-foreground')}>{e.entryNumber}</td>
+                                                          <td className={cn(TABLE_TD, 'text-muted-foreground whitespace-nowrap')}>{d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</td>
+                                                          {isAll && (
+                                                              <td className={TABLE_TD}>
+                                                                  {e.account?.name ? <StatusChip size="sm" shape="tag" tone="neutral" label={e.account.name} /> : '—'}
+                                                              </td>
+                                                          )}
+                                                          <td className={TABLE_TD}>
+                                                              <div className="flex flex-wrap items-center gap-1">
+                                                                  <StatusChip size="sm" shape="tag" tone={st?.tone || 'neutral'} icon={st?.icon} label={entryTypeLabel(e.type)} />
+                                                                  {e.chequeStatus && <StatusBadge kind="cheque" value={e.chequeStatus} size="xs" shape="tag" />}
+                                                              </div>
+                                                          </td>
+                                                          <td className={cn(TABLE_TD, 'py-2')}>
+                                                              <p>{e.description}</p>
+                                                              {isTransferLeg && e.counterAccount?.name && (
+                                                                  <p className="text-body-sm text-primary">
+                                                                      {e.type === 'transfer_out' ? `→ To: ${e.counterAccount.name}` : `← From: ${e.counterAccount.name}`}
+                                                                  </p>
+                                                              )}
+                                                              {e.referenceNumber && e.referenceNumber !== e.description && (
+                                                                  <p className="font-mono text-mono-xs text-muted-foreground">{e.referenceNumber}</p>
+                                                              )}
+                                                              {e.type === 'adjustment' && e.reason && <p className="text-body-sm text-muted-foreground">Reason: {e.reason}</p>}
+                                                              {e.note && <p className="text-body-sm text-muted-foreground italic">{e.note}</p>}
+                                                              <p className="text-body-sm text-muted-foreground">
+                                                                  {e.performedBy ? `by ${e.performedBy}` : ''}
+                                                                  {canTransfer && isTransferLeg && e.transferId && !e.reversalOf && (
+                                                                      <button
+                                                                          type="button"
+                                                                          onClick={() => onReverseTransfer?.(e)}
+                                                                          className="ml-2 inline-flex items-center gap-1 text-primary hover:underline print:hidden"
+                                                                      >
+                                                                          <FiCornerUpLeft size={11} aria-hidden="true" /> Reverse
+                                                                      </button>
+                                                                  )}
+                                                              </p>
+                                                          </td>
+                                                          <td className={cn(TABLE_TD, R, 'text-success font-medium', pendingCheque && 'opacity-50')}>{e.direction === 'in' ? fmt(e.amount) : ''}</td>
+                                                          <td className={cn(TABLE_TD, R, 'text-destructive font-medium', pendingCheque && 'opacity-50')}>{e.direction === 'out' ? fmt(e.amount) : ''}</td>
+                                                          {showBalance && <td className={cn(TABLE_TD, R, 'font-semibold')}>{money(e.balanceAfter)}</td>}
+                                                      </tr>
+                                                  );
+                                              })}
+                                              {g.summary && (
+                                                  <tr className={cn(TABLE_GROUP_ROW, 'shadow-[inset_0_-1px_0_var(--border)]')}>
+                                                      <td colSpan={labelSpan} className={TABLE_GROUP_TD}>
+                                                          {g.summary.entryCount} entries · in {fmt(g.summary.totalIn)} · out {fmt(g.summary.totalOut)}
+                                                      </td>
+                                                      <td colSpan={showBalance ? 2 : 1} className={cn(TABLE_GROUP_TD, 'text-right font-semibold text-foreground')}>
+                                                          Closing
+                                                      </td>
+                                                      <td className={cn(TABLE_GROUP_TD, R, 'font-semibold text-foreground')}>{money(g.summary.closingBalance)}</td>
+                                                  </tr>
+                                              )}
+                                          </React.Fragment>
+                                      ))}
                             </tbody>
                         </table>
-                    </div>
+                    </TableScroll>
                 )}
                 <Pager pagination={pagination} onPage={fetchPage} />
-            </div>
+            </section>
         </div>
     );
 };

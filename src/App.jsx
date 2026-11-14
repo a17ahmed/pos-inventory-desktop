@@ -1,6 +1,12 @@
-import React, { Component } from 'react';
-import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
+import React, { Component, Suspense, lazy } from 'react';
+import { Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom';
+import { FiLock } from 'react-icons/fi';
+import { EmptyState, Button } from './components/ui';
 import { useAuth } from './context/AuthContext';
+
+// Design Lab (design/ROADMAP.md Stage 3): dev builds only, loaded on demand so it never
+// ships in the app shops install.
+const DesignLab = import.meta.env.DEV ? lazy(() => import('./screens/DesignLab')) : null;
 
 // Error Boundary to catch React errors
 class ErrorBoundary extends Component {
@@ -21,16 +27,16 @@ class ErrorBoundary extends Component {
     render() {
         if (this.state.hasError) {
             return (
-                <div className="min-h-screen flex items-center justify-center bg-red-50 dark:bg-d-bg p-8">
-                    <div className="max-w-lg bg-white dark:bg-d-card rounded-xl p-6 shadow-lg">
-                        <h1 className="text-xl font-bold text-red-600 dark:text-d-red mb-4">Something went wrong</h1>
-                        <p className="text-slate-600 dark:text-d-text mb-4">{this.state.error?.message}</p>
-                        <pre className="bg-slate-100 dark:bg-d-elevated p-4 rounded text-xs overflow-auto max-h-48 mb-4 text-slate-800 dark:text-d-text">
+                <div className="min-h-screen flex items-center justify-center bg-destructive-chip p-8">
+                    <div className="max-w-lg bg-card rounded-xl p-6 shadow-lg">
+                        <h1 className="text-xl font-bold text-destructive mb-4">Something went wrong</h1>
+                        <p className="text-muted-foreground mb-4">{this.state.error?.message}</p>
+                        <pre className="bg-muted p-4 rounded text-xs overflow-auto max-h-48 mb-4 text-foreground">
                             {this.state.error?.stack}
                         </pre>
                         <button
                             onClick={() => window.location.reload()}
-                            className="px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600"
+                            className="px-4 py-2 bg-destructive text-white rounded-lg hover:bg-destructive/90"
                         >
                             Reload App
                         </button>
@@ -67,18 +73,13 @@ import EmployeeAnalytics from './screens/EmployeeAnalytics';
 import Closing from './screens/Closing';
 import ClosingDetail from './screens/ClosingDetail';
 
+import { PageSkeleton } from './components/ui/PageSkeleton';
 // Layout
 import Layout from './components/Layout';
 
 // Loading component
-const Loading = () => (
-    <div className="min-h-screen flex items-center justify-center bg-slate-50 dark:bg-d-bg">
-        <div className="flex flex-col items-center gap-4">
-            <div className="w-12 h-12 border-4 border-primary-500 border-t-transparent rounded-full animate-spin" />
-            <p className="text-slate-500 dark:text-d-muted">Loading...</p>
-        </div>
-    </div>
-);
+// While a page decides what to show (e.g. Money Book or Cash Book): the page's shape in grey
+const Loading = () => <PageSkeleton cards={4} />;
 
 // Protected route wrapper
 const ProtectedRoute = ({ children }) => {
@@ -103,9 +104,48 @@ const PermissionRoute = ({ module, children }) => {
     // If permissions not loaded yet, allow (will filter once loaded)
     if (!permissions) return children;
     if (!permissions[module]?.view) {
-        return <Navigate to="/dashboard" replace />;
+        return (
+            <Layout>
+                <NoAccess module={module} />
+            </Layout>
+        );
     }
     return children;
+};
+
+// Shown instead of a page the signed-in staff member isn't allowed to open (was a silent jump
+// to the home screen, which looked like the link was broken).
+const MODULE_LABEL = {
+    cashbook: 'the Money Book',
+    closing: 'Closing',
+    customers: 'Customers',
+    dashboard: 'the Dashboard',
+    employees: 'Staff',
+    expenses: 'Expenses',
+    pos: 'the till',
+    products: 'Products',
+    reports: 'Reports',
+    returns: 'Returns',
+    settings: 'Settings',
+    vendors: 'Vendors',
+};
+const NoAccess = ({ module }) => {
+    const navigate = useNavigate();
+    return (
+        <div className="h-full flex items-center justify-center p-6">
+            <EmptyState
+                icon={FiLock}
+                title={`You can't open ${MODULE_LABEL[module] || 'this page'}`}
+                actions={
+                    <Button variant="outline" onClick={() => navigate('/dashboard')}>
+                        Go to the home screen
+                    </Button>
+                }
+            >
+                Your account doesn't have this turned on. Ask the shop owner if you need it.
+            </EmptyState>
+        </div>
+    );
 };
 
 // /cashbook: the Money Book once the shop has it, else the old Cash Book (unchanged)
@@ -391,6 +431,20 @@ function AppContent() {
                     </ProtectedRoute>
                 }
             />
+            {DesignLab && (
+                <Route
+                    path="/design-lab"
+                    element={
+                        <ProtectedRoute>
+                            <Layout>
+                                <Suspense fallback={<Loading />}>
+                                    <DesignLab />
+                                </Suspense>
+                            </Layout>
+                        </ProtectedRoute>
+                    }
+                />
+            )}
             <Route path="*" element={<Navigate to="/dashboard" replace />} />
         </Routes>
     );

@@ -1,57 +1,127 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
+import {
+    FiLogOut,
+    FiBriefcase,
+    FiPrinter,
+    FiLock,
+    FiDownload,
+    FiAlertTriangle,
+    FiPlusSquare,
+    FiInfo,
+    FiEdit2,
+    FiUser,
+    FiRefreshCw,
+    FiFileText,
+} from 'react-icons/fi';
+import {
+    PageHeader,
+    SectionCard,
+    Button,
+    IconButton,
+    Dialog,
+    Field,
+    Input,
+    Textarea,
+    Select,
+    Switch,
+    SegmentedControl,
+    StatusChip,
+    cn,
+} from '../components/ui';
+import { toast } from '../components/ui/Toast';
 import { useAuth } from '../context/AuthContext';
 import { useBusiness } from '../context/BusinessContext';
 import { updateBusiness, updateAdmin, changeAdminPassword, updateBusinessSettings } from '../services/api/business';
-import { useTheme } from '../context/ThemeContext';
+import AppearanceSettings from '../components/AppearanceSettings';
 import { buildReceiptHTML } from '../utils/receiptTemplate';
 import { printReceipt as printReceiptUtil, PRINTER_NAME_KEY, PAPER_WIDTH_KEY } from '../utils/printReceipt';
 import { appAlert, appConfirm } from '../components/AppDialog';
 import { isDesktopApp } from '../utils/platform';
-import {
-    FiUser,
-    FiLogOut,
-    FiBriefcase,
-    FiChevronRight,
-    FiShield,
-    FiPrinter,
-    FiBell,
-    FiHelpCircle,
-    FiInfo,
-    FiMail,
-    FiPhone,
-    FiMapPin,
-    FiX,
-    FiSave,
-    FiDollarSign,
-    FiGlobe,
-    FiLock,
-    FiDatabase,
-    FiMoon,
-    FiSun,
-    FiDownload,
-    FiAlertTriangle,
-    FiPlusSquare,
-} from 'react-icons/fi';
+
+const CURRENCIES = [
+    ['PKR', 'PKR — Pakistani Rupee'],
+    ['USD', 'USD — US Dollar'],
+    ['EUR', 'EUR — Euro'],
+    ['GBP', 'GBP — British Pound'],
+    ['AED', 'AED — UAE Dirham'],
+    ['SAR', 'SAR — Saudi Riyal'],
+];
+
+const initialsOf = (name = '') =>
+    name
+        .trim()
+        .split(/\s+/)
+        .slice(0, 2)
+        .map((w) => w[0]?.toUpperCase() || '')
+        .join('') || '?';
+
+/** One line of a settings card: icon tile · title + help text · the control on the right. */
+function SettingRow({ icon: Icon, tone = 'neutral', title, description, children, className }) {
+    const TILE = {
+        neutral: 'bg-muted text-muted-foreground',
+        accent: 'bg-accent text-accent-foreground',
+        warning: 'bg-warning-chip text-warning-chip-foreground',
+        destructive: 'bg-destructive-chip text-destructive-chip-foreground',
+    };
+    return (
+        <div className={cn('flex flex-wrap items-center gap-x-4 gap-y-2 py-3.5 last:pb-0', className)}>
+            {Icon ? (
+                <span className={cn('w-9 h-9 shrink-0 rounded-xl inline-flex items-center justify-center', TILE[tone])}>
+                    <Icon className="w-4 h-4" aria-hidden="true" />
+                </span>
+            ) : null}
+            <div className="flex-1 min-w-[200px]">
+                <p className="text-body-lg font-medium text-foreground">{title}</p>
+                {description ? <p className="mt-0.5 text-body-sm text-muted-foreground">{description}</p> : null}
+            </div>
+            {children ? <div className="flex items-center gap-2 shrink-0">{children}</div> : null}
+        </div>
+    );
+}
+
+/** A label over a control + a button on one line (Field wraps a single control only). */
+const LabelledRow = ({ id, label, hint, children }) => (
+    <div className="flex flex-col gap-1.5">
+        <label htmlFor={id} className="text-body-sm font-medium text-foreground">
+            {label}
+        </label>
+        <div className="flex gap-2">{children}</div>
+        {hint ? <p className="text-caption text-muted-foreground">{hint}</p> : null}
+    </div>
+);
+
+/** Label/value pairs shown in a card (read-only view of what the edit dialog changes). */
+const DetailGrid = ({ items }) => (
+    <dl className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-3">
+        {items.map(([label, value]) => (
+            <div key={label} className="min-w-0">
+                <dt className="text-caption text-muted-foreground">{label}</dt>
+                <dd className={cn('mt-0.5 text-body break-words', value ? 'text-foreground' : 'text-muted-foreground')}>{value || 'Not set'}</dd>
+            </div>
+        ))}
+    </dl>
+);
 
 const Settings = () => {
     const navigate = useNavigate();
     const { user, logout, isAdmin } = useAuth();
-    const { business, config, refreshBusiness } = useBusiness();
-    const { isDark, toggleTheme } = useTheme();
+    const { business, refreshBusiness } = useBusiness();
 
-    const [activeModal, setActiveModal] = useState(null);
+    const [activeModal, setActiveModal] = useState(null); // 'profile' | 'business' | 'receipt' | 'password' | 'about'
     const [appVersion, setAppVersion] = useState('');
-    const [updateLabel, setUpdateLabel] = useState('Check for Updates');
+    const [updateLabel, setUpdateLabel] = useState('');
+    const [checkingUpdate, setCheckingUpdate] = useState(false);
     const [savingBusiness, setSavingBusiness] = useState(false);
     const [savingProfile, setSavingProfile] = useState(false);
     const [profileForm, setProfileForm] = useState({ name: '', email: '', phone: '' });
     const [passwordForm, setPasswordForm] = useState({ currentPassword: '', newPassword: '', confirmPassword: '' });
+    const [passwordError, setPasswordError] = useState('');
     const [savingPassword, setSavingPassword] = useState(false);
-    const bizFormRef = useRef({});
+    const [bizForm, setBizForm] = useState({}); // the fields of the open Business / Receipt dialog
+    const setBiz = (patch) => setBizForm((f) => ({ ...f, ...patch }));
     const [showReceiptPreview, setShowReceiptPreview] = useState(false);
     const [previewMode, setPreviewMode] = useState('cash');
-    const [previewStore, setPreviewStore] = useState(null);
     const [printers, setPrinters] = useState([]);
     const [selectedPrinter, setSelectedPrinter] = useState(() => {
         try { return localStorage.getItem(PRINTER_NAME_KEY) || ''; } catch (e) { return ''; }
@@ -60,6 +130,9 @@ const Settings = () => {
         try { return localStorage.getItem(PAPER_WIDTH_KEY) || '42'; } catch (e) { return '42'; }
     });
     const [printingTest, setPrintingTest] = useState(false);
+
+    const showToast = (message, error = false) =>
+        toast(message, { id: 'settings', tone: error ? 'error' : 'success', duration: 3000 });
 
     const handleSelectPaperWidth = (w) => {
         setPaperWidth(w);
@@ -95,19 +168,24 @@ const Settings = () => {
     };
 
     useEffect(() => {
-        window.electronAPI?.getAppVersion?.().then(v => setAppVersion(v || ''));
+        window.electronAPI?.getAppVersion?.().then((v) => setAppVersion(v || ''));
         window.electronAPI?.onUpdateStatus?.((data) => {
-            if (data.status === 'up-to-date') setUpdateLabel(`You are up to date (v${data.version})`);
-            else if (data.status === 'available') setUpdateLabel(`Downloading v${data.version}...`);
-            else if (data.status === 'downloading') setUpdateLabel(`Downloading... ${data.percent || 0}%`);
-            else if (data.status === 'ready') setUpdateLabel('Update ready — restart to apply');
-            else if (data.status === 'error') setUpdateLabel('Update download failed — it will retry automatically');
+            setCheckingUpdate(false);
+            if (data.status === 'up-to-date') setUpdateLabel(`You're up to date (v${data.version})`);
+            else if (data.status === 'available') setUpdateLabel(`Downloading v${data.version}…`);
+            else if (data.status === 'downloading') setUpdateLabel(`Downloading… ${data.percent || 0}%`);
+            else if (data.status === 'ready') setUpdateLabel('Update ready — restart the app to use it');
+            else if (data.status === 'error') setUpdateLabel('The download failed — it will try again by itself');
         });
     }, []);
 
     const handleCheckUpdate = () => {
-        setUpdateLabel('Checking...');
-        window.electronAPI?.checkForUpdates?.().catch(() => setUpdateLabel('Update check failed'));
+        setCheckingUpdate(true);
+        setUpdateLabel('Checking…');
+        window.electronAPI?.checkForUpdates?.().catch(() => {
+            setCheckingUpdate(false);
+            setUpdateLabel("Couldn't check for updates");
+        });
     };
 
     // Business-wide: may a customer's special rate sell an item below cost?
@@ -151,14 +229,6 @@ const Settings = () => {
     const [autoPrintOverride, setAutoPrintOverride] = useState(null);
     const autoPrint = autoPrintOverride ?? (business?.settings?.autoPrint !== false);
     const [savingAutoPrint, setSavingAutoPrint] = useState(false);
-    const [toast, setToast] = useState(null);
-    const toastTimerRef = useRef(null);
-    const showToast = (message, error = false) => {
-        setToast({ message, error });
-        clearTimeout(toastTimerRef.current);
-        toastTimerRef.current = setTimeout(() => setToast(null), 3000);
-    };
-    useEffect(() => () => clearTimeout(toastTimerRef.current), []);
     const handleToggleAutoPrint = async () => {
         const next = !autoPrint;
         setAutoPrintOverride(next);
@@ -176,13 +246,37 @@ const Settings = () => {
         }
     };
 
+    const openBusiness = () => {
+        setBizForm({
+            name: business?.name || '',
+            phone: business?.phone || '',
+            email: business?.email || '',
+            currency: business?.currency || 'PKR',
+            address: { ...(business?.address || {}), street: business?.address?.street || '', city: business?.address?.city || '' },
+        });
+        setActiveModal('business');
+    };
+
+    const openReceipt = () => {
+        setBizForm({
+            receiptFooter: business?.receiptFooter ?? 'Thank you for your business!',
+            receiptNote: business?.receiptNote || '',
+            showCustomerPhone: !!business?.showCustomerPhone,
+            showCustomerAddress: !!business?.showCustomerAddress,
+        });
+        loadPrinters();
+        setActiveModal('receipt');
+    };
+
     const handleSaveBusiness = async () => {
+        if (activeModal === 'business' && !bizForm.name?.trim()) return;
         setSavingBusiness(true);
         try {
             const id = business?._id || business?.id;
-            await updateBusiness(id, bizFormRef.current);
+            await updateBusiness(id, bizForm);
             await refreshBusiness();
             setActiveModal(null);
+            showToast(activeModal === 'receipt' ? 'Receipt settings saved' : 'Shop details saved');
         } catch (err) {
             appAlert('Failed to save: ' + (err.response?.data?.message || err.message));
         } finally {
@@ -230,21 +324,12 @@ const Settings = () => {
         return { ...base, paymentMethod: 'cash', amountPaid: total, amountDue: 0, cashGiven, change: cashGiven - total, customerBalanceBefore: 0 };
     };
 
-    useEffect(() => {
-        if (activeModal === 'receipt') loadPrinters();
-    }, [activeModal]);
-
-    const handleOpenReceiptPreview = () => {
-        setPreviewStore({ ...business, ...bizFormRef.current });
-        setPreviewMode('cash');
-        setShowReceiptPreview(true);
-    };
-
-    const handlePrintSampleReceipt = () => {
-        printReceiptUtil(buildSampleOpts(previewMode, previewStore || business));
-    };
+    // The preview shows the unsaved receipt text
+    const previewStore = { ...(business || {}), ...bizForm };
+    const handlePrintSampleReceipt = () => printReceiptUtil(buildSampleOpts(previewMode, previewStore));
 
     const handleSaveProfile = async () => {
+        if (!profileForm.name.trim()) return;
         setSavingProfile(true);
         try {
             const id = user?.id || user?._id;
@@ -259,834 +344,518 @@ const Settings = () => {
     };
 
     const handleLogout = async () => {
-        if (await appConfirm('Are you sure you want to logout?', { danger: true })) {
+        if (await appConfirm('You will need your password to sign in again.', { title: 'Sign out?', confirmText: 'Sign out', danger: true })) {
             await logout();
             navigate('/login');
         }
     };
 
-
     const handleChangePassword = async () => {
-        if (!passwordForm.currentPassword || !passwordForm.newPassword) {
-            return appAlert('Please fill in all fields');
-        }
-        if (passwordForm.newPassword.length < 8) {
-            return appAlert('New password must be at least 8 characters');
-        }
-        if (passwordForm.newPassword !== passwordForm.confirmPassword) {
-            return appAlert('New passwords do not match');
-        }
+        setPasswordError('');
+        if (!passwordForm.currentPassword || !passwordForm.newPassword) return setPasswordError('Fill in all three boxes.');
+        if (passwordForm.newPassword.length < 8) return setPasswordError('The new password needs at least 8 characters.');
+        if (passwordForm.newPassword !== passwordForm.confirmPassword) return setPasswordError("The two new passwords don't match.");
         setSavingPassword(true);
         try {
             await changeAdminPassword({
                 currentPassword: passwordForm.currentPassword,
                 newPassword: passwordForm.newPassword,
             });
-            appAlert('Password changed successfully');
             setPasswordForm({ currentPassword: '', newPassword: '', confirmPassword: '' });
             setActiveModal(null);
+            showToast('Password changed');
         } catch (err) {
-            appAlert(err.response?.data?.message || 'Failed to change password');
+            setPasswordError(err.response?.data?.message || "Couldn't change the password.");
         } finally {
             setSavingPassword(false);
         }
     };
 
-    // Setting item component
-    const SettingItem = ({ icon: Icon, label, value, onClick, color = 'text-slate-600', danger = false, rightElement = null }) => (
-        <div
-            onClick={onClick}
-            className={`w-full flex items-center gap-4 px-4 py-4 transition-colors ${
-                onClick ? 'cursor-pointer hover:bg-slate-50 dark:hover:bg-d-glass-hover' : 'cursor-default'
-            } ${danger ? 'text-red-500' : ''}`}
-        >
-            <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${
-                danger ? 'bg-red-100 dark:bg-red-900/30' : 'bg-slate-100 dark:bg-d-elevated'
-            }`}>
-                <Icon size={20} className={danger ? 'text-red-500 dark:text-d-red' : color} />
-            </div>
-            <div className="flex-1 text-left">
-                <p className={`font-medium ${danger ? 'text-red-500 dark:text-d-red' : 'text-slate-800 dark:text-d-heading'}`}>{label}</p>
-                {value && <p className="text-sm text-slate-500 dark:text-d-muted">{value}</p>}
-            </div>
-            {rightElement || (onClick ? <FiChevronRight size={20} className="text-slate-400 dark:text-d-muted" /> : null)}
-        </div>
-    );
-
-    // Section component
-    const Section = ({ title, children }) => (
-        <div className="bg-white dark:bg-d-card rounded-2xl shadow-sm border border-slate-100 dark:border-d-border overflow-hidden mb-4">
-            {title && (
-                <div className="px-4 py-3 bg-slate-50 dark:bg-d-elevated border-b border-slate-100 dark:border-d-border">
-                    <h3 className="text-sm font-semibold text-slate-500 dark:text-d-muted uppercase tracking-wide">{title}</h3>
-                </div>
-            )}
-            <div className="divide-y divide-slate-100 dark:divide-slate-700">
-                {children}
-            </div>
-        </div>
-    );
+    const address = [business?.address?.street, business?.address?.city].filter(Boolean).join(', ');
+    const close = () => setActiveModal(null);
 
     return (
         <div className="p-6 animate-fadeIn max-w-3xl mx-auto">
-            {/* Header */}
-            <h1 className="text-2xl font-bold text-slate-800 dark:text-d-heading mb-6">Settings</h1>
+            <PageHeader title="Settings" subtitle="Your shop, receipts, how the app looks, and your account." />
 
-            {/* Profile Card */}
-            <div className="bg-white dark:bg-d-card rounded-2xl shadow-sm border border-slate-100 dark:border-d-border p-6 mb-6">
-                <div className="flex items-center gap-4">
-                    <div
-                        className="w-16 h-16 rounded-2xl flex items-center justify-center text-white text-2xl font-bold"
-                        style={{ backgroundColor: config?.color || '#6366f1' }}
-                    >
-                        {user?.name?.charAt(0).toUpperCase() || 'A'}
-                    </div>
-                    <div className="flex-1">
-                        <h2 className="text-xl font-bold text-slate-800 dark:text-d-heading">{user?.name || 'Admin User'}</h2>
-                        <p className="text-slate-500 dark:text-d-muted">{user?.email || 'admin@example.com'}</p>
-                        <span className="inline-block mt-1 px-3 py-1 bg-primary-100 dark:bg-primary-900/30 text-primary-600 dark:text-primary-400 rounded-full text-xs font-medium">
-                            Administrator
+            <div className="flex flex-col gap-4">
+                {/* ── You ── */}
+                <SectionCard>
+                    <div className="flex flex-wrap items-center gap-4">
+                        <span
+                            aria-hidden="true"
+                            className="w-14 h-14 shrink-0 rounded-full bg-accent text-accent-foreground inline-flex items-center justify-center font-heading text-h4"
+                        >
+                            {initialsOf(user?.name)}
                         </span>
+                        <div className="flex-1 min-w-[200px]">
+                            <div className="flex flex-wrap items-center gap-2">
+                                <h2 className="font-heading text-h3 text-foreground">{user?.name || (isAdmin ? 'Admin' : 'Staff')}</h2>
+                                <StatusChip size="sm" tone={isAdmin ? 'accent' : 'neutral'} label={isAdmin ? 'Admin' : 'Staff'} />
+                            </div>
+                            <p className="mt-0.5 text-body text-muted-foreground break-all">
+                                {isAdmin ? user?.email || 'No email' : `Signs in as ${user?.employeeId || '—'}`}
+                                {business?.name ? ` · ${business.name}` : ''}
+                            </p>
+                        </div>
+                        {isAdmin ? (
+                            <div className="flex flex-wrap gap-2">
+                                <Button
+                                    variant="outline"
+                                    onClick={() => {
+                                        setPasswordForm({ currentPassword: '', newPassword: '', confirmPassword: '' });
+                                        setPasswordError('');
+                                        setActiveModal('password');
+                                    }}
+                                >
+                                    <FiLock aria-hidden="true" />
+                                    Change password
+                                </Button>
+                                <Button
+                                    variant="outline"
+                                    onClick={() => {
+                                        setProfileForm({ name: user?.name || '', email: user?.email || '', phone: user?.phone || '' });
+                                        setActiveModal('profile');
+                                    }}
+                                >
+                                    <FiEdit2 aria-hidden="true" />
+                                    Edit
+                                </Button>
+                            </div>
+                        ) : (
+                            <Button variant="outline" onClick={() => navigate('/profile')}>
+                                <FiUser aria-hidden="true" />
+                                My profile & password
+                            </Button>
+                        )}
                     </div>
-                    <button
-                        onClick={() => { setProfileForm({ name: user?.name || '', email: user?.email || '', phone: user?.phone || '' }); setActiveModal('profile'); }}
-                        className="px-4 py-2 text-primary-500 dark:text-primary-400 hover:bg-primary-50 dark:hover:bg-primary-900/20 rounded-xl font-medium transition-colors"
+                </SectionCard>
+
+                {/* ── Shop ── */}
+                <SectionCard
+                    title="Shop"
+                    description="Printed on every receipt and shown on statements."
+                    actions={
+                        <Button variant="outline" size="xs" onClick={openBusiness}>
+                            <FiEdit2 aria-hidden="true" />
+                            Edit
+                        </Button>
+                    }
+                >
+                    <DetailGrid
+                        items={[
+                            ['Shop name', business?.name],
+                            ['Currency', business?.currency || 'PKR'],
+                            ['Phone', business?.phone],
+                            ['Email', business?.email],
+                            ['Address', address],
+                        ]}
+                    />
+                </SectionCard>
+
+                {/* ── Receipts and printing ── */}
+                <SectionCard title="Receipts and printing" bodyClassName="divide-y divide-[var(--hairline)] -mt-2">
+                    <SettingRow
+                        icon={FiFileText}
+                        title="Receipt text and printer"
+                        description={
+                            [
+                                business?.receiptFooter ? `“${business.receiptFooter}”` : null,
+                                business?.receiptNote ? 'with a note' : null,
+                                selectedPrinter ? `Printer: ${selectedPrinter}` : null,
+                            ]
+                                .filter(Boolean)
+                                .join(' · ') || 'Thank-you message, note, printer and paper width'
+                        }
                     >
-                        Edit
-                    </button>
+                        <Button variant="outline" size="xs" onClick={openReceipt}>
+                            Open
+                        </Button>
+                    </SettingRow>
+                    {isAdmin ? (
+                        <SettingRow
+                            icon={FiPrinter}
+                            title="Print the receipt by itself"
+                            description={
+                                isDesktopApp
+                                    ? 'After each sale. When off, press Print on the sale screen.'
+                                    : 'After each sale, in the desktop app. On the web, press Print.'
+                            }
+                        >
+                            <Switch checked={autoPrint} onChange={handleToggleAutoPrint} disabled={savingAutoPrint} label="Print the receipt by itself after each sale" />
+                        </SettingRow>
+                    ) : null}
+                </SectionCard>
+
+                {/* ── Selling rules (admin) ── */}
+                {isAdmin ? (
+                    <SectionCard title="Selling rules" description="For the whole shop, on every counter." bodyClassName="divide-y divide-[var(--hairline)] -mt-2">
+                        <SettingRow
+                            icon={FiPlusSquare}
+                            title="Add to today's bill"
+                            description={
+                                allowBillAmend
+                                    ? "On — a customer's new items can go on their credit bill from today."
+                                    : 'Off — every visit makes a new bill.'
+                            }
+                        >
+                            <Switch
+                                checked={allowBillAmend}
+                                onChange={handleToggleBillAmend}
+                                disabled={savingBillAmend}
+                                label="Allow adding items to a customer's credit bill from today"
+                            />
+                        </SettingRow>
+                        <SettingRow
+                            icon={FiAlertTriangle}
+                            tone={allowSellBelowCost ? 'destructive' : 'neutral'}
+                            title="Selling below cost"
+                            description={
+                                allowSellBelowCost
+                                    ? "On — a customer's special rate may go below cost price."
+                                    : 'Off — nothing can be sold below its cost price.'
+                            }
+                        >
+                            <Switch
+                                checked={allowSellBelowCost}
+                                onChange={handleToggleSellBelowCost}
+                                disabled={savingBelowCost}
+                                label="Allow selling below cost price"
+                            />
+                        </SettingRow>
+                    </SectionCard>
+                ) : null}
+
+                {/* Theme, accent colour, sidebar */}
+                <AppearanceSettings />
+
+                {/* ── App ── */}
+                <SectionCard title="App" bodyClassName="divide-y divide-[var(--hairline)] -mt-2">
+                    {isDesktopApp ? (
+                        <SettingRow
+                            icon={FiDownload}
+                            title="Updates"
+                            description={updateLabel || `Version ${appVersion || '…'} — updates download by themselves.`}
+                        >
+                            <Button variant="outline" size="xs" onClick={handleCheckUpdate} loading={checkingUpdate}>
+                                {!checkingUpdate && <FiRefreshCw aria-hidden="true" />}
+                                Check now
+                            </Button>
+                        </SettingRow>
+                    ) : null}
+                    <SettingRow icon={FiInfo} title="About" description={isDesktopApp ? `POS Desktop · version ${appVersion || '…'}` : 'POS · web app'}>
+                        <Button variant="ghost" size="xs" onClick={() => setActiveModal('about')}>
+                            Details
+                        </Button>
+                    </SettingRow>
+                </SectionCard>
+
+                <div className="flex justify-end">
+                    <Button variant="outline" onClick={handleLogout}>
+                        <span className="inline-flex items-center gap-2 text-destructive">
+                            <FiLogOut aria-hidden="true" />
+                            Sign out
+                        </span>
+                    </Button>
                 </div>
             </div>
 
-            {/* Business Section */}
-            <Section title="Business">
-                <SettingItem
-                    icon={FiBriefcase}
-                    label="Business Info"
-                    value={business?.name || 'Not set'}
-                    onClick={() => setActiveModal('business')}
-                    color="text-blue-500"
-                />
-                <SettingItem
-                    icon={FiDollarSign}
-                    label="Currency"
-                    value={business?.currency || 'PKR'}
-                    onClick={() => setActiveModal('business')}
-                    color="text-green-500"
-                />
-                <SettingItem
-                    icon={FiPrinter}
-                    label="Receipt Settings"
-                    value="Configure receipt format"
-                    onClick={() => setActiveModal('receipt')}
-                    color="text-purple-500"
-                />
-                {isAdmin && (
-                    <SettingItem
-                        icon={FiAlertTriangle}
-                        label="Allow Selling Below Cost"
-                        value={allowSellBelowCost
-                            ? 'On — customer special rates may sell below cost'
-                            : 'Off — items can never be sold below cost price'}
-                        onClick={savingBelowCost ? undefined : handleToggleSellBelowCost}
-                        color="text-red-500"
-                        rightElement={
-                            <div
-                                className="relative inline-flex items-center cursor-pointer"
-                                onClick={(e) => e.stopPropagation()}
-                            >
-                                <input
-                                    type="checkbox"
-                                    className="sr-only peer"
-                                    checked={allowSellBelowCost}
-                                    disabled={savingBelowCost}
-                                    onChange={handleToggleSellBelowCost}
-                                />
-                                <div className="w-11 h-6 bg-slate-200 dark:bg-slate-600 peer-focus:ring-2 peer-focus:ring-primary-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-red-500 peer-disabled:opacity-50"></div>
-                            </div>
-                        }
-                    />
-                )}
-                {isAdmin && (
-                    <SettingItem
-                        icon={FiPlusSquare}
-                        label="Add to Today's Bill"
-                        value={allowBillAmend
-                            ? "On — items can be added to a customer's credit bill from today"
-                            : "Off — every visit makes a new bill"}
-                        onClick={savingBillAmend ? undefined : handleToggleBillAmend}
-                        color="text-amber-500"
-                        rightElement={
-                            <div
-                                className="relative inline-flex items-center cursor-pointer"
-                                onClick={(e) => e.stopPropagation()}
-                            >
-                                <input
-                                    type="checkbox"
-                                    className="sr-only peer"
-                                    aria-label="Allow adding items to a customer's credit bill from today"
-                                    checked={allowBillAmend}
-                                    disabled={savingBillAmend}
-                                    onChange={handleToggleBillAmend}
-                                />
-                                <div className="w-11 h-6 bg-slate-200 dark:bg-slate-600 peer-focus:ring-2 peer-focus:ring-primary-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-amber-500 peer-disabled:opacity-50"></div>
-                            </div>
-                        }
-                    />
-                )}
-                {isAdmin && (
-                    <SettingItem
-                        icon={FiPrinter}
-                        label="Auto Print Receipt"
-                        value={isDesktopApp
-                            ? 'When on, the receipt prints automatically after a bill is saved. When off, use the Print button to print.'
-                            : 'When on, the receipt prints automatically after a bill is saved (desktop app only — on the web, use the Print button).'}
-                        onClick={savingAutoPrint ? undefined : handleToggleAutoPrint}
-                        color="text-emerald-500"
-                        rightElement={
-                            <div
-                                className="relative inline-flex items-center cursor-pointer"
-                                onClick={(e) => e.stopPropagation()}
-                            >
-                                <input
-                                    type="checkbox"
-                                    className="sr-only peer"
-                                    aria-label="Auto print receipt after a bill is saved"
-                                    checked={autoPrint}
-                                    disabled={savingAutoPrint}
-                                    onChange={handleToggleAutoPrint}
-                                />
-                                <div className="w-11 h-6 bg-slate-200 dark:bg-slate-600 peer-focus:ring-2 peer-focus:ring-primary-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-500 peer-disabled:opacity-50"></div>
-                            </div>
-                        }
-                    />
-                )}
-            </Section>
+            {/* ── Edit profile (admin) ── */}
+            <Dialog
+                open={activeModal === 'profile'}
+                onClose={savingProfile ? undefined : close}
+                title="Your details"
+                description="Your name shows on receipts you make and in reports."
+                footerBar
+                footer={
+                    <>
+                        <Button variant="ghost" onClick={close} disabled={savingProfile}>
+                            Cancel
+                        </Button>
+                        <Button onClick={handleSaveProfile} loading={savingProfile} disabled={!profileForm.name.trim()}>
+                            Save
+                        </Button>
+                    </>
+                }
+            >
+                <div className="flex flex-col gap-4">
+                    <Field label="Name" required>
+                        <Input data-autofocus value={profileForm.name} onChange={(e) => setProfileForm((p) => ({ ...p, name: e.target.value }))} />
+                    </Field>
+                    <Field label="Email" hint="This is how you sign in. It can't be changed here.">
+                        <Input type="email" value={profileForm.email} readOnly />
+                    </Field>
+                    <Field label="Phone" optional>
+                        <Input type="tel" value={profileForm.phone} onChange={(e) => setProfileForm((p) => ({ ...p, phone: e.target.value }))} />
+                    </Field>
+                </div>
+            </Dialog>
 
-            {/* App Settings Section */}
-            <Section title="App Settings">
-                <SettingItem
-                    icon={isDark ? FiSun : FiMoon}
-                    label="Dark Mode"
-                    value={isDark ? 'On' : 'Off'}
-                    onClick={toggleTheme}
-                    color={isDark ? 'text-yellow-500' : 'text-indigo-500'}
-                    rightElement={
-                        <div
-                            className="relative inline-flex items-center cursor-pointer"
-                            onClick={(e) => e.stopPropagation()}
-                        >
-                            <input
-                                type="checkbox"
-                                className="sr-only peer"
-                                checked={isDark}
-                                onChange={toggleTheme}
-                            />
-                            <div className="w-11 h-6 bg-slate-200 dark:bg-slate-600 peer-focus:ring-2 peer-focus:ring-primary-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary-500"></div>
-                        </div>
-                    }
-                />
-                <SettingItem
-                    icon={FiBell}
-                    label="Notifications"
-                    value="Coming soon"
-                    color="text-pink-500"
-                />
-                {/* Desktop only: the web app is always the latest version on refresh */}
-                {isDesktopApp && (
-                    <SettingItem
-                        icon={FiDownload}
-                        label="Check for Updates"
-                        value={updateLabel}
-                        onClick={handleCheckUpdate}
-                        color="text-teal-500"
-                    />
-                )}
-                <SettingItem
-                    icon={FiDatabase}
-                    label="Data & Storage"
-                    value="Coming soon"
-                    color="text-cyan-500"
-                />
-            </Section>
+            {/* ── Shop details ── */}
+            <Dialog
+                open={activeModal === 'business'}
+                onClose={savingBusiness ? undefined : close}
+                title="Shop details"
+                description="Printed at the top of receipts and statements."
+                footerBar
+                footer={
+                    <>
+                        <Button variant="ghost" onClick={close} disabled={savingBusiness}>
+                            Cancel
+                        </Button>
+                        <Button onClick={handleSaveBusiness} loading={savingBusiness} disabled={!bizForm.name?.trim()}>
+                            Save
+                        </Button>
+                    </>
+                }
+            >
+                <div className="flex flex-col gap-4">
+                    <Field label="Shop name" required>
+                        <Input data-autofocus value={bizForm.name || ''} onChange={(e) => setBiz({ name: e.target.value })} />
+                    </Field>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <Field label="Phone" optional>
+                            <Input type="tel" value={bizForm.phone || ''} onChange={(e) => setBiz({ phone: e.target.value })} />
+                        </Field>
+                        <Field label="Email" optional>
+                            <Input type="email" value={bizForm.email || ''} onChange={(e) => setBiz({ email: e.target.value })} />
+                        </Field>
+                    </div>
+                    <Field label="Currency" hint="Used for every amount in the app and on receipts.">
+                        <Select value={bizForm.currency || 'PKR'} onChange={(e) => setBiz({ currency: e.target.value })}>
+                            {CURRENCIES.map(([v, l]) => (
+                                <option key={v} value={v}>
+                                    {l}
+                                </option>
+                            ))}
+                        </Select>
+                    </Field>
+                    <Field label="Street address" optional>
+                        <Input
+                            value={bizForm.address?.street || ''}
+                            onChange={(e) => setBiz({ address: { ...bizForm.address, street: e.target.value } })}
+                        />
+                    </Field>
+                    <Field label="City" optional>
+                        <Input value={bizForm.address?.city || ''} onChange={(e) => setBiz({ address: { ...bizForm.address, city: e.target.value } })} />
+                    </Field>
+                </div>
+            </Dialog>
 
-            {/* Security Section */}
-            <Section title="Security">
-                <SettingItem
-                    icon={FiLock}
-                    label="Change Password"
-                    value="Update your password"
-                    onClick={() => {
-                        setPasswordForm({ currentPassword: '', newPassword: '', confirmPassword: '' });
-                        setActiveModal('password');
+            {/* ── Change password (admin) ── */}
+            <Dialog
+                open={activeModal === 'password'}
+                onClose={savingPassword ? undefined : close}
+                title="Change password"
+                size="sm"
+                footerBar
+                footer={
+                    <>
+                        <Button variant="ghost" onClick={close} disabled={savingPassword}>
+                            Cancel
+                        </Button>
+                        <Button onClick={handleChangePassword} loading={savingPassword}>
+                            Change password
+                        </Button>
+                    </>
+                }
+            >
+                <form
+                    className="flex flex-col gap-4"
+                    onSubmit={(e) => {
+                        e.preventDefault();
+                        handleChangePassword();
                     }}
-                    color="text-amber-500"
+                >
+                    <Field label="Current password">
+                        <Input
+                            data-autofocus
+                            type="password"
+                            autoComplete="current-password"
+                            value={passwordForm.currentPassword}
+                            onChange={(e) => setPasswordForm((p) => ({ ...p, currentPassword: e.target.value }))}
+                        />
+                    </Field>
+                    <Field label="New password" hint="At least 8 characters.">
+                        <Input
+                            type="password"
+                            autoComplete="new-password"
+                            value={passwordForm.newPassword}
+                            onChange={(e) => setPasswordForm((p) => ({ ...p, newPassword: e.target.value }))}
+                        />
+                    </Field>
+                    <Field label="New password again" error={passwordError || undefined}>
+                        <Input
+                            type="password"
+                            autoComplete="new-password"
+                            value={passwordForm.confirmPassword}
+                            onChange={(e) => setPasswordForm((p) => ({ ...p, confirmPassword: e.target.value }))}
+                        />
+                    </Field>
+                    <button type="submit" hidden aria-hidden="true" tabIndex={-1} />
+                </form>
+            </Dialog>
+
+            {/* ── Receipt settings ── */}
+            <Dialog
+                open={activeModal === 'receipt'}
+                onClose={savingBusiness ? undefined : close}
+                title="Receipt text and printer"
+                size="lg"
+                footerBar
+                footer={
+                    <>
+                        <Button
+                            variant="outline"
+                            className="mr-auto"
+                            onClick={() => {
+                                setPreviewMode('cash');
+                                setShowReceiptPreview(true);
+                            }}
+                        >
+                            <FiPrinter aria-hidden="true" />
+                            Preview
+                        </Button>
+                        <Button variant="ghost" onClick={close} disabled={savingBusiness}>
+                            Cancel
+                        </Button>
+                        <Button onClick={handleSaveBusiness} loading={savingBusiness}>
+                            Save
+                        </Button>
+                    </>
+                }
+            >
+                <div className="flex flex-col gap-5">
+                    {window.electronAPI?.getPrinters || window.electronAPI?.printWidthTest ? (
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                            {window.electronAPI?.getPrinters ? (
+                                <LabelledRow id="rcpt-printer" label="Receipt printer" hint="Saved on this computer only.">
+                                    <Select id="rcpt-printer" className="flex-1" value={selectedPrinter} onChange={(e) => handleSelectPrinter(e.target.value)}>
+                                        <option value="">Find it by itself</option>
+                                        {printers.map((p) => (
+                                            <option key={p.name} value={p.name}>
+                                                {p.name}
+                                                {p.isDefault ? ' (default)' : ''}
+                                            </option>
+                                        ))}
+                                    </Select>
+                                    <IconButton variant="outline" label="Look for printers again" onClick={loadPrinters}>
+                                        <FiRefreshCw />
+                                    </IconButton>
+                                </LabelledRow>
+                            ) : null}
+                            {window.electronAPI?.printWidthTest ? (
+                                <LabelledRow id="rcpt-width" label="Paper width" hint="If bills wrap, print a test and pick the widest that fits on one line.">
+                                    <Select id="rcpt-width" className="flex-1" value={paperWidth} onChange={(e) => handleSelectPaperWidth(e.target.value)}>
+                                        <option value="32">58 mm (32 letters)</option>
+                                        <option value="42">80 mm narrow (42 letters)</option>
+                                        <option value="48">80 mm standard (48 letters)</option>
+                                    </Select>
+                                    <Button variant="outline" onClick={handlePrintWidthTest} loading={printingTest}>
+                                        Print test
+                                    </Button>
+                                </LabelledRow>
+                            ) : null}
+                        </div>
+                    ) : null}
+                    {window.electronAPI?.openLogsFolder ? (
+                        <Button variant="link" className="self-start -mt-2" onClick={() => window.electronAPI.openLogsFolder()}>
+                            Open the print log (for fixing printer problems)
+                        </Button>
+                    ) : null}
+
+                    <Field label="Thank-you message" hint={`${(bizForm.receiptFooter || '').length} / 110`}>
+                        <Input
+                            maxLength={110}
+                            value={bizForm.receiptFooter || ''}
+                            onChange={(e) => setBiz({ receiptFooter: e.target.value })}
+                            placeholder="e.g. Thank you for shopping with us!"
+                        />
+                    </Field>
+                    <Field label="Note at the bottom" optional hint={`${(bizForm.receiptNote || '').length} / 110 — leave empty to print nothing`}>
+                        <Textarea
+                            maxLength={110}
+                            rows={2}
+                            className="resize-none"
+                            value={bizForm.receiptNote || ''}
+                            onChange={(e) => setBiz({ receiptNote: e.target.value })}
+                            placeholder="e.g. Frozen items can't be returned. Exchange within 7 days."
+                        />
+                    </Field>
+
+                    <div className="divide-y divide-[var(--hairline)] border-y border-hairline">
+                        <SettingRow title="Customer's phone" description="Print the customer's phone number on their receipt." className="py-2.5">
+                            <Switch checked={!!bizForm.showCustomerPhone} onChange={(v) => setBiz({ showCustomerPhone: v })} label="Print the customer's phone on the receipt" />
+                        </SettingRow>
+                        <SettingRow title="Customer's address" description="Print the customer's address on their receipt." className="py-2.5">
+                            <Switch checked={!!bizForm.showCustomerAddress} onChange={(v) => setBiz({ showCustomerAddress: v })} label="Print the customer's address on the receipt" />
+                        </SettingRow>
+                    </div>
+                </div>
+            </Dialog>
+
+            {/* ── Receipt preview ── */}
+            <Dialog
+                open={showReceiptPreview}
+                onClose={() => setShowReceiptPreview(false)}
+                title="Receipt preview"
+                description="Sample sale, not a real bill. Shows your unsaved changes."
+                zIndex={60}
+                footerBar
+                footer={
+                    <>
+                        <Button variant="ghost" onClick={() => setShowReceiptPreview(false)}>
+                            Close
+                        </Button>
+                        <Button onClick={handlePrintSampleReceipt}>
+                            <FiPrinter aria-hidden="true" />
+                            Print sample
+                        </Button>
+                    </>
+                }
+            >
+                <SegmentedControl
+                    label="Sample payment"
+                    value={previewMode}
+                    onChange={setPreviewMode}
+                    className="mb-4"
+                    options={[
+                        { value: 'cash', label: 'Paid in cash' },
+                        { value: 'partial', label: 'Part paid' },
+                        { value: 'credit', label: 'On credit' },
+                    ]}
                 />
-                <SettingItem
-                    icon={FiShield}
-                    label="Security Settings"
-                    value="Coming soon"
-                    color="text-emerald-500"
-                />
-            </Section>
+                <div className="rounded-xl bg-muted/60 p-4">
+                    {/* Paper stays white in dark mode: it's what will print */}
+                    <div
+                        style={{
+                            width: '72mm',
+                            margin: '0 auto',
+                            fontFamily: "'Courier New', monospace",
+                            fontSize: '11px',
+                            color: '#000', // design-ok: receipt paper is always white
+                            background: '#fff', // design-ok
+                            padding: '4mm 2mm',
+                            boxShadow: '0 1px 4px rgba(0,0,0,0.15)',
+                        }}
+                        dangerouslySetInnerHTML={{ __html: buildReceiptHTML(buildSampleOpts(previewMode, previewStore)) }}
+                    />
+                </div>
+            </Dialog>
 
-            {/* Support Section */}
-            <Section title="Support">
-                <SettingItem
-                    icon={FiHelpCircle}
-                    label="Help & Support"
-                    value="Coming soon"
-                    color="text-blue-500"
-                />
-                <SettingItem
-                    icon={FiInfo}
-                    label="About"
-                    value={isDesktopApp ? `Version ${appVersion || '...'}` : 'Web app'}
-                    onClick={() => setActiveModal('about')}
-                    color="text-slate-500"
-                />
-            </Section>
-
-            {/* Logout */}
-            <Section>
-                <SettingItem
-                    icon={FiLogOut}
-                    label="Logout"
-                    onClick={handleLogout}
-                    danger
-                />
-            </Section>
-
-            {/* Profile Modal */}
-            {activeModal === 'profile' && (
-                <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-                    <div className="bg-white dark:bg-d-card rounded-2xl w-full max-w-lg animate-fadeIn max-h-[90vh] overflow-y-auto">
-                        <div className="flex items-center justify-between p-6 border-b border-slate-200 dark:border-d-border">
-                            <h3 className="text-xl font-semibold text-slate-800 dark:text-d-heading">Edit Profile</h3>
-                            <button
-                                onClick={() => setActiveModal(null)}
-                                className="p-2 hover:bg-slate-100 dark:hover:bg-d-glass-hover rounded-lg transition-colors text-slate-600 dark:text-d-text"
-                            >
-                                <FiX />
-                            </button>
-                        </div>
-                        <div className="p-6 space-y-4">
-                            <div className="flex justify-center mb-4">
-                                <div
-                                    className="w-24 h-24 rounded-2xl flex items-center justify-center text-white text-3xl font-bold"
-                                    style={{ backgroundColor: config?.color || '#6366f1' }}
-                                >
-                                    {user?.name?.charAt(0).toUpperCase() || 'A'}
-                                </div>
-                            </div>
-                            <div>
-                                <label className="block text-sm font-medium text-slate-700 dark:text-d-text mb-1">Full Name</label>
-                                <input
-                                    type="text"
-                                    value={profileForm.name}
-                                    onChange={e => setProfileForm(p => ({ ...p, name: e.target.value }))}
-                                    className="w-full px-4 py-3 border border-slate-200 dark:border-d-border rounded-xl focus:ring-2 focus:ring-primary-500 bg-white dark:bg-d-elevated text-slate-800 dark:text-d-heading"
-                                />
-                            </div>
-                            <div>
-                                <label className="block text-sm font-medium text-slate-700 dark:text-d-text mb-1">Email</label>
-                                <input
-                                    type="email"
-                                    value={profileForm.email}
-                                    disabled
-                                    className="w-full px-4 py-3 border border-slate-200 dark:border-d-border rounded-xl bg-slate-100 dark:bg-d-card text-slate-500 dark:text-d-muted cursor-not-allowed"
-                                />
-                            </div>
-                            <div>
-                                <label className="block text-sm font-medium text-slate-700 dark:text-d-text mb-1">Phone</label>
-                                <input
-                                    type="tel"
-                                    value={profileForm.phone}
-                                    onChange={e => setProfileForm(p => ({ ...p, phone: e.target.value }))}
-                                    className="w-full px-4 py-3 border border-slate-200 dark:border-d-border rounded-xl focus:ring-2 focus:ring-primary-500 bg-white dark:bg-d-elevated text-slate-800 dark:text-d-heading"
-                                />
-                            </div>
-                            <div className="flex gap-3 pt-4">
-                                <button
-                                    onClick={() => setActiveModal(null)}
-                                    className="flex-1 py-3 border border-slate-200 dark:border-d-border rounded-xl font-medium text-slate-600 dark:text-d-text hover:bg-slate-50 dark:hover:bg-d-glass-hover"
-                                >
-                                    Cancel
-                                </button>
-                                <button
-                                    onClick={handleSaveProfile}
-                                    disabled={savingProfile}
-                                    className="flex-1 py-3 bg-primary-500 text-white rounded-xl font-medium hover:bg-primary-600 flex items-center justify-center gap-2 disabled:opacity-50"
-                                >
-                                    <FiSave size={18} />
-                                    {savingProfile ? 'Saving...' : 'Save'}
-                                </button>
-                            </div>
-                        </div>
+            {/* ── About ── */}
+            <Dialog open={activeModal === 'about'} onClose={close} size="sm" closeOnScrim title="About">
+                <div className="flex items-center gap-3">
+                    <span className="w-11 h-11 rounded-xl bg-accent text-accent-foreground inline-flex items-center justify-center">
+                        <FiBriefcase className="w-5 h-5" aria-hidden="true" />
+                    </span>
+                    <div>
+                        <p className="text-body-lg font-medium text-foreground">POS Desktop</p>
+                        <p className="text-body-sm text-muted-foreground">{isDesktopApp ? `Version ${appVersion || '…'}` : 'Web app'}</p>
                     </div>
                 </div>
-            )}
-
-            {/* Business Modal */}
-            {activeModal === 'business' && (
-                <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-                    <div className="bg-white dark:bg-d-card rounded-2xl w-full max-w-lg animate-fadeIn max-h-[90vh] overflow-y-auto">
-                        <div className="flex items-center justify-between p-6 border-b border-slate-200 dark:border-d-border sticky top-0 bg-white dark:bg-d-card">
-                            <h3 className="text-xl font-semibold text-slate-800 dark:text-d-heading">Business Settings</h3>
-                            <button
-                                onClick={() => setActiveModal(null)}
-                                className="p-2 hover:bg-slate-100 dark:hover:bg-d-glass-hover rounded-lg transition-colors text-slate-600 dark:text-d-text"
-                            >
-                                <FiX />
-                            </button>
-                        </div>
-                        <div className="p-6 space-y-4">
-                            <div className="flex items-center gap-4 p-4 bg-slate-50 dark:bg-d-elevated rounded-xl">
-                                <div
-                                    className="w-14 h-14 rounded-xl flex items-center justify-center text-white text-xl font-bold"
-                                    style={{ backgroundColor: config?.color || '#6366f1' }}
-                                >
-                                    {business?.name?.charAt(0) || 'B'}
-                                </div>
-                                <div>
-                                    <h4 className="font-semibold text-slate-800 dark:text-d-heading">{business?.name}</h4>
-                                    <p className="text-sm text-slate-500 dark:text-d-muted capitalize">{config?.label || 'Business'}</p>
-                                </div>
-                            </div>
-                            <div>
-                                <label className="block text-sm font-medium text-slate-700 dark:text-d-text mb-1">
-                                    <FiBriefcase className="inline mr-2" size={14} />
-                                    Business Name
-                                </label>
-                                <input
-                                    type="text"
-                                    defaultValue={business?.name}
-                                    onChange={(e) => bizFormRef.current.name = e.target.value}
-                                    className="w-full px-4 py-3 border border-slate-200 dark:border-d-border rounded-xl focus:ring-2 focus:ring-primary-500 bg-white dark:bg-d-elevated text-slate-800 dark:text-d-heading"
-                                />
-                            </div>
-                            <div>
-                                <label className="block text-sm font-medium text-slate-700 dark:text-d-text mb-1">
-                                    <FiPhone className="inline mr-2" size={14} />
-                                    Phone
-                                </label>
-                                <input
-                                    type="tel"
-                                    defaultValue={business?.phone}
-                                    onChange={(e) => bizFormRef.current.phone = e.target.value}
-                                    className="w-full px-4 py-3 border border-slate-200 dark:border-d-border rounded-xl focus:ring-2 focus:ring-primary-500 bg-white dark:bg-d-elevated text-slate-800 dark:text-d-heading"
-                                />
-                            </div>
-                            <div>
-                                <label className="block text-sm font-medium text-slate-700 dark:text-d-text mb-1">
-                                    <FiMail className="inline mr-2" size={14} />
-                                    Email
-                                </label>
-                                <input
-                                    type="email"
-                                    defaultValue={business?.email}
-                                    onChange={(e) => bizFormRef.current.email = e.target.value}
-                                    className="w-full px-4 py-3 border border-slate-200 dark:border-d-border rounded-xl focus:ring-2 focus:ring-primary-500 bg-white dark:bg-d-elevated text-slate-800 dark:text-d-heading"
-                                />
-                            </div>
-                            <div>
-                                <label className="block text-sm font-medium text-slate-700 dark:text-d-text mb-1">
-                                    <FiDollarSign className="inline mr-2" size={14} />
-                                    Currency
-                                </label>
-                                <select
-                                    defaultValue={business?.currency || 'PKR'}
-                                    onChange={(e) => bizFormRef.current.currency = e.target.value}
-                                    className="w-full px-4 py-3 border border-slate-200 dark:border-d-border rounded-xl focus:ring-2 focus:ring-primary-500 bg-white dark:bg-d-elevated text-slate-800 dark:text-d-heading"
-                                >
-                                    <option value="PKR">PKR - Pakistani Rupee</option>
-                                    <option value="USD">USD - US Dollar</option>
-                                    <option value="EUR">EUR - Euro</option>
-                                    <option value="GBP">GBP - British Pound</option>
-                                    <option value="AED">AED - UAE Dirham</option>
-                                    <option value="SAR">SAR - Saudi Riyal</option>
-                                </select>
-                            </div>
-                            <div>
-                                <label className="block text-sm font-medium text-slate-700 dark:text-d-text mb-1">
-                                    <FiMapPin className="inline mr-2" size={14} />
-                                    Address
-                                </label>
-                                <input
-                                    type="text"
-                                    defaultValue={business?.address?.street || ''}
-                                    onChange={(e) => bizFormRef.current.address = { ...(bizFormRef.current.address || business?.address || {}), street: e.target.value }}
-                                    placeholder="Street address"
-                                    className="w-full px-4 py-3 border border-slate-200 dark:border-d-border rounded-xl focus:ring-2 focus:ring-primary-500 bg-white dark:bg-d-elevated text-slate-800 dark:text-d-heading"
-                                />
-                                <input
-                                    type="text"
-                                    defaultValue={business?.address?.city || ''}
-                                    onChange={(e) => bizFormRef.current.address = { ...(bizFormRef.current.address || business?.address || {}), city: e.target.value }}
-                                    placeholder="City"
-                                    className="w-full px-4 py-3 mt-2 border border-slate-200 dark:border-d-border rounded-xl focus:ring-2 focus:ring-primary-500 bg-white dark:bg-d-elevated text-slate-800 dark:text-d-heading"
-                                />
-                            </div>
-                            <div className="flex gap-3 pt-4">
-                                <button
-                                    onClick={() => setActiveModal(null)}
-                                    className="flex-1 py-3 border border-slate-200 dark:border-d-border rounded-xl font-medium text-slate-600 dark:text-d-text hover:bg-slate-50 dark:hover:bg-d-glass-hover"
-                                >
-                                    Cancel
-                                </button>
-                                <button
-                                    onClick={handleSaveBusiness}
-                                    disabled={savingBusiness}
-                                    className="flex-1 py-3 bg-primary-500 text-white rounded-xl font-medium hover:bg-primary-600 flex items-center justify-center gap-2 disabled:opacity-50"
-                                >
-                                    <FiSave size={18} />
-                                    {savingBusiness ? 'Saving...' : 'Save'}
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            )}
-
-
-            {/* About Modal */}
-            {activeModal === 'about' && (
-                <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-                    <div className="bg-white dark:bg-d-card rounded-2xl w-full max-w-md animate-fadeIn text-center">
-                        <div className="p-8">
-                            <div className="w-20 h-20 bg-primary-100 dark:bg-primary-900/30 rounded-2xl flex items-center justify-center mx-auto mb-4">
-                                <FiBriefcase size={40} className="text-primary-500 dark:text-primary-400" />
-                            </div>
-                            <h3 className="text-2xl font-bold text-slate-800 dark:text-d-heading mb-2">POS Desktop</h3>
-                            <p className="text-slate-500 dark:text-d-muted mb-4">{isDesktopApp ? `Version ${appVersion || '...'}` : 'Web app'}</p>
-                            <p className="text-sm text-slate-500 dark:text-d-muted mb-6">
-                                A modern point of sale system for retail businesses.
-                            </p>
-                            <div className="space-y-2 text-sm text-slate-600 dark:text-d-muted">
-                                <p>Built with Electron + React</p>
-                                <p>© 2024 POS Desktop. All rights reserved.</p>
-                            </div>
-                            <button
-                                onClick={() => setActiveModal(null)}
-                                className="mt-6 px-8 py-3 bg-primary-500 text-white rounded-xl font-medium hover:bg-primary-600"
-                            >
-                                Close
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            )}
-
-            {/* Change Password Modal */}
-            {activeModal === 'password' && (
-                <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-                    <div className="bg-white dark:bg-d-card rounded-2xl w-full max-w-lg animate-fadeIn max-h-[90vh] overflow-y-auto">
-                        <div className="flex items-center justify-between p-6 border-b border-slate-200 dark:border-d-border">
-                            <h3 className="text-xl font-semibold text-slate-800 dark:text-d-heading">Change Password</h3>
-                            <button
-                                onClick={() => setActiveModal(null)}
-                                className="p-2 hover:bg-slate-100 dark:hover:bg-d-glass-hover rounded-lg transition-colors text-slate-600 dark:text-d-text"
-                            >
-                                <FiX />
-                            </button>
-                        </div>
-                        <div className="p-6 space-y-4">
-                            <div>
-                                <label className="block text-sm font-medium text-slate-700 dark:text-d-text mb-1">Current Password</label>
-                                <input
-                                    type="password"
-                                    value={passwordForm.currentPassword}
-                                    onChange={e => setPasswordForm(p => ({ ...p, currentPassword: e.target.value }))}
-                                    className="w-full px-4 py-3 border border-slate-200 dark:border-d-border rounded-xl focus:ring-2 focus:ring-primary-500 bg-white dark:bg-d-elevated text-slate-800 dark:text-d-heading"
-                                />
-                            </div>
-                            <div>
-                                <label className="block text-sm font-medium text-slate-700 dark:text-d-text mb-1">New Password</label>
-                                <input
-                                    type="password"
-                                    value={passwordForm.newPassword}
-                                    onChange={e => setPasswordForm(p => ({ ...p, newPassword: e.target.value }))}
-                                    className="w-full px-4 py-3 border border-slate-200 dark:border-d-border rounded-xl focus:ring-2 focus:ring-primary-500 bg-white dark:bg-d-elevated text-slate-800 dark:text-d-heading"
-                                />
-                                <p className="text-xs text-slate-400 dark:text-d-muted mt-1">Minimum 8 characters</p>
-                            </div>
-                            <div>
-                                <label className="block text-sm font-medium text-slate-700 dark:text-d-text mb-1">Confirm New Password</label>
-                                <input
-                                    type="password"
-                                    value={passwordForm.confirmPassword}
-                                    onChange={e => setPasswordForm(p => ({ ...p, confirmPassword: e.target.value }))}
-                                    className="w-full px-4 py-3 border border-slate-200 dark:border-d-border rounded-xl focus:ring-2 focus:ring-primary-500 bg-white dark:bg-d-elevated text-slate-800 dark:text-d-heading"
-                                />
-                            </div>
-                            <div className="flex gap-3 pt-4">
-                                <button
-                                    onClick={() => setActiveModal(null)}
-                                    className="flex-1 py-3 border border-slate-200 dark:border-d-border rounded-xl font-medium text-slate-600 dark:text-d-text hover:bg-slate-50 dark:hover:bg-d-glass-hover"
-                                >
-                                    Cancel
-                                </button>
-                                <button
-                                    onClick={handleChangePassword}
-                                    disabled={savingPassword}
-                                    className="flex-1 py-3 bg-primary-500 text-white rounded-xl font-medium hover:bg-primary-600 flex items-center justify-center gap-2 disabled:opacity-50"
-                                >
-                                    <FiSave size={18} />
-                                    {savingPassword ? 'Changing...' : 'Change Password'}
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            )}
-
-            {/* Receipt Settings Modal */}
-            {activeModal === 'receipt' && (
-                <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-                    <div className="bg-white dark:bg-d-card rounded-2xl w-full max-w-lg animate-fadeIn max-h-[90vh] overflow-y-auto">
-                        <div className="flex items-center justify-between p-6 border-b border-slate-200 dark:border-d-border">
-                            <h3 className="text-xl font-semibold text-slate-800 dark:text-d-heading">Receipt Settings</h3>
-                            <button
-                                onClick={() => setActiveModal(null)}
-                                className="p-2 hover:bg-slate-100 dark:hover:bg-d-glass-hover rounded-lg transition-colors text-slate-600 dark:text-d-text"
-                            >
-                                <FiX />
-                            </button>
-                        </div>
-                        <div className="p-6 space-y-4">
-                            {window.electronAPI?.getPrinters && (
-                                <div>
-                                    <label className="block text-sm font-medium text-slate-700 dark:text-d-text mb-1">Receipt Printer</label>
-                                    <div className="flex gap-2">
-                                        <select
-                                            value={selectedPrinter}
-                                            onChange={(e) => handleSelectPrinter(e.target.value)}
-                                            className="flex-1 px-4 py-3 border border-slate-200 dark:border-d-border rounded-xl focus:ring-2 focus:ring-primary-500 bg-white dark:bg-d-elevated text-slate-800 dark:text-d-heading"
-                                        >
-                                            <option value="">Auto-detect</option>
-                                            {printers.map((p) => (
-                                                <option key={p.name} value={p.name}>
-                                                    {p.name}{p.isDefault ? ' (default)' : ''}
-                                                </option>
-                                            ))}
-                                        </select>
-                                        <button
-                                            type="button"
-                                            onClick={loadPrinters}
-                                            title="Refresh printer list"
-                                            className="px-4 py-3 border border-slate-200 dark:border-d-border rounded-xl text-slate-600 dark:text-d-text hover:bg-slate-50 dark:hover:bg-d-glass-hover"
-                                        >
-                                            Refresh
-                                        </button>
-                                    </div>
-                                    <p className="text-xs text-slate-400 dark:text-d-muted mt-1">
-                                        Choose the thermal printer that prints your bills. Saved on this computer only.
-                                    </p>
-                                    {window.electronAPI?.openLogsFolder && (
-                                        <button
-                                            type="button"
-                                            onClick={() => window.electronAPI.openLogsFolder()}
-                                            className="mt-2 text-xs font-medium text-primary-600 dark:text-d-accent hover:underline"
-                                        >
-                                            Open print log (for troubleshooting)
-                                        </button>
-                                    )}
-                                </div>
-                            )}
-
-                            {window.electronAPI?.printWidthTest && (
-                                <div>
-                                    <label className="block text-sm font-medium text-slate-700 dark:text-d-text mb-1">Paper Width</label>
-                                    <div className="flex gap-2">
-                                        <select
-                                            value={paperWidth}
-                                            onChange={(e) => handleSelectPaperWidth(e.target.value)}
-                                            className="flex-1 px-4 py-3 border border-slate-200 dark:border-d-border rounded-xl focus:ring-2 focus:ring-primary-500 bg-white dark:bg-d-elevated text-slate-800 dark:text-d-heading"
-                                        >
-                                            <option value="32">58 mm paper (32 chars)</option>
-                                            <option value="42">80 mm paper — narrow (42 chars)</option>
-                                            <option value="48">80 mm paper — standard (48 chars)</option>
-                                        </select>
-                                        <button
-                                            type="button"
-                                            onClick={handlePrintWidthTest}
-                                            disabled={printingTest}
-                                            className="px-4 py-3 border border-primary-500 text-primary-500 rounded-xl font-medium hover:bg-primary-50 dark:hover:bg-primary-500/10 disabled:opacity-50 whitespace-nowrap"
-                                        >
-                                            {printingTest ? 'Printing…' : 'Print test'}
-                                        </button>
-                                    </div>
-                                    <p className="text-xs text-slate-400 dark:text-d-muted mt-1">
-                                        If bills print too long or wrap, tap “Print test”, then pick the largest number that fits on one line.
-                                    </p>
-                                </div>
-                            )}
-                            <div>
-                                <label className="block text-sm font-medium text-slate-700 dark:text-d-text mb-1">Thank You Message</label>
-                                <input
-                                    type="text"
-                                    maxLength={110}
-                                    defaultValue={business?.receiptFooter || 'Thank you for your business!'}
-                                    onChange={(e) => bizFormRef.current.receiptFooter = e.target.value}
-                                    placeholder="e.g. Thank you for shopping with us!"
-                                    className="w-full px-4 py-3 border border-slate-200 dark:border-d-border rounded-xl focus:ring-2 focus:ring-primary-500 bg-white dark:bg-d-elevated text-slate-800 dark:text-d-heading"
-                                />
-                                <p className="text-xs text-slate-400 dark:text-d-muted mt-1">Max 110 characters</p>
-                            </div>
-                            <div>
-                                <label className="block text-sm font-medium text-slate-700 dark:text-d-text mb-1">Receipt Note</label>
-                                <textarea
-                                    maxLength={110}
-                                    defaultValue={business?.receiptNote || ''}
-                                    onChange={(e) => bizFormRef.current.receiptNote = e.target.value}
-                                    placeholder="e.g. Frozen items are not refundable. Exchange within 7 days only."
-                                    rows={3}
-                                    className="w-full px-4 py-3 border border-slate-200 dark:border-d-border rounded-xl focus:ring-2 focus:ring-primary-500 bg-white dark:bg-d-elevated text-slate-800 dark:text-d-heading resize-none"
-                                />
-                                <p className="text-xs text-slate-400 dark:text-d-muted mt-1">Max 110 characters (leave empty to hide)</p>
-                            </div>
-
-                            <div className="flex items-center justify-between py-1">
-                                <div>
-                                    <p className="text-sm font-medium text-slate-700 dark:text-d-text">Show Customer Phone</p>
-                                    <p className="text-xs text-slate-400 dark:text-d-muted">Print the attached customer's phone number on the receipt</p>
-                                </div>
-                                <label className="relative inline-flex items-center cursor-pointer shrink-0 ml-4">
-                                    <input
-                                        type="checkbox"
-                                        className="sr-only peer"
-                                        defaultChecked={!!business?.showCustomerPhone}
-                                        onChange={(e) => bizFormRef.current.showCustomerPhone = e.target.checked}
-                                    />
-                                    <div className="w-11 h-6 bg-slate-200 dark:bg-slate-600 peer-focus:ring-2 peer-focus:ring-primary-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary-500"></div>
-                                </label>
-                            </div>
-
-                            <div className="flex items-center justify-between py-1">
-                                <div>
-                                    <p className="text-sm font-medium text-slate-700 dark:text-d-text">Show Customer Address</p>
-                                    <p className="text-xs text-slate-400 dark:text-d-muted">Print the attached customer's address on the receipt</p>
-                                </div>
-                                <label className="relative inline-flex items-center cursor-pointer shrink-0 ml-4">
-                                    <input
-                                        type="checkbox"
-                                        className="sr-only peer"
-                                        defaultChecked={!!business?.showCustomerAddress}
-                                        onChange={(e) => bizFormRef.current.showCustomerAddress = e.target.checked}
-                                    />
-                                    <div className="w-11 h-6 bg-slate-200 dark:bg-slate-600 peer-focus:ring-2 peer-focus:ring-primary-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary-500"></div>
-                                </label>
-                            </div>
-
-                            <button
-                                type="button"
-                                onClick={handleOpenReceiptPreview}
-                                className="w-full py-3 border border-primary-500 text-primary-500 rounded-xl font-medium hover:bg-primary-50 dark:hover:bg-primary-500/10 flex items-center justify-center gap-2"
-                            >
-                                <FiPrinter size={18} />
-                                Preview Receipt
-                            </button>
-
-                            <div className="flex gap-3 pt-4">
-                                <button
-                                    onClick={() => setActiveModal(null)}
-                                    className="flex-1 py-3 border border-slate-200 dark:border-d-border rounded-xl font-medium text-slate-600 dark:text-d-text hover:bg-slate-50 dark:hover:bg-d-glass-hover"
-                                >
-                                    Cancel
-                                </button>
-                                <button
-                                    onClick={handleSaveBusiness}
-                                    disabled={savingBusiness}
-                                    className="flex-1 py-3 bg-primary-500 text-white rounded-xl font-medium hover:bg-primary-600 flex items-center justify-center gap-2 disabled:opacity-50"
-                                >
-                                    <FiSave size={18} />
-                                    {savingBusiness ? 'Saving...' : 'Save'}
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            )}
-
-            {/* Receipt Preview Modal */}
-            {showReceiptPreview && (
-                <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60] p-4">
-                    <div className="bg-white dark:bg-d-card rounded-2xl w-full max-w-md animate-fadeIn max-h-[90vh] flex flex-col">
-                        <div className="flex items-center justify-between p-6 border-b border-slate-200 dark:border-d-border shrink-0">
-                            <h3 className="text-xl font-semibold text-slate-800 dark:text-d-heading">Receipt Preview</h3>
-                            <button
-                                onClick={() => setShowReceiptPreview(false)}
-                                className="p-2 hover:bg-slate-100 dark:hover:bg-d-glass-hover rounded-lg transition-colors text-slate-600 dark:text-d-text"
-                            >
-                                <FiX />
-                            </button>
-                        </div>
-
-                        <div className="px-6 pt-4 shrink-0">
-                            <div className="flex gap-2 bg-slate-100 dark:bg-d-elevated rounded-xl p-1">
-                                {[
-                                    { key: 'cash', label: 'Cash' },
-                                    { key: 'partial', label: 'Partial' },
-                                    { key: 'credit', label: 'Credit' },
-                                ].map((m) => (
-                                    <button
-                                        key={m.key}
-                                        onClick={() => setPreviewMode(m.key)}
-                                        className={`flex-1 py-2 rounded-lg text-sm font-medium transition-colors ${
-                                            previewMode === m.key
-                                                ? 'bg-primary-500 text-white'
-                                                : 'text-slate-600 dark:text-d-text hover:bg-slate-200 dark:hover:bg-d-glass-hover'
-                                        }`}
-                                    >
-                                        {m.label}
-                                    </button>
-                                ))}
-                            </div>
-                            <p className="text-xs text-slate-400 dark:text-d-muted mt-2">
-                                Sample data — not a real transaction. Reflects your unsaved Receipt Settings changes.
-                            </p>
-                        </div>
-
-                        <div className="flex-1 overflow-auto px-6 py-4">
-                            <div
-                                style={{
-                                    width: '72mm',
-                                    margin: '0 auto',
-                                    fontFamily: "'Courier New', monospace",
-                                    fontSize: '11px',
-                                    color: '#000',
-                                    background: '#fff',
-                                    padding: '4mm 2mm',
-                                    boxShadow: '0 1px 4px rgba(0,0,0,0.15)',
-                                }}
-                                dangerouslySetInnerHTML={{
-                                    __html: buildReceiptHTML(buildSampleOpts(previewMode, previewStore || business || {})),
-                                }}
-                            />
-                        </div>
-
-                        <div className="flex gap-3 p-6 pt-2 border-t border-slate-200 dark:border-d-border shrink-0">
-                            <button
-                                onClick={() => setShowReceiptPreview(false)}
-                                className="flex-1 py-3 border border-slate-200 dark:border-d-border rounded-xl font-medium text-slate-600 dark:text-d-text hover:bg-slate-50 dark:hover:bg-d-glass-hover"
-                            >
-                                Close
-                            </button>
-                            <button
-                                onClick={handlePrintSampleReceipt}
-                                className="flex-1 py-3 bg-primary-500 text-white rounded-xl font-medium hover:bg-primary-600 flex items-center justify-center gap-2"
-                            >
-                                <FiPrinter size={18} />
-                                Print Test Receipt
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            )}
-            {toast && (
-                <div className={`fixed bottom-6 left-1/2 -translate-x-1/2 z-[70] px-5 py-3 rounded-xl text-white text-sm shadow-lg animate-fade-slide-up ${toast.error ? 'bg-red-600' : 'bg-slate-800'}`}>
-                    {toast.message}
-                </div>
-            )}
+                <p className="mt-4 text-body text-muted-foreground">Point of sale, stock, customers and money for your shop.</p>
+            </Dialog>
         </div>
     );
 };

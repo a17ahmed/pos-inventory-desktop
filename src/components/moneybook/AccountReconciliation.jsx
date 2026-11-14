@@ -1,6 +1,9 @@
 import React from 'react';
 import { FiCheckCircle, FiXCircle } from 'react-icons/fi';
 import { ACCOUNT_TYPE_LABELS } from '../../utils/moneyBook';
+import { cn, TABLE_CARD, TABLE_HEAD_ROW, TABLE_TH, TABLE_ROW, TABLE_TD } from '../ui';
+
+const R = 'text-right tabular-nums';
 
 /**
  * Store Closing: one row per Money Book account — opening, in, out, expected,
@@ -10,33 +13,33 @@ import { ACCOUNT_TYPE_LABELS } from '../../utils/moneyBook';
  */
 const AccountReconciliation = ({ rows = [], totalMoneyExpected, fmt, editors }) => {
     if (!rows.length) return null;
-    const signCls = (v) => ((Number(v) || 0) < 0 ? 'text-red-600 dark:text-d-red' : '');
+    const signCls = (v) => ((Number(v) || 0) < 0 ? 'text-destructive' : '');
     return (
-        <div className="bg-white dark:bg-d-card border border-slate-100 dark:border-d-border rounded-2xl overflow-hidden shadow-sm">
-            <div className="px-5 py-4 border-b border-slate-100 dark:border-d-border flex items-center justify-between">
+        <section className={TABLE_CARD} aria-label="Money accounts">
+            <div className="px-4 py-3 border-b border-hairline flex items-center justify-between gap-3">
                 <div>
-                    <h3 className="font-semibold text-slate-800 dark:text-d-heading">Money accounts</h3>
-                    <p className="text-xs text-slate-500 dark:text-d-muted">Count the drawer; check each bank / wallet statement.</p>
+                    <h3 className="font-heading text-h4 text-foreground">Money accounts</h3>
+                    <p className="text-body-sm text-muted-foreground">Count the drawer; check each bank / wallet statement.</p>
                 </div>
                 {totalMoneyExpected != null && (
                     <div className="text-right">
-                        <p className="text-[11px] uppercase tracking-wide text-slate-400 dark:text-d-faint">Total money expected</p>
-                        <p className={`font-bold text-slate-800 dark:text-d-heading ${signCls(totalMoneyExpected)}`}>{fmt(totalMoneyExpected)}</p>
+                        <p className="font-mono text-overline-lg uppercase text-muted-foreground">Total money expected</p>
+                        <p className={`font-semibold tabular-nums text-foreground ${signCls(totalMoneyExpected)}`}>{fmt(totalMoneyExpected)}</p>
                     </div>
                 )}
             </div>
             <div className="overflow-x-auto">
-                <table className="w-full text-sm">
+                <table className="w-full border-collapse">
                     <thead>
-                        <tr className="bg-slate-50 dark:bg-d-elevated text-slate-500 dark:text-d-muted text-xs">
-                            <th className="text-left px-4 py-2.5 font-semibold">Account</th>
-                            <th className="text-right px-4 py-2.5 font-semibold">Opening</th>
-                            <th className="text-right px-4 py-2.5 font-semibold">In</th>
-                            <th className="text-right px-4 py-2.5 font-semibold">Out</th>
-                            <th className="text-right px-4 py-2.5 font-semibold">Expected</th>
-                            <th className="text-right px-4 py-2.5 font-semibold w-40">Counted / statement</th>
-                            <th className="text-right px-4 py-2.5 font-semibold">Variance</th>
-                            <th className="px-4 py-2.5" />
+                        <tr className={TABLE_HEAD_ROW}>
+                            <th className={TABLE_TH}>Account</th>
+                            <th className={cn(TABLE_TH, 'text-right')}>Opening</th>
+                            <th className={cn(TABLE_TH, 'text-right')}>In</th>
+                            <th className={cn(TABLE_TH, 'text-right')}>Out</th>
+                            <th className={cn(TABLE_TH, 'text-right')}>Expected</th>
+                            <th className={cn(TABLE_TH, 'text-right w-40')}>Counted / statement</th>
+                            <th className={cn(TABLE_TH, 'text-right')}>Variance</th>
+                            <th className={TABLE_TH}><span className="sr-only">Reconciled</span></th>
                         </tr>
                     </thead>
                     <tbody>
@@ -44,26 +47,24 @@ const AccountReconciliation = ({ rows = [], totalMoneyExpected, fmt, editors }) 
                             const id = String(r.account);
                             const editor = editors?.[id];
                             return (
-                                <tr key={id} className="border-t border-slate-50 dark:border-d-border/50">
-                                    <td className="px-4 py-3">
-                                        <p className="font-medium text-slate-800 dark:text-d-heading">{r.name}</p>
-                                        <p className="text-[11px] text-slate-400 dark:text-d-faint">{ACCOUNT_TYPE_LABELS[r.type] || r.type}</p>
+                                <tr key={id} className={TABLE_ROW}>
+                                    <td className={cn(TABLE_TD, 'py-2')}>
+                                        <p className="font-medium">{r.name}</p>
+                                        <p className="text-body-sm text-muted-foreground">{ACCOUNT_TYPE_LABELS[r.type] || r.type}</p>
                                     </td>
-                                    <td className={`px-4 py-3 text-right ${signCls(r.opening)}`}>{fmt(r.opening)}</td>
-                                    <td className="px-4 py-3 text-right text-emerald-600 dark:text-d-green">{fmt(r.periodIn)}</td>
-                                    <td className="px-4 py-3 text-right text-red-600 dark:text-d-red">{fmt(r.periodOut)}</td>
-                                    <td className={`px-4 py-3 text-right font-semibold text-slate-800 dark:text-d-heading ${signCls(r.expected)}`}>{fmt(r.expected)}</td>
-                                    <td className="px-4 py-3 text-right">
-                                        {editor || <span className="font-semibold text-slate-700 dark:text-d-text">{r.counted != null ? fmt(r.counted) : '—'}</span>}
+                                    <td className={cn(TABLE_TD, R, signCls(r.opening))}>{fmt(r.opening)}</td>
+                                    <td className={cn(TABLE_TD, R, 'text-success')}>{fmt(r.periodIn)}</td>
+                                    <td className={cn(TABLE_TD, R, 'text-destructive')}>{fmt(r.periodOut)}</td>
+                                    <td className={cn(TABLE_TD, R, 'font-semibold', signCls(r.expected))}>{fmt(r.expected)}</td>
+                                    <td className={cn(TABLE_TD, R)}>
+                                        {editor || <span className="font-semibold">{r.counted != null ? fmt(r.counted) : '—'}</span>}
                                     </td>
-                                    <td className={`px-4 py-3 text-right font-semibold ${
-                                        r.reconciled === true ? 'text-emerald-600 dark:text-d-green' : r.reconciled === false ? 'text-red-600 dark:text-d-red' : 'text-slate-400'
-                                    }`}>
+                                    <td className={cn(TABLE_TD, R, 'font-semibold', r.reconciled === true ? 'text-success' : r.reconciled === false ? 'text-destructive' : 'text-muted-foreground')}>
                                         {r.variance != null ? `${r.variance > 0 ? '+' : ''}${fmt(r.variance)}` : '—'}
                                     </td>
-                                    <td className="px-4 py-3 text-right">
-                                        {r.reconciled === true && <FiCheckCircle className="inline text-emerald-500" />}
-                                        {r.reconciled === false && <FiXCircle className="inline text-red-500" />}
+                                    <td className={cn(TABLE_TD, R)}>
+                                        {r.reconciled === true && <FiCheckCircle className="inline text-success" aria-label="Matches" />}
+                                        {r.reconciled === false && <FiXCircle className="inline text-destructive" aria-label="Does not match" />}
                                     </td>
                                 </tr>
                             );
@@ -71,7 +72,7 @@ const AccountReconciliation = ({ rows = [], totalMoneyExpected, fmt, editors }) 
                     </tbody>
                 </table>
             </div>
-        </div>
+        </section>
     );
 };
 

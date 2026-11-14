@@ -1,4 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { useSearchParams } from 'react-router-dom';
+import { Button, IconButton, Input, Textarea, Select, SearchInput, Field, SegmentedControl, StatusChip, Alert, CARD_FRAME } from '../components/ui';
+import { DialogShell } from '../components/ui/Dialog';
 import { useBusiness } from '../context/BusinessContext';
 import { getTodaySummary, getReturnByReceipt, getReturnProductByBarcode, createReturn } from '../services/api/returns';
 import { getCashBalance } from '../services/api/cashbook';
@@ -9,7 +12,6 @@ import { getProducts } from '../services/api/products';
 import { searchCustomers, getCustomer } from '../services/api/customers';
 import { mergeReceiptItems } from '../utils/receiptItems';
 import {
-    FiSearch,
     FiX,
     FiPlus,
     FiMinus,
@@ -21,6 +23,8 @@ import {
     FiRefreshCw,
     FiRotateCcw,
     FiUser,
+    FiChevronRight,
+    FiArrowLeft,
 } from 'react-icons/fi';
 
 const RETURN_REASONS = [
@@ -33,10 +37,33 @@ const RETURN_REASONS = [
 ];
 
 const REFUND_METHODS = [
-    { value: 'cash', label: 'Cash', icon: '💵' },
+    { value: 'cash', label: 'Cash' },
     // { value: 'card', label: 'Card', icon: '💳' },
     // { value: 'store_credit', label: 'Store Credit', icon: '🎫' },
 ];
+
+// One numbered step card of the return flow (outside the screen so typing never remounts it)
+const Step = ({ n, title, hint, done, action, children }) => (
+    <section className={`${CARD_FRAME} min-w-0`}>
+        <header className="flex items-center gap-3 px-5 pt-4 pb-3">
+            <span
+                className={`w-7 h-7 flex-none rounded-full inline-flex items-center justify-center text-body-sm font-semibold ${
+                    done ? 'bg-success-chip text-success-chip-foreground' : 'bg-primary text-primary-foreground'
+                }`}
+                aria-hidden="true"
+            >
+                {done ? <FiCheck className="w-4 h-4" /> : n}
+            </span>
+            <div className="flex-1 min-w-0">
+                <h2 className="font-heading text-h4 text-foreground">{title}</h2>
+                {hint ? <p className="text-body-sm text-muted-foreground">{hint}</p> : null}
+            </div>
+            {action}
+        </header>
+        <div className="px-5 pb-5">{children}</div>
+    </section>
+);
+
 
 const Returns = () => {
     const { business } = useBusiness();
@@ -62,6 +89,7 @@ const Returns = () => {
     const [customerBills, setCustomerBills] = useState([]);
     const [loadingCustomer, setLoadingCustomer] = useState(false);
     const [showCustomerDropdown, setShowCustomerDropdown] = useState(false);
+    const [activeResult, setActiveResult] = useState(-1); // keyboard-highlighted search result
     const customerSearchRef = useRef(null);
     const searchTimerRef = useRef(null);
 
@@ -94,6 +122,16 @@ const Returns = () => {
 
     // Cash balance for validation
     const [cashBalance, setCashBalance] = useState(null);
+
+    // /returns?bill=171 (from a receipt's "Return items") opens that bill straight away
+    const [searchParams, setSearchParams] = useSearchParams();
+    useEffect(() => {
+        const n = searchParams.get('bill');
+        if (!n) return;
+        setBillNumber(n);
+        lookupBill(n);
+        setSearchParams({}, { replace: true });
+    }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
     useEffect(() => {
         loadTodaySummary();
@@ -187,8 +225,9 @@ const Returns = () => {
     };
 
     // Lookup bill by number
-    const lookupBill = async () => {
-        if (!billNumber.trim()) {
+    const lookupBill = async (num = billNumber) => {
+        const wanted = String(num || '').trim().replace(/^#/, '');
+        if (!wanted) {
             setError('Enter a bill number');
             return;
         }
@@ -196,7 +235,7 @@ const Returns = () => {
         setLoadingBill(true);
         setError('');
         try {
-            const response = await getReturnByReceipt(billNumber.trim());
+            const response = await getReturnByReceipt(wanted);
             setLinkedBill(response.data);
         } catch (error) {
             if (error.response?.data?.isRefundBill) {
@@ -607,17 +646,6 @@ const Returns = () => {
     };
 
     // "Return full bill" / "Return remaining items" — shown under a linked bill's items.
-    const renderFullReturnButton = () => canFullReturn && (
-        <button
-            onClick={openFullReturn}
-            disabled={processing}
-            className="mt-3 w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl text-sm font-semibold border border-d-red/40 text-d-red bg-[rgba(255,107,107,0.06)] hover:bg-[rgba(255,107,107,0.12)] transition-colors disabled:opacity-50"
-        >
-            <FiRotateCcw size={15} />
-            {isPartiallyReturned ? `Return remaining items (${fullReturnQty})` : `Return full bill (${fullReturnQty} items)`}
-        </button>
-    );
-
     // Reset form
     const resetForm = () => {
         setReturnItems([]);
@@ -638,726 +666,666 @@ const Returns = () => {
         }
     };
 
-    return (
-        <div className="h-full bg-slate-50 dark:bg-d-bg overflow-auto">
-            <div className="p-6 animate-fade-slide-up">
-                {/* Header */}
-                <div className="flex items-center justify-between mb-6">
-                    <div>
-                        <h1 className="text-2xl font-bold text-slate-800 dark:text-d-heading">Process Return</h1>
-                        <p className="text-slate-500 dark:text-d-muted">Process product returns and refunds</p>
+    // ── Layout (design: 1 find the sale → 2 what comes back → 3 refund panel, like the till) ──
+    const MODES = [
+        { value: 'customer', label: 'Customer', hint: 'Find their bill by name or phone' },
+        { value: 'bill', label: 'Bill number', hint: 'Type the number on the receipt' },
+        { value: 'product', label: 'No bill', hint: 'Scan or search the product' },
+    ];
+    const dateOf = (iso) => (iso ? new Date(iso).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) : '');
+    const initials = (name = '') => name.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]).join('').toUpperCase() || '?';
+    const returningFor = (groupId) => returnItems.find((ri) => ri.groupId === groupId);
+    const reasonLabel = (v) => RETURN_REASONS.find((r) => r.value === v)?.label || v;
+
+    // Arrow keys + Enter in the search results
+    const pickKeys = (list, onPick, close) => (e) => {
+        if (!list.length) return;
+        if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+            e.preventDefault();
+            setActiveResult((i) => (e.key === 'ArrowDown' ? (i + 1) % list.length : (i - 1 + list.length) % list.length));
+        } else if (e.key === 'Enter' && activeResult >= 0 && list[activeResult]) {
+            e.preventDefault();
+            onPick(list[activeResult]);
+            setActiveResult(-1);
+        } else if (e.key === 'Escape') {
+            close();
+            setActiveResult(-1);
+        }
+    };
+
+    const resultsBox = 'absolute left-0 right-0 top-full mt-1.5 z-30 rounded-xl border border-hairline bg-popover text-popover-foreground shadow-2 max-h-80 overflow-y-auto py-1';
+    const resultRow = (active) =>
+        `w-full flex items-center gap-3 px-3 py-2.5 text-left ${active ? 'bg-[var(--hover-overlay)]' : 'hover:bg-[var(--hover-overlay)]'}`;
+
+    // Step 1 body per mode
+    const findSale = () => {
+        if (searchMode === 'customer') {
+            if (!selectedCustomer) {
+                return (
+                    <div className="relative" ref={customerSearchRef}>
+                        <SearchInput
+                            size="touch"
+                            autoFocus
+                            value={customerQuery}
+                            onChange={(e) => {
+                                handleCustomerSearch(e.target.value);
+                                setActiveResult(-1);
+                            }}
+                            onFocus={() => customerQuery.trim() && setShowCustomerDropdown(true)}
+                            onBlur={() => setTimeout(() => setShowCustomerDropdown(false), 200)}
+                            onKeyDown={pickKeys(customerResults, selectCustomer, () => setShowCustomerDropdown(false))}
+                            placeholder="Customer name or phone number"
+                            aria-label="Customer name or phone number"
+                        />
+                        {showCustomerDropdown && customerQuery.trim() && (
+                            <div className={resultsBox} role="listbox" aria-label="Customers">
+                                {customerResults.length === 0 ? (
+                                    <p className="px-3 py-3 text-body-sm text-muted-foreground">No customer matches “{customerQuery.trim()}”.</p>
+                                ) : (
+                                    customerResults.map((c, i) => (
+                                        <button key={c._id} type="button" role="option" aria-selected={i === activeResult} onMouseDown={() => selectCustomer(c)} className={resultRow(i === activeResult)}>
+                                            <span className="w-8 h-8 flex-none rounded-full bg-accent text-accent-foreground inline-flex items-center justify-center text-caption font-semibold">{initials(c.name)}</span>
+                                            <span className="flex-1 min-w-0">
+                                                <span className="block text-body font-medium text-foreground truncate">{c.name}</span>
+                                                <span className="block text-caption text-muted-foreground font-mono">{c.phone || 'No phone'}</span>
+                                            </span>
+                                            {(c.balance || 0) > 0 ? (
+                                                <StatusChip tone="destructive" size="sm" label={`Owes ${formatCurrency(c.balance)}`} />
+                                            ) : (c.balance || 0) < 0 ? (
+                                                <StatusChip tone="success" size="sm" label={`Credit ${formatCurrency(-c.balance)}`} />
+                                            ) : null}
+                                        </button>
+                                    ))
+                                )}
+                            </div>
+                        )}
                     </div>
-                    <div className="bg-white dark:bg-d-card border border-slate-200 dark:border-d-border px-5 py-3 rounded-2xl">
-                        <p className="text-xs text-slate-500 dark:text-d-muted mb-1">Today's Returns</p>
-                        <p className="text-lg font-bold text-d-red">
-                            {todaySummary.totalReturns} <span className="text-slate-500 dark:text-d-muted font-normal text-sm">({formatCurrency(todaySummary.totalRefunded)})</span>
-                        </p>
+                );
+            }
+            return (
+                <div className="flex flex-col gap-3">
+                    <div className="flex items-center gap-3 rounded-xl border border-hairline px-3 py-2.5">
+                        <span className="w-9 h-9 flex-none rounded-full bg-accent text-accent-foreground inline-flex items-center justify-center text-body-sm font-semibold">{initials(selectedCustomer.name)}</span>
+                        <div className="flex-1 min-w-0">
+                            <p className="text-body-lg font-medium text-foreground truncate">{selectedCustomer.name}</p>
+                            <p className="text-caption text-muted-foreground font-mono">{selectedCustomer.phone}</p>
+                        </div>
+                        <Button size="xs" variant="ghost" onClick={clearCustomer}>
+                            Change customer
+                        </Button>
                     </div>
+                    {loadingCustomer ? (
+                        <div className="flex items-center justify-center gap-2 py-6 text-body-sm text-muted-foreground">
+                            <FiRefreshCw className="animate-spin" aria-hidden="true" /> Loading their bills…
+                        </div>
+                    ) : linkedBill ? null : customerBills.length === 0 ? (
+                        <p className="py-4 text-center text-body-sm text-muted-foreground">This customer has no completed bills.</p>
+                    ) : (
+                        <div>
+                            <p className="mb-2 text-body-sm font-medium text-foreground">Which bill are they returning from?</p>
+                            <ul className="rounded-xl border border-hairline overflow-hidden max-h-72 overflow-y-auto">
+                                {customerBills.map((bill) => (
+                                    <li key={bill._id}>
+                                        <button
+                                            type="button"
+                                            onClick={() => selectBillFromCustomer(bill)}
+                                            className="w-full flex items-center gap-3 px-3 py-3 text-left shadow-[inset_0_-1px_0_var(--hairline)] hover:bg-[var(--hover-overlay)] focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
+                                        >
+                                            <span className="w-14 flex-none font-mono text-body text-foreground">#{bill.billNumber}</span>
+                                            <span className="flex-1 min-w-0">
+                                                <span className="block text-body text-foreground truncate">{bill.items?.map((i) => i.name).join(', ')}</span>
+                                                <span className="block text-caption text-muted-foreground">
+                                                    {dateOf(bill.createdAt)} · {bill.items?.length || 0} product{bill.items?.length === 1 ? '' : 's'}
+                                                </span>
+                                            </span>
+                                            {bill.returnStatus !== 'none' ? <StatusChip tone="warning" size="sm" label="Has returns" /> : null}
+                                            <span className="w-24 text-right text-body font-semibold tabular-nums text-foreground flex-none">{formatCurrency(bill.total)}</span>
+                                            <FiChevronRight className="w-4 h-4 text-muted-foreground flex-none" aria-hidden="true" />
+                                        </button>
+                                    </li>
+                                ))}
+                            </ul>
+                        </div>
+                    )}
                 </div>
-
-                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                    {/* Left Column */}
-                    <div className="lg:col-span-2 space-y-6">
-
-                        {/* Search Mode Tabs */}
-                        <div className="bg-white dark:bg-d-card rounded-2xl border border-slate-200 dark:border-d-border p-2 flex gap-1">
-                            {[
-                                { key: 'customer', label: 'By Customer', icon: <FiUser size={15} /> },
-                                { key: 'bill',     label: 'By Bill',     icon: <FiFileText size={15} /> },
-                                { key: 'product',  label: 'By Product',  icon: <FiPackage size={15} /> },
-                            ].map(tab => (
-                                <button
-                                    key={tab.key}
-                                    onClick={() => switchMode(tab.key)}
-                                    className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-semibold transition-all ${
-                                        searchMode === tab.key
-                                            ? 'bg-gradient-to-r from-d-accent to-d-accent-s text-d-card'
-                                            : 'text-slate-500 dark:text-d-muted hover:bg-slate-50 dark:hover:bg-d-glass'
-                                    }`}
-                                >
-                                    {tab.icon}
-                                    {tab.label}
+            );
+        }
+        if (searchMode === 'bill') {
+            return (
+                <div className="flex gap-2">
+                    <SearchInput
+                        size="touch"
+                        autoFocus
+                        className="flex-1"
+                        value={billNumber}
+                        onChange={(e) => setBillNumber(e.target.value)}
+                        onKeyDown={(e) => e.key === 'Enter' && lookupBill()}
+                        placeholder="Bill number, e.g. 171"
+                        aria-label="Bill number"
+                        inputMode="numeric"
+                    />
+                    <Button variant="primary" size="touch" onClick={() => lookupBill()} loading={loadingBill} disabled={loadingBill}>
+                        Find bill
+                    </Button>
+                </div>
+            );
+        }
+        // No bill: search products
+        return (
+            <form onSubmit={(e) => (activeResult >= 0 && productSuggestions[activeResult] ? (e.preventDefault(), addProductFromSuggestion(productSuggestions[activeResult]), setActiveResult(-1)) : handleBarcodeSubmit(e))}>
+                <div className="relative" ref={productDropdownRef}>
+                    <SearchInput
+                        ref={barcodeInputRef}
+                        size="touch"
+                        value={barcode}
+                        onChange={(e) => {
+                            handleSearchChange(e.target.value);
+                            setActiveResult(-1);
+                        }}
+                        onKeyDown={(e) => {
+                            if (e.key === 'ArrowDown' || e.key === 'ArrowUp' || e.key === 'Escape') pickKeys(productSuggestions, addProductFromSuggestion, () => setShowProductDropdown(false))(e);
+                        }}
+                        placeholder="Scan the barcode or type the product name"
+                        aria-label="Product barcode or name"
+                    />
+                    {showProductDropdown && (
+                        <div className={resultsBox} role="listbox" aria-label="Products">
+                            {productSuggestions.map((p, i) => (
+                                <button key={p._id} type="button" role="option" aria-selected={i === activeResult} onClick={() => addProductFromSuggestion(p)} className={resultRow(i === activeResult)}>
+                                    <span className="w-8 h-8 flex-none rounded-lg bg-muted text-muted-foreground inline-flex items-center justify-center">
+                                        <FiPackage className="w-4 h-4" aria-hidden="true" />
+                                    </span>
+                                    <span className="flex-1 min-w-0">
+                                        <span className="block text-body font-medium text-foreground truncate">{p.name}</span>
+                                        <span className="block text-caption text-muted-foreground font-mono">{p.barcode || p.sku || '—'}</span>
+                                    </span>
+                                    <span className="text-body font-semibold tabular-nums text-foreground">{formatCurrency(p.sellingPrice || 0)}</span>
+                                    <FiPlus className="w-4 h-4 text-primary flex-none" aria-hidden="true" />
                                 </button>
                             ))}
                         </div>
+                    )}
+                </div>
+                <p className="mt-2 text-caption text-muted-foreground">Press Enter after scanning. Use this only when the customer has no bill — the refund uses today’s selling price.</p>
+            </form>
+        );
+    };
 
-                        {/* Customer Search Section */}
-                        {searchMode === 'customer' && <div className="bg-white dark:bg-d-card rounded-2xl border border-slate-200 dark:border-d-border p-6">
-                            <h3 className="text-lg font-semibold text-slate-800 dark:text-d-heading mb-4 flex items-center gap-2">
-                                <FiUser className="text-d-accent" />
-                                Find Customer
-                            </h3>
+    // Step 2: every item on the bill with two buttons —
+    //   Remove     → one more of it comes back (−1 from what is left on the bill)
+    //   Remove all → everything still left of it comes back
+    const returnAllOf = (item) => {
+        if (item.remainingQty <= 0) return;
+        setReturnItems((prev) => {
+            const i = prev.findIndex((r) => r.groupId === item.groupId);
+            if (i >= 0) {
+                const next = [...prev];
+                next[i] = { ...next[i], quantity: item.remainingQty };
+                return next;
+            }
+            return [
+                ...prev,
+                {
+                    id: Date.now().toString(),
+                    groupId: item.groupId,
+                    parts: item.parts,
+                    name: item.name,
+                    productName: item.name,
+                    price: item.price,
+                    quantity: item.remainingQty,
+                    maxQty: item.remainingQty,
+                    reason: 'changed_mind',
+                    fromBill: true,
+                },
+            ];
+        });
+        setError('');
+    };
 
-                            {selectedCustomer ? (
-                                <div>
-                                    {/* Selected customer badge */}
-                                    <div className="flex items-center justify-between bg-[rgba(255,210,100,0.08)] border border-[rgba(255,210,100,0.2)] rounded-xl px-4 py-3 mb-4">
-                                        <div>
-                                            <span className="font-semibold text-slate-800 dark:text-d-heading">{selectedCustomer.name}</span>
-                                            <span className="text-sm text-slate-500 dark:text-d-muted ml-3">{selectedCustomer.phone}</span>
-                                        </div>
-                                        <button onClick={clearCustomer} className="text-slate-400 hover:text-d-red transition-colors">
-                                            <FiX size={18} />
-                                        </button>
-                                    </div>
-
-                                    {/* Bill selection / items */}
-                                    {loadingCustomer ? (
-                                        <div className="flex items-center justify-center py-6 text-slate-500 dark:text-d-muted">
-                                            <FiRefreshCw className="animate-spin mr-2" /> Loading bills...
-                                        </div>
-                                    ) : linkedBill ? (
-                                        /* Collapsed: selected bill chip + item picker */
-                                        <div className="space-y-3">
-                                            <div className="flex items-center justify-between px-4 py-2.5 bg-[rgba(255,210,100,0.08)] border border-d-accent/30 rounded-xl">
-                                                <div className="flex items-center gap-2">
-                                                    <FiCheck size={14} className="text-d-accent" />
-                                                    <span className="font-semibold text-slate-800 dark:text-d-heading text-sm">
-                                                        Bill #{linkedBill.billNumber}
-                                                    </span>
-                                                    <span className="text-xs text-slate-500 dark:text-d-muted">
-                                                        · {formatCurrency(linkedBill.totalBill)}
-                                                    </span>
-                                                </div>
-                                                <button
-                                                    onClick={() => { setLinkedBill(null); setReturnItems([]); }}
-                                                    className="text-xs text-slate-400 dark:text-d-faint hover:text-slate-600 dark:hover:text-d-text transition-colors"
-                                                >
-                                                    Change
-                                                </button>
-                                            </div>
-
-                                            {linkedBill.hasReturns && (
-                                                <p className="text-xs text-d-accent flex items-center gap-1">
-                                                    <FiAlertCircle size={12} /> Has previous returns
-                                                </p>
-                                            )}
-
-                                            <div className="flex flex-wrap gap-2">
-                                                {billLines.map((item, index) => {
-                                                    const remaining = item.remainingQty;
-                                                    const isFullyReturned = remaining <= 0;
-                                                    return (
-                                                        <button
-                                                            key={index}
-                                                            onClick={() => addItemFromBill(item)}
-                                                            disabled={isFullyReturned}
-                                                            className={`px-3 py-2 rounded-xl text-sm transition-all ${
-                                                                isFullyReturned
-                                                                    ? 'bg-[rgba(255,255,255,0.02)] text-d-faint cursor-not-allowed border border-transparent'
-                                                                    : 'bg-d-glass text-slate-700 dark:text-d-text hover:bg-[rgba(255,210,100,0.1)] hover:border-d-accent/40 border border-slate-200 dark:border-d-border'
-                                                            }`}
-                                                        >
-                                                            <span className="font-medium">{item.name}</span>
-                                                            <span className="text-xs ml-1.5 text-slate-400 dark:text-d-faint">
-                                                                {isFullyReturned ? '(returned)' : `×${remaining}`}
-                                                            </span>
-                                                        </button>
-                                                    );
-                                                })}
-                                            </div>
-                                            {renderFullReturnButton()}
-                                        </div>
-                                    ) : customerBills.length === 0 ? (
-                                        <p className="text-sm text-slate-500 dark:text-d-muted py-4 text-center">No completed bills found</p>
-                                    ) : (
-                                        /* Expanded: full bill list */
-                                        <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
-                                            <p className="text-xs text-slate-500 dark:text-d-muted mb-1">Select a bill:</p>
-                                            {customerBills.map((bill) => (
-                                                <button
-                                                    key={bill._id}
-                                                    onClick={() => selectBillFromCustomer(bill)}
-                                                    className="w-full text-left px-4 py-3 rounded-xl border border-slate-200 dark:border-d-border hover:border-d-accent/50 hover:bg-[rgba(255,210,100,0.05)] bg-slate-50 dark:bg-d-bg transition-all"
-                                                >
-                                                    <div className="flex items-center justify-between">
-                                                        <span className="font-semibold text-slate-800 dark:text-d-heading text-sm">
-                                                            Bill #{bill.billNumber}
-                                                        </span>
-                                                        <span className="text-sm font-medium text-slate-700 dark:text-d-text">{formatCurrency(bill.total)}</span>
-                                                    </div>
-                                                    <div className="flex items-center justify-between mt-0.5">
-                                                        <span className="text-xs text-slate-400 dark:text-d-faint truncate max-w-[220px]">
-                                                            {bill.items?.map(i => i.name).join(', ')}
-                                                        </span>
-                                                        <span className="text-xs text-slate-400 dark:text-d-faint ml-2 shrink-0">
-                                                            {new Date(bill.createdAt).toLocaleDateString()}
-                                                        </span>
-                                                    </div>
-                                                    {bill.returnStatus !== 'none' && (
-                                                        <span className="text-xs text-d-accent mt-1 inline-block">Has returns</span>
-                                                    )}
-                                                </button>
-                                            ))}
-                                        </div>
-                                    )}
-                                </div>
-                            ) : (
-                                /* Customer search input */
-                                <div className="relative" ref={customerSearchRef}>
-                                    <div className="relative">
-                                        <FiSearch className="absolute left-4 top-1/2 -translate-y-1/2 text-d-faint" />
-                                        <input
-                                            type="text"
-                                            value={customerQuery}
-                                            onChange={(e) => handleCustomerSearch(e.target.value)}
-                                            onFocus={() => customerQuery.trim() && setShowCustomerDropdown(true)}
-                                            onBlur={() => setTimeout(() => setShowCustomerDropdown(false), 200)}
-                                            placeholder="Search by customer name or phone..."
-                                            className="w-full pl-12 pr-4 py-3 bg-slate-50 dark:bg-d-bg border border-slate-200 dark:border-d-border rounded-xl text-slate-700 dark:text-d-text placeholder-d-faint focus:outline-none focus:border-d-border-hover"
-                                        />
-                                    </div>
-                                    {showCustomerDropdown && customerResults.length > 0 && (
-                                        <div className="absolute z-20 mt-2 w-full bg-white dark:bg-d-card border border-slate-200 dark:border-d-border rounded-xl shadow-lg max-h-60 overflow-y-auto">
-                                            {customerResults.map((c) => (
-                                                <button
-                                                    key={c._id}
-                                                    onMouseDown={() => selectCustomer(c)}
-                                                    className="w-full text-left px-4 py-3 hover:bg-slate-50 dark:hover:bg-d-glass transition-colors border-b border-slate-100 dark:border-d-border last:border-0"
-                                                >
-                                                    <span className="font-medium text-slate-800 dark:text-d-heading">{c.name}</span>
-                                                    <span className="text-sm text-slate-500 dark:text-d-muted ml-3">{c.phone}</span>
-                                                    {(c.balance || 0) !== 0 && (
-                                                        <span className={`text-xs ml-2 ${c.balance > 0 ? 'text-d-red' : 'text-d-green'}`}>
-                                                            ({c.balance > 0 ? 'Due' : 'Credit'}: {formatCurrency(c.balance)})
-                                                        </span>
-                                                    )}
-                                                </button>
-                                            ))}
-                                        </div>
-                                    )}
-                                </div>
-                            )}
-                        </div>}
-
-                        {/* Bill Lookup Section */}
-                        {searchMode === 'bill' && <div className="bg-white dark:bg-d-card rounded-2xl border border-slate-200 dark:border-d-border p-6">
-                            <h3 className="text-lg font-semibold text-slate-800 dark:text-d-heading mb-4 flex items-center gap-2">
-                                <FiFileText className="text-d-accent" />
-                                Link to Bill
-                            </h3>
-                            <div className="flex gap-3">
-                                <div className="relative flex-1">
-                                    <FiSearch className="absolute left-4 top-1/2 -translate-y-1/2 text-d-faint" />
-                                    <input
-                                        type="text"
-                                        value={billNumber}
-                                        onChange={(e) => setBillNumber(e.target.value)}
-                                        onKeyDown={(e) => e.key === 'Enter' && lookupBill()}
-                                        placeholder="Enter bill/receipt number..."
-                                        className="w-full pl-12 pr-4 py-3 bg-slate-50 dark:bg-d-bg border border-slate-200 dark:border-d-border rounded-xl text-slate-700 dark:text-d-text placeholder-d-faint focus:outline-none focus:border-d-border-hover"
-                                    />
-                                </div>
-                                <button
-                                    onClick={lookupBill}
-                                    disabled={loadingBill}
-                                    className="px-6 py-3 bg-gradient-to-r from-d-accent to-d-accent-s text-d-card rounded-xl font-semibold hover:shadow-[0_4px_20px_rgba(255,210,100,0.4)] transition-all disabled:opacity-50 flex items-center gap-2"
-                                >
-                                    {loadingBill ? <FiRefreshCw className="animate-spin" /> : 'Lookup'}
-                                </button>
-                            </div>
-
-                            {/* Linked Bill Card */}
-                            {linkedBill && (
-                                <div className="mt-4 bg-[rgba(255,255,255,0.02)] rounded-xl p-4 border border-[rgba(255,255,255,0.05)]">
-                                    <div className="flex items-center justify-between mb-2">
-                                        <h4 className="font-semibold text-slate-800 dark:text-d-heading">
-                                            Bill #{linkedBill.billNumber}
-                                        </h4>
-                                        <span className="text-sm text-slate-500 dark:text-d-muted">
-                                            {new Date(linkedBill.createdAt).toLocaleDateString()}
-                                        </span>
-                                    </div>
-                                    <p className="text-sm text-slate-500 dark:text-d-muted mb-3">
-                                        {linkedBill.customerName || 'Walk-in'} • {formatCurrency(linkedBill.totalBill)}
-                                    </p>
-                                    {linkedBill.hasReturns && (
-                                        <p className="text-xs text-d-accent mb-3 flex items-center gap-1">
-                                            <FiAlertCircle size={14} />
-                                            Has previous returns
-                                        </p>
-                                    )}
-                                    <p className="text-xs text-slate-500 dark:text-d-muted mb-2">Click items to add to return:</p>
-                                    <div className="flex flex-wrap gap-2">
-                                        {billLines.map((item, index) => {
-                                            const remaining = item.remainingQty;
-                                            const isFullyReturned = remaining <= 0;
-                                            return (
-                                                <button
-                                                    key={index}
-                                                    onClick={() => addItemFromBill(item)}
-                                                    disabled={isFullyReturned}
-                                                    className={`px-3 py-2 rounded-xl text-sm transition-all ${
-                                                        isFullyReturned
-                                                            ? 'bg-[rgba(255,255,255,0.02)] text-d-faint cursor-not-allowed'
-                                                            : 'bg-d-glass text-slate-700 dark:text-d-text hover:bg-[rgba(255,210,100,0.1)] hover:border-d-border-hover border border-slate-200 dark:border-d-border'
-                                                    }`}
-                                                >
-                                                    <span className="font-medium">{item.name}</span>
-                                                    <span className="text-xs ml-2 text-slate-500 dark:text-d-muted">
-                                                        {isFullyReturned ? '(Returned)' : `(${remaining} avail)`}
-                                                    </span>
-                                                </button>
-                                            );
-                                        })}
-                                    </div>
-                                    {renderFullReturnButton()}
-                                </div>
-                            )}
-                        </div>}
-
-                        {/* Product Search Section */}
-                        {searchMode === 'product' && <div className="bg-white dark:bg-d-card rounded-2xl border border-slate-200 dark:border-d-border p-6">
-                            <h3 className="text-lg font-semibold text-slate-800 dark:text-d-heading mb-4 flex items-center gap-2">
-                                <FiPackage className="text-d-accent" />
-                                Search & Add Products
-                            </h3>
-                            <form onSubmit={handleBarcodeSubmit} className="flex gap-3">
-                                <div className="relative flex-1" ref={productDropdownRef}>
-                                    <FiSearch className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 dark:text-d-faint" size={16} />
-                                    <input
-                                        ref={barcodeInputRef}
-                                        type="text"
-                                        value={barcode}
-                                        onChange={(e) => handleSearchChange(e.target.value)}
-                                        placeholder="Search by name or barcode..."
-                                        className="w-full pl-11 pr-4 py-3 bg-slate-50 dark:bg-d-bg border border-slate-200 dark:border-d-border rounded-xl text-slate-700 dark:text-d-text placeholder-slate-400 dark:placeholder-d-faint focus:outline-none focus:border-d-border-hover focus:ring-2 focus:ring-[rgba(255,210,100,0.3)]"
-                                    />
-                                    {showProductDropdown && (
-                                        <div className="absolute top-full left-0 right-0 mt-1 bg-white dark:bg-d-elevated border border-slate-200 dark:border-d-border rounded-xl shadow-xl z-50 max-h-60 overflow-auto">
-                                            {productSuggestions.map((p) => (
-                                                <button
-                                                    key={p._id}
-                                                    type="button"
-                                                    onClick={() => addProductFromSuggestion(p)}
-                                                    className="w-full text-left px-4 py-3 hover:bg-slate-50 dark:hover:bg-d-glass transition-colors flex items-center justify-between border-b border-slate-100 dark:border-d-border last:border-b-0"
-                                                >
-                                                    <div>
-                                                        <p className="font-medium text-slate-800 dark:text-d-heading text-sm">{p.name}</p>
-                                                        {p.barcode && <p className="text-xs text-slate-400 dark:text-d-faint font-mono">{p.barcode}</p>}
-                                                    </div>
-                                                    <span className="text-sm text-slate-500 dark:text-d-muted">{business?.currency || 'Rs.'} {(p.sellingPrice || 0).toLocaleString()}</span>
-                                                </button>
-                                            ))}
-                                        </div>
-                                    )}
-                                </div>
-                                <button
-                                    type="submit"
-                                    className="px-6 py-3 bg-gradient-to-r from-d-accent to-d-accent-s text-d-card rounded-xl font-semibold hover:shadow-[0_4px_20px_rgba(255,210,100,0.4)] transition-all flex items-center gap-2"
-                                >
-                                    <FiPlus />
-                                    Add
-                                </button>
-                            </form>
-                        </div>}
-
-                        {/* Return Items List */}
-                        {returnItems.length > 0 && (
-                            <div className="bg-white dark:bg-d-card rounded-2xl border border-slate-200 dark:border-d-border p-6">
-                                <h3 className="text-lg font-semibold text-slate-800 dark:text-d-heading mb-4">
-                                    Return Items ({totalItems})
-                                </h3>
-                                <div className="space-y-2">
-                                    {returnItems.map((item) => (
-                                        <div
-                                            key={item.id}
-                                            className="flex items-center gap-3 px-4 py-3 bg-slate-50 dark:bg-d-bg rounded-xl border border-slate-200 dark:border-d-border"
-                                        >
-                                            {/* Name + meta */}
-                                            <div className="flex-1 min-w-0">
-                                                <p className="font-semibold text-slate-800 dark:text-d-heading text-sm truncate">{item.name}</p>
-                                                <p className="text-xs text-slate-400 dark:text-d-faint">{formatCurrency(item.price)} each</p>
-                                            </div>
-
-                                            {/* Reason */}
-                                            <select
-                                                value={item.reason}
-                                                onChange={(e) => updateReason(item.id, e.target.value)}
-                                                className="px-2 py-1.5 bg-white dark:bg-d-card border border-slate-200 dark:border-d-border rounded-lg text-xs text-slate-600 dark:text-d-text focus:outline-none focus:ring-1 focus:ring-primary-500 shrink-0"
-                                            >
-                                                {RETURN_REASONS.map((r) => (
-                                                    <option key={r.value} value={r.value}>{r.label}</option>
-                                                ))}
-                                            </select>
-
-                                            {/* Qty controls */}
-                                            <div className="flex items-center bg-white dark:bg-d-card rounded-lg border border-slate-200 dark:border-d-border shrink-0">
-                                                <button onClick={() => updateQuantity(item.id, -1)} className="px-2 py-1.5 hover:bg-[rgba(255,107,107,0.1)] rounded-l-lg transition-colors text-d-red">
-                                                    <FiMinus size={13} />
-                                                </button>
-                                                <span className="px-3 py-1.5 text-sm font-bold text-slate-700 dark:text-d-text min-w-[28px] text-center">
-                                                    {item.quantity}
-                                                </span>
-                                                <button onClick={() => updateQuantity(item.id, 1)} className="px-2 py-1.5 hover:bg-[rgba(52,232,161,0.1)] rounded-r-lg transition-colors text-d-green">
-                                                    <FiPlus size={13} />
-                                                </button>
-                                            </div>
-
-                                            {/* Subtotal */}
-                                            <span className="font-bold text-d-red text-sm w-24 text-right shrink-0">
-                                                {formatCurrency(item.price * item.quantity)}
-                                            </span>
-
-                                            {/* Remove */}
-                                            <button onClick={() => removeItem(item.id)} className="p-1.5 text-slate-400 dark:text-d-faint hover:text-d-red hover:bg-[rgba(255,107,107,0.1)] rounded-lg transition-colors shrink-0">
-                                                <FiTrash2 size={15} />
-                                            </button>
-                                        </div>
-                                    ))}
-                                </div>
-                            </div>
-                        )}
-                    </div>
-
-                    {/* Right Column - Summary & Details */}
-                    <div className="space-y-6">
-                        {/* Customer Details & Refund Method — only for standalone returns */}
-                        {!linkedBill && (
-                            <>
-                                <div className="bg-white dark:bg-d-card rounded-2xl border border-slate-200 dark:border-d-border p-6">
-                                    <h3 className="text-lg font-semibold text-slate-800 dark:text-d-heading mb-4">
-                                        Customer Details
-                                    </h3>
-                                    <div className="space-y-4">
-                                        <div>
-                                            <label className="block text-sm text-slate-500 dark:text-d-muted mb-2">Customer Name (Optional)</label>
-                                            <input
-                                                type="text"
-                                                value={customerName}
-                                                onChange={(e) => setCustomerName(e.target.value)}
-                                                placeholder="Enter customer name..."
-                                                className="w-full px-4 py-3 bg-slate-50 dark:bg-d-bg border border-slate-200 dark:border-d-border rounded-xl text-slate-700 dark:text-d-text placeholder-d-faint focus:outline-none focus:border-d-border-hover"
-                                            />
-                                        </div>
-                                        <div>
-                                            <label className="block text-sm text-slate-500 dark:text-d-muted mb-2">Notes (Optional)</label>
-                                            <textarea
-                                                value={notes}
-                                                onChange={(e) => setNotes(e.target.value)}
-                                                placeholder="Add notes..."
-                                                rows={3}
-                                                className="w-full px-4 py-3 bg-slate-50 dark:bg-d-bg border border-slate-200 dark:border-d-border rounded-xl text-slate-700 dark:text-d-text placeholder-d-faint resize-none focus:outline-none focus:border-d-border-hover"
-                                            />
-                                        </div>
-                                    </div>
-                                </div>
-
-                                <div className="bg-white dark:bg-d-card rounded-2xl border border-slate-200 dark:border-d-border p-6">
-                                    <h3 className="text-lg font-semibold text-slate-800 dark:text-d-heading mb-4">
-                                        Refund Method
-                                    </h3>
-                                    {!moneyBookOn && refundMethod === 'cash' && cashBalance != null && (
-                                        <div className={`flex items-center justify-between p-3 rounded-xl border mb-3 ${
-                                            totalRefund > cashBalance
-                                                ? 'bg-red-50 dark:bg-[rgba(239,68,68,0.08)] border-red-200 dark:border-[rgba(239,68,68,0.2)]'
-                                                : 'bg-slate-50 dark:bg-d-bg border-slate-200 dark:border-d-border'
-                                        }`}>
-                                            <span className="text-xs font-medium text-slate-500 dark:text-d-muted">Cash in Hand</span>
-                                            <span className={`text-sm font-bold ${
-                                                totalRefund > cashBalance
-                                                    ? 'text-red-600 dark:text-d-red'
-                                                    : 'text-slate-800 dark:text-d-heading'
-                                            }`}>{cashBalance < 0 ? '-' : ''}{formatCurrency(Math.abs(cashBalance))}</span>
-                                        </div>
-                                    )}
-                                    <div className="space-y-3">
-                                        {REFUND_METHODS.map((method) => (
-                                            <button
-                                                key={method.value}
-                                                onClick={() => setRefundMethod(method.value)}
-                                                className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${
-                                                    refundMethod === method.value
-                                                        ? 'bg-gradient-to-r from-d-accent to-d-accent-s text-d-card'
-                                                        : 'bg-d-glass text-slate-500 dark:text-d-muted hover:bg-d-glass-hover border border-slate-200 dark:border-d-border'
-                                                }`}
-                                            >
-                                                <span className="text-xl">{method.icon}</span>
-                                                <span className="font-medium">{method.label}</span>
-                                                {refundMethod === method.value && (
-                                                    <FiCheck className="ml-auto" size={18} />
-                                                )}
-                                            </button>
-                                        ))}
-                                    </div>
-                                    <AccountPicker
-                                        method={refundMethod}
-                                        value={refundAccountId}
-                                        onChange={(id) => setRefundAccountId(id)}
-                                        amount={totalRefund}
-                                        direction="out"
-                                        onInsufficientChange={setRefundShort}
-                                        className="mt-4"
-                                    />
-                                </div>
-                            </>
-                        )}
-
-                        {/* Info for linked bill */}
-                        {linkedBill && (
-                            <div className="bg-white dark:bg-d-card rounded-2xl border border-slate-200 dark:border-d-border p-6">
-                                <h3 className="text-lg font-semibold text-slate-800 dark:text-d-heading mb-3">
-                                    Refund Info
-                                </h3>
-                                <p className="text-sm text-slate-500 dark:text-d-muted">
-                                    {linkedBill.customer
-                                        ? 'This is a customer bill. The refund will be applied as a ledger adjustment to their account balance.'
-                                        : 'This is a walk-in bill. A cash refund will be processed.'}
-                                </p>
-                                {!linkedBill.customer && !showFullReturn && (
-                                    <AccountPicker
-                                        method="cash"
-                                        anyType
-                                        defaultId={drawerId}
-                                        value={refundAccountId}
-                                        onChange={(id) => setRefundAccountId(id)}
-                                        amount={totalRefund}
-                                        direction="out"
-                                        onInsufficientChange={setRefundShort}
-                                        label="Refund from"
-                                        className="mt-4"
-                                    />
-                                )}
-                            </div>
-                        )}
-
-                        {/* Summary & Process Button */}
-                        <div className="bg-white dark:bg-d-card rounded-2xl border border-slate-200 dark:border-d-border p-6">
-                            <h3 className="text-lg font-semibold text-slate-800 dark:text-d-heading mb-4">
-                                Return Summary
-                            </h3>
-                            <div className="space-y-3 mb-6">
-                                <div className="flex justify-between text-slate-500 dark:text-d-muted">
-                                    <span>Total Items</span>
-                                    <span className="font-medium text-slate-700 dark:text-d-text">{totalItems}</span>
-                                </div>
-                                <div className="flex justify-between text-xl font-bold pt-3 border-t border-slate-200 dark:border-d-border">
-                                    <span className="text-slate-800 dark:text-d-heading">Total Refund</span>
-                                    <span className="text-d-red font-display">{formatCurrency(totalRefund)}</span>
-                                </div>
-                            </div>
-
-                            {error && (
-                                <div className="mb-4 p-3 bg-[rgba(255,107,107,0.1)] border border-[rgba(255,107,107,0.3)] rounded-xl text-d-red text-sm flex items-center gap-2">
-                                    <FiAlertCircle />
-                                    {error}
-                                </div>
-                            )}
-
-                            <button
-                                onClick={processReturn}
-                                disabled={processing || returnItems.length === 0}
-                                className="w-full py-4 bg-gradient-to-r from-d-red to-[#e85555] text-white rounded-xl font-semibold hover:shadow-[0_4px_20px_rgba(255,107,107,0.4)] transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-                            >
-                                {processing ? (
-                                    <>
-                                        <FiRefreshCw className="animate-spin" />
-                                        Processing...
-                                    </>
+    const billTable = () => (
+        <ul className="rounded-xl border border-hairline overflow-hidden">
+            {billLines.map((item) => {
+                const ri = returningFor(item.groupId);
+                const taken = ri?.quantity || 0;
+                const left = item.remainingQty - taken; // still on the bill after this return
+                const done = item.remainingQty <= 0;
+                return (
+                    <li key={item.groupId} className={`grid grid-cols-[minmax(0,1fr)_auto] items-center gap-4 px-4 py-3 shadow-[inset_0_-1px_0_var(--hairline)] last:shadow-none ${taken ? 'bg-accent/40' : ''}`}>
+                        {/* Left: name + what is left; the "coming back" tag sits here so nothing pushes the buttons */}
+                        <div className="min-w-0">
+                            <p className={`text-body-lg font-medium truncate ${done ? 'text-muted-foreground' : 'text-foreground'}`}>{item.name}</p>
+                            <p className="text-body-sm text-muted-foreground tabular-nums">
+                                {formatCurrency(item.price)} each ·{' '}
+                                {done ? (
+                                    'all returned before'
                                 ) : (
                                     <>
-                                        <FiRotateCcw />
-                                        Process Return
+                                        <span className="font-medium text-foreground">{left}</span> of {item.qty} left on the bill
                                     </>
                                 )}
-                            </button>
+                            </p>
+                            {/* always takes its line (hidden at 0) so the row height — and the buttons — never move */}
+                            {!done ? (
+                                <p className={`mt-1 text-body-sm font-medium text-destructive tabular-nums ${taken ? '' : 'invisible'}`} aria-hidden={!taken}>
+                                    {taken || 0} coming back · {formatCurrency(item.price * (taken || 0))}
+                                </p>
+                            ) : null}
+                        </div>
+                        {/* Right: the buttons — same place and size on every row, whatever happens */}
+                        {done ? (
+                            <div className="flex items-center justify-end gap-2 w-[300px]">
+                                <StatusChip tone="neutral" size="sm" label="Returned" />
+                            </div>
+                        ) : (
+                            <div className="flex items-center justify-end gap-2 w-[300px]">
+                                <Button size="xs" variant="outline" className="w-[110px] justify-center" disabled={left <= 0} onClick={() => addItemFromBill(item)}>
+                                    <FiMinus aria-hidden="true" /> Remove
+                                </Button>
+                                <Button size="xs" variant="outline" className="w-[130px] justify-center tabular-nums" disabled={left <= 0} onClick={() => returnAllOf(item)}>
+                                    Remove all{left > 0 ? ` (${left})` : ''}
+                                </Button>
+                                <span className={`w-8 flex-none ${taken ? '' : 'invisible'}`}>
+                                    <IconButton label={`Keep all ${item.name} on the bill`} size="xs" onClick={() => ri && removeItem(ri.id)} tabIndex={taken ? 0 : -1}>
+                                        <FiRotateCcw />
+                                    </IconButton>
+                                </span>
+                            </div>
+                        )}
+                    </li>
+                );
+            })}
+        </ul>
+    );
 
-                            {returnItems.length > 0 && (
-                                <button
-                                    onClick={resetForm}
-                                    className="w-full mt-3 py-3 border border-slate-200 dark:border-d-border text-slate-500 dark:text-d-muted rounded-xl font-medium hover:bg-d-glass transition-colors"
-                                >
-                                    Clear All
-                                </button>
-                            )}
+    // Step 2 without a bill: the products added
+    const looseItems = () =>
+        returnItems.length === 0 ? (
+            <p className="py-6 text-center text-body-sm text-muted-foreground">Nothing added yet — scan or search a product above.</p>
+        ) : (
+            <ul className="rounded-xl border border-hairline overflow-hidden">
+                {returnItems.map((item) => (
+                    <li key={item.id} className="flex flex-wrap items-center gap-3 px-4 py-3 shadow-[inset_0_-1px_0_var(--hairline)] last:shadow-none">
+                        <div className="flex-1 min-w-[160px]">
+                            <p className="text-body font-medium text-foreground truncate">{item.name}</p>
+                            <p className="text-caption text-muted-foreground tabular-nums">{formatCurrency(item.price)} each</p>
+                        </div>
+                        <div className="inline-flex items-center rounded-lg border border-border">
+                            <IconButton label="One less" size="2xs" onClick={() => updateQuantity(item.id, -1)}>
+                                <FiMinus />
+                            </IconButton>
+                            <span className="min-w-[28px] text-center text-body font-semibold tabular-nums">{item.quantity}</span>
+                            <IconButton label="One more" size="2xs" onClick={() => updateQuantity(item.id, 1)}>
+                                <FiPlus />
+                            </IconButton>
+                        </div>
+                        <Select size="xs" className="w-[170px]" value={item.reason} onChange={(e) => updateReason(item.id, e.target.value)} aria-label={`Reason for ${item.name}`}>
+                            {RETURN_REASONS.map((r) => (
+                                <option key={r.value} value={r.value}>
+                                    {r.label}
+                                </option>
+                            ))}
+                        </Select>
+                        <span className="w-24 text-right text-body font-semibold tabular-nums text-foreground">{formatCurrency(item.price * item.quantity)}</span>
+                        <IconButton label={`Remove ${item.name}`} size="xs" onClick={() => removeItem(item.id)}>
+                            <FiTrash2 />
+                        </IconButton>
+                    </li>
+                ))}
+            </ul>
+        );
+
+    const saleFound = searchMode === 'product' || !!linkedBill;
+    const mode = MODES.find((m) => m.value === searchMode);
+
+    return (
+        <div className="h-full flex min-h-0">
+            {/* Left: the two steps */}
+            <div className="flex-1 min-w-0 overflow-y-auto">
+                <div className="p-6 max-w-[1100px] mx-auto flex flex-col gap-4">
+                    <div className="flex flex-wrap items-end justify-between gap-3">
+                        <div>
+                            <h1 className="font-heading text-h2 text-foreground">Returns</h1>
+                            <p className="text-body text-muted-foreground">Find the sale, choose what comes back, then refund.</p>
+                        </div>
+                        <div className="flex items-center gap-2 rounded-xl border border-hairline bg-card px-3 py-2">
+                            <FiRotateCcw className="w-4 h-4 text-muted-foreground" aria-hidden="true" />
+                            <span className="text-body-sm text-muted-foreground">Today</span>
+                            <span className="text-body font-semibold tabular-nums text-foreground">
+                                {todaySummary.totalReturns} return{todaySummary.totalReturns === 1 ? '' : 's'}
+                            </span>
+                            <span className="text-body-sm tabular-nums text-muted-foreground">· {formatCurrency(todaySummary.totalRefunded)}</span>
                         </div>
                     </div>
+
+                    <Step n={1} title="Find the sale" hint={saleFound && searchMode !== 'product' ? undefined : mode?.hint} done={!!linkedBill}>
+                        {linkedBill ? (
+                            <div className="flex flex-wrap items-center gap-3 rounded-xl bg-accent px-4 py-3">
+                                <FiFileText className="w-5 h-5 text-accent-foreground flex-none" aria-hidden="true" />
+                                <div className="flex-1 min-w-0">
+                                    <p className="text-body-lg font-semibold text-foreground">
+                                        Bill #{linkedBill.billNumber} <span className="font-normal text-muted-foreground">· {formatCurrency(linkedBill.total ?? linkedBill.totalBill)}</span>
+                                    </p>
+                                    <p className="text-body-sm text-muted-foreground">
+                                        {linkedBill.customerName || 'Walk-in'} · {dateOf(linkedBill.createdAt)}
+                                        {linkedBill.hasReturns ? ' · some items returned before' : ''}
+                                    </p>
+                                </div>
+                                <Button
+                                    size="xs"
+                                    variant="outline"
+                                    onClick={() => {
+                                        setLinkedBill(null);
+                                        setReturnItems([]);
+                                        setError('');
+                                    }}
+                                >
+                                    Pick another bill
+                                </Button>
+                            </div>
+                        ) : (
+                            <div className="flex flex-col gap-3">
+                                <SegmentedControl label="Find the sale by" value={searchMode} onChange={switchMode} options={MODES.map(({ value, label }) => ({ value, label }))} />
+                                {findSale()}
+                                {error && !returnItems.length ? (
+                                    <Alert tone="destructive" icon={FiAlertCircle}>
+                                        {error}
+                                    </Alert>
+                                ) : null}
+                            </div>
+                        )}
+                    </Step>
+
+                    <Step
+                        n={2}
+                        title="What's coming back?"
+                        hint={
+                            !saleFound
+                                ? 'Find the sale first.'
+                                : linkedBill
+                                  ? 'Remove takes one off the bill; Remove all takes everything left of that item.'
+                                  : 'Each product you add shows here.'
+                        }
+                        done={false}
+                        action={
+                            canFullReturn ? (
+                                <Button variant="outline" size="xs" onClick={openFullReturn} disabled={processing}>
+                                    <FiRotateCcw aria-hidden="true" />
+                                    {isPartiallyReturned ? 'Return all that is left' : 'Return the whole bill'}
+                                </Button>
+                            ) : null
+                        }
+                    >
+                        {!saleFound ? (
+                            <div className="rounded-xl border border-dashed border-border py-8 text-center text-body-sm text-muted-foreground">The items appear here once you pick the bill.</div>
+                        ) : linkedBill ? (
+                            billTable()
+                        ) : (
+                            looseItems()
+                        )}
+                    </Step>
                 </div>
             </div>
 
-            {/* Full Return Confirm Modal */}
-            {showFullReturn && linkedBill && (
-                <div
-                    className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4"
-                    onKeyDown={(e) => { if (e.key === 'Escape' && !processing) setShowFullReturn(false); }}
-                >
-                    <div className="bg-white dark:bg-d-card border border-slate-200 dark:border-d-border rounded-2xl w-full max-w-md animate-pop-in max-h-[90vh] overflow-y-auto">
-                        <div className="p-6">
-                            <h3 className="text-xl font-bold text-slate-800 dark:text-d-heading mb-1">
-                                {isPartiallyReturned ? 'Return remaining items' : 'Return full bill'}
-                            </h3>
-                            <p className="text-sm text-slate-500 dark:text-d-muted mb-4">
-                                Bill #{linkedBill.billNumber} · {linkedBill.customerName || 'Walk-in'}
-                            </p>
+            {/* Right: the refund (like the till's "Current sale") */}
+            <aside className="w-[320px] xl:w-[360px] flex-none flex flex-col border-l border-hairline bg-card min-h-0" aria-label="Refund">
+                <div className="px-5 pt-5 pb-3 flex items-center gap-3">
+                    <span className="w-7 h-7 rounded-full bg-primary text-primary-foreground inline-flex items-center justify-center text-body-sm font-semibold" aria-hidden="true">
+                        3
+                    </span>
+                    <div className="flex-1 min-w-0">
+                        <h2 className="font-heading text-h4 text-foreground">Refund</h2>
+                        <p className="text-caption text-muted-foreground">
+                            {linkedBill ? (linkedBill.customer ? 'Goes back to the customer’s account.' : 'Paid back in cash.') : searchMode === 'product' ? 'Paid back in cash.' : 'Pick the sale to see the refund.'}
+                        </p>
+                    </div>
+                    {returnItems.length > 0 && (
+                        <Button variant="ghost" size="xs" onClick={() => { setReturnItems([]); setError(''); }} title="Put every picked item back on the bill">
+                            Clear
+                        </Button>
+                    )}
+                </div>
 
-                            <p className="text-xs font-semibold uppercase tracking-wide text-slate-400 dark:text-d-faint mb-2">
-                                Items to return
-                            </p>
-                            <div className="space-y-1.5 mb-4">
-                                {fullReturnLines.map((item) => (
-                                    <div key={item._id} className="flex items-center justify-between px-3 py-2 bg-slate-50 dark:bg-d-bg rounded-lg border border-slate-200 dark:border-d-border text-sm">
-                                        <span className="text-slate-700 dark:text-d-text truncate">{item.name}</span>
-                                        <span className="font-semibold text-slate-800 dark:text-d-heading shrink-0 ml-3">
-                                            × {item.remaining}
-                                            {item.remaining !== item.qty && (
-                                                <span className="font-normal text-xs text-slate-400 dark:text-d-faint ml-1">of {item.qty}</span>
-                                            )}
+                <div className="flex-1 min-h-0 overflow-y-auto px-5 flex flex-col gap-4">
+                    {returnItems.length ? (
+                        <ul className="flex flex-col">
+                            {returnItems.map((ri) => (
+                                <li key={ri.id} className="flex flex-col gap-1.5 py-2.5 shadow-[inset_0_-1px_0_var(--hairline)] last:shadow-none">
+                                    <div className="flex items-start justify-between gap-3">
+                                        <span className="min-w-0 text-body text-foreground truncate">
+                                            {ri.name} <span className="text-muted-foreground">× {ri.quantity}</span>
                                         </span>
+                                        <span className="text-body font-medium tabular-nums text-foreground flex-none">{formatCurrency(ri.price * ri.quantity)}</span>
                                     </div>
-                                ))}
-                            </div>
+                                    <div className="flex items-center gap-2">
+                                        <Select size="xs" className="flex-1 min-w-0" value={ri.reason} onChange={(e) => updateReason(ri.id, e.target.value)} aria-label={`Why ${ri.name} came back`}>
+                                            {RETURN_REASONS.map((r) => (
+                                                <option key={r.value} value={r.value}>
+                                                    {r.label}
+                                                </option>
+                                            ))}
+                                        </Select>
+                                        <IconButton label={`Undo ${ri.name}`} size="xs" onClick={() => removeItem(ri.id)}>
+                                            <FiX />
+                                        </IconButton>
+                                    </div>
+                                </li>
+                            ))}
+                        </ul>
+                    ) : (
+                        <div className="rounded-xl border border-dashed border-border px-4 py-6 text-center">
+                            <FiRotateCcw className="w-5 h-5 mx-auto text-muted-foreground" aria-hidden="true" />
+                            <p className="mt-2 text-body-sm text-muted-foreground">Nothing picked yet.</p>
+                        </div>
+                    )}
 
-                            <div className="grid grid-cols-1 gap-3 mb-4">
-                                <div>
-                                    <label className="block text-sm text-slate-500 dark:text-d-muted mb-1.5">Reason (applies to all items)</label>
-                                    <select
-                                        value={fullReturnReason}
-                                        onChange={(e) => setFullReturnReason(e.target.value)}
-                                        className="w-full px-3 py-2.5 bg-slate-50 dark:bg-d-bg border border-slate-200 dark:border-d-border rounded-xl text-sm text-slate-700 dark:text-d-text focus:outline-none focus:border-d-border-hover"
-                                    >
-                                        {RETURN_REASONS.map((r) => (
-                                            <option key={r.value} value={r.value}>{r.label}</option>
-                                        ))}
-                                    </select>
-                                </div>
-                                <div>
-                                    <label className="block text-sm text-slate-500 dark:text-d-muted mb-1.5">Note (optional)</label>
-                                    <input
-                                        type="text"
-                                        value={fullReturnNote}
-                                        onChange={(e) => setFullReturnNote(e.target.value)}
-                                        placeholder="Add a note..."
-                                        className="w-full px-3 py-2.5 bg-slate-50 dark:bg-d-bg border border-slate-200 dark:border-d-border rounded-xl text-sm text-slate-700 dark:text-d-text placeholder-d-faint focus:outline-none focus:border-d-border-hover"
-                                    />
-                                </div>
-                            </div>
-
-                            <div className="flex items-center justify-between px-4 py-3 rounded-xl bg-[rgba(255,107,107,0.06)] border border-[rgba(255,107,107,0.2)] mb-2">
-                                <span className="text-sm text-slate-600 dark:text-d-text">Estimated refund</span>
-                                <span className="font-bold text-d-red">≈ {formatCurrency(Math.round(fullReturnEstimate * 100) / 100)}</span>
-                            </div>
-                            <p className="text-xs text-slate-400 dark:text-d-faint mb-4">
-                                {linkedBill.customer
-                                    ? "Refund goes to the customer's account balance."
-                                    : 'Cash refund.'}{' '}
-                                The final amount is calculated when the return is processed.
-                            </p>
-                            {!linkedBill.customer && (
-                                <AccountPicker
-                                    method="cash"
-                                    anyType
-                                    defaultId={drawerId}
-                                    value={refundAccountId}
-                                    onChange={(id) => setRefundAccountId(id)}
-                                    amount={Math.round(fullReturnEstimate * 100) / 100}
-                                    direction="out"
-                                    onInsufficientChange={setRefundShort}
-                                    label="Refund from"
-                                    className="mb-4"
-                                />
-                            )}
-
-                            {fullReturnError && (
-                                <div className="mb-4 p-3 bg-[rgba(255,107,107,0.1)] border border-[rgba(255,107,107,0.3)] rounded-xl text-d-red text-sm flex items-center gap-2">
-                                    <FiAlertCircle className="shrink-0" />
-                                    {fullReturnError}
-                                </div>
-                            )}
-
-                            <div className="flex gap-3">
-                                <button
-                                    onClick={() => setShowFullReturn(false)}
-                                    disabled={processing}
-                                    className="flex-1 py-3 border border-slate-200 dark:border-d-border text-slate-600 dark:text-d-muted rounded-xl font-medium hover:bg-d-glass transition-colors disabled:opacity-50"
-                                >
-                                    Cancel
-                                </button>
-                                <button
-                                    onClick={processFullReturn}
-                                    disabled={processing}
-                                    className="flex-1 py-3 bg-gradient-to-r from-d-red to-[#e85555] text-white rounded-xl font-semibold hover:shadow-[0_4px_20px_rgba(255,107,107,0.4)] transition-all disabled:opacity-50 flex items-center justify-center gap-2"
-                                >
-                                    {processing ? <FiRefreshCw className="animate-spin" /> : <FiRotateCcw />}
-                                    {processing ? 'Processing...' : `Return ${fullReturnQty} item${fullReturnQty === 1 ? '' : 's'}`}
-                                </button>
+                    {linkedBill && linkedBill.customer ? (
+                        <div className="flex items-start gap-3 rounded-xl bg-muted px-3 py-2.5">
+                            <FiUser className="w-4 h-4 mt-0.5 text-muted-foreground flex-none" aria-hidden="true" />
+                            <div className="min-w-0">
+                                <p className="text-body font-medium text-foreground truncate">Refund to {linkedBill.customerName || 'the customer'}’s account</p>
+                                <p className="text-caption text-muted-foreground">No cash is paid. It lowers what they owe, or becomes store credit.</p>
                             </div>
                         </div>
-                    </div>
+                    ) : null}
+
+                    {linkedBill && !linkedBill.customer && !showFullReturn ? (
+                        <AccountPicker method="cash" anyType defaultId={drawerId} value={refundAccountId} onChange={(id) => setRefundAccountId(id)} amount={totalRefund} direction="out" onInsufficientChange={setRefundShort} label="Refund from" />
+                    ) : null}
+
+                    {!linkedBill && searchMode === 'product' ? (
+                        <>
+                            <Field label="Customer name" optional>
+                                <Input value={customerName} onChange={(e) => setCustomerName(e.target.value)} placeholder="Walk-in" />
+                            </Field>
+                            <Field label="Note" optional>
+                                <Textarea value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Why it came back, condition…" rows={2} />
+                            </Field>
+                            {REFUND_METHODS.length > 1 && (
+                                <div className="flex flex-col gap-1.5">
+                                    <span className="text-body-sm font-medium text-foreground">Refund as</span>
+                                    <SegmentedControl label="Refund as" value={refundMethod} onChange={setRefundMethod} options={REFUND_METHODS.map((m) => ({ value: m.value, label: m.label }))} />
+                                </div>
+                            )}
+                            {!moneyBookOn && refundMethod === 'cash' && cashBalance != null && (
+                                <div className={`flex items-center justify-between rounded-xl px-3 py-2 ${totalRefund > cashBalance ? 'bg-destructive-chip text-destructive-chip-foreground' : 'bg-muted text-muted-foreground'}`}>
+                                    <span className="text-body-sm">Cash in the drawer</span>
+                                    <span className="text-body font-semibold tabular-nums">
+                                        {cashBalance < 0 ? '-' : ''}
+                                        {formatCurrency(Math.abs(cashBalance))}
+                                    </span>
+                                </div>
+                            )}
+                            <AccountPicker method={refundMethod} value={refundAccountId} onChange={(id) => setRefundAccountId(id)} amount={totalRefund} direction="out" onInsufficientChange={setRefundShort} />
+                        </>
+                    ) : null}
                 </div>
+
+                <div className="border-t border-hairline px-5 py-4 flex flex-col gap-3">
+                    <div className="flex items-center justify-between text-body text-muted-foreground">
+                        <span>Items coming back</span>
+                        <span className="tabular-nums text-foreground">{totalItems}</span>
+                    </div>
+                    <div className="flex items-baseline justify-between">
+                        <span className="text-body-lg font-medium text-foreground">Refund</span>
+                        <span className="font-heading text-h2 tabular-nums text-foreground">{formatCurrency(totalRefund)}</span>
+                    </div>
+                    {error && returnItems.length > 0 ? (
+                        <Alert tone="destructive" icon={FiAlertCircle}>
+                            {error}
+                        </Alert>
+                    ) : null}
+                    <Button variant="destructive" size="touch" className="w-full" onClick={processReturn} loading={processing} disabled={processing || returnItems.length === 0}>
+                        <FiRotateCcw aria-hidden="true" />
+                        {processing ? 'Processing…' : returnItems.length ? `Refund ${formatCurrency(totalRefund)}` : 'Pick items to return'}
+                    </Button>
+                </div>
+            </aside>
+
+            {/* Full Return Confirm Modal */}
+            {showFullReturn && linkedBill && (
+                <DialogShell size="md" className="max-h-[90vh] overflow-y-auto" onClose={() => { if (!processing) setShowFullReturn(false); }}>
+                    <div className="p-6 flex flex-col gap-4">
+                        <div>
+                            <h3 className="font-heading text-h3 text-foreground">{isPartiallyReturned ? 'Return the remaining items' : 'Return the whole bill'}</h3>
+                            <p className="text-body-sm text-muted-foreground">
+                                Bill #{linkedBill.billNumber} · {linkedBill.customerName || 'Walk-in'}
+                            </p>
+                        </div>
+
+                        <div>
+                            <p className="mb-1.5 font-mono text-overline-lg uppercase text-muted-foreground">Items to return</p>
+                            <ul className="rounded-xl border border-hairline overflow-hidden">
+                                {fullReturnLines.map((item) => (
+                                    <li key={item._id} className="flex items-center justify-between gap-3 px-3 py-2 text-body shadow-[inset_0_-1px_0_var(--hairline)] last:shadow-none">
+                                        <span className="text-foreground truncate">{item.name}</span>
+                                        <span className="font-semibold tabular-nums text-foreground shrink-0">
+                                            × {item.remaining}
+                                            {item.remaining !== item.qty && <span className="ml-1 font-normal text-caption text-muted-foreground">of {item.qty}</span>}
+                                        </span>
+                                    </li>
+                                ))}
+                            </ul>
+                        </div>
+
+                        <Field label="Reason" hint="Used for every item.">
+                            <Select value={fullReturnReason} onChange={(e) => setFullReturnReason(e.target.value)}>
+                                {RETURN_REASONS.map((r) => (
+                                    <option key={r.value} value={r.value}>
+                                        {r.label}
+                                    </option>
+                                ))}
+                            </Select>
+                        </Field>
+                        <Field label="Note" optional>
+                            <Input value={fullReturnNote} onChange={(e) => setFullReturnNote(e.target.value)} placeholder="Add a note" />
+                        </Field>
+
+                        <div className="rounded-xl bg-muted px-4 py-3">
+                            <div className="flex items-center justify-between">
+                                <span className="text-body text-muted-foreground">Estimated refund</span>
+                                <span className="font-heading text-h4 tabular-nums text-foreground">≈ {formatCurrency(Math.round(fullReturnEstimate * 100) / 100)}</span>
+                            </div>
+                            <p className="mt-1 text-caption text-muted-foreground">
+                                {linkedBill.customer ? "Goes to the customer's account balance." : 'Refunded in cash.'} The exact amount is worked out when the return is saved.
+                            </p>
+                        </div>
+
+                        {!linkedBill.customer && (
+                            <AccountPicker
+                                method="cash"
+                                anyType
+                                defaultId={drawerId}
+                                value={refundAccountId}
+                                onChange={(id) => setRefundAccountId(id)}
+                                amount={Math.round(fullReturnEstimate * 100) / 100}
+                                direction="out"
+                                onInsufficientChange={setRefundShort}
+                                label="Refund from"
+                            />
+                        )}
+
+                        {fullReturnError && (
+                            <Alert tone="destructive" icon={FiAlertCircle}>
+                                {fullReturnError}
+                            </Alert>
+                        )}
+
+                        <div className="flex gap-2 justify-end">
+                            <Button variant="outline" onClick={() => setShowFullReturn(false)} disabled={processing}>
+                                Cancel
+                            </Button>
+                            <Button variant="destructive" onClick={processFullReturn} loading={processing} disabled={processing}>
+                                <FiRotateCcw aria-hidden="true" />
+                                {processing ? 'Processing…' : `Return ${fullReturnQty} item${fullReturnQty === 1 ? '' : 's'}`}
+                            </Button>
+                        </div>
+                    </div>
+                </DialogShell>
             )}
 
             {/* Success Modal */}
             {showSuccess && returnResult && (
-                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-                    <div className="bg-white dark:bg-d-card border border-slate-200 dark:border-d-border rounded-2xl w-full max-w-md animate-pop-in">
-                        <div className="p-8 text-center">
-                            <div className="w-16 h-16 bg-[rgba(52,232,161,0.1)] rounded-full flex items-center justify-center mx-auto mb-4">
-                                <FiCheck className="text-d-green" size={32} />
+                <DialogShell size="md">
+                    <div className="p-6 flex flex-col gap-4">
+                        <div className="flex items-center gap-3">
+                            <span className="w-10 h-10 rounded-full bg-success-chip text-success-chip-foreground inline-flex items-center justify-center flex-none">
+                                <FiCheck className="w-5 h-5" aria-hidden="true" />
+                            </span>
+                            <div>
+                                <h3 className="font-heading text-h3 text-foreground">Return saved</h3>
+                                <p className="text-body-sm text-muted-foreground">Return #{returnResult.returnNumber}</p>
                             </div>
-                            <h3 className="text-2xl font-bold text-slate-800 dark:text-d-heading mb-2">
-                                Return Processed!
-                            </h3>
-                            <p className="text-slate-500 dark:text-d-muted mb-6">
-                                Return #{returnResult.returnNumber}
-                            </p>
-
-                            <div className="bg-[rgba(255,255,255,0.02)] rounded-xl p-4 mb-6 text-left border border-[rgba(255,255,255,0.05)]">
-                                <div className="flex justify-between py-2 border-b border-slate-200 dark:border-d-border">
-                                    <span className="text-slate-500 dark:text-d-muted">Items Returned</span>
-                                    <span className="font-semibold text-slate-700 dark:text-d-text">{returnResult.totalItems}</span>
-                                </div>
-                                {returnResult.debtCancelled > 0 ? (
-                                    <>
-                                        <div className="flex justify-between py-2 border-b border-slate-200 dark:border-d-border">
-                                            <span className="text-slate-500 dark:text-d-muted">Items Value</span>
-                                            <span className="font-semibold text-slate-700 dark:text-d-text">{formatCurrency(returnResult.refundAmount)}</span>
-                                        </div>
-                                        <div className="flex justify-between py-2 border-b border-slate-200 dark:border-d-border">
-                                            <span className="text-slate-500 dark:text-d-muted">Cash to Refund</span>
-                                            <span className="font-semibold text-d-red">{formatCurrency(returnResult.cashRefundAmount)}</span>
-                                        </div>
-                                        <div className="flex justify-between py-2 border-b border-slate-200 dark:border-d-border">
-                                            <span className="text-slate-400 dark:text-d-faint text-sm">Debt Written Off</span>
-                                            <span className="text-sm text-slate-500 dark:text-d-muted">{formatCurrency(returnResult.debtCancelled)}</span>
-                                        </div>
-                                    </>
-                                ) : (
-                                    <div className="flex justify-between py-2 border-b border-slate-200 dark:border-d-border">
-                                        <span className="text-slate-500 dark:text-d-muted">
-                                            {returnResult.refundMethod === 'ledger_adjust' ? 'Credited to account' : 'Cash to Refund'}
-                                        </span>
-                                        <span className="font-semibold text-d-red">{formatCurrency(returnResult.cashRefundAmount ?? returnResult.refundAmount)}</span>
-                                    </div>
-                                )}
-                                <div className="flex justify-between py-2">
-                                    <span className="text-slate-500 dark:text-d-muted">Refund Method</span>
-                                    <span className="font-semibold text-slate-700 dark:text-d-text uppercase">{(returnResult.refundMethod || refundMethod).replace('_', ' ')}</span>
-                                </div>
-                                {returnResult.creditMoves?.length > 0 && (
-                                    <div className="pt-2 mt-1 border-t border-slate-200 dark:border-d-border space-y-1">
-                                        {returnResult.creditMoves.map((m, i) => (
-                                            <p key={i} className="text-sm text-emerald-600 dark:text-d-green">
-                                                {formatCurrency(m.amount)} credit applied to Bill #{m.toNumber}
-                                            </p>
-                                        ))}
-                                    </div>
-                                )}
-                                {!returnResult.creditMoves?.length && returnResult.keptCredit > 0 && (
-                                    <p className="pt-2 mt-1 border-t border-slate-200 dark:border-d-border text-sm text-emerald-600 dark:text-d-green">
-                                        {formatCurrency(returnResult.keptCredit)} kept as credit for the customer
-                                    </p>
-                                )}
-                            </div>
-
-                            <button
-                                onClick={resetForm}
-                                className="w-full py-3 bg-gradient-to-r from-d-green to-[#2bc88a] text-d-card rounded-xl font-semibold hover:shadow-[0_4px_20px_rgba(52,232,161,0.4)] transition-all"
-                            >
-                                New Return
-                            </button>
                         </div>
+
+                        <dl className="rounded-xl border border-hairline overflow-hidden text-body">
+                            <div className="flex justify-between px-4 py-2.5 shadow-[inset_0_-1px_0_var(--hairline)]">
+                                <dt className="text-muted-foreground">Items returned</dt>
+                                <dd className="font-medium tabular-nums text-foreground">{returnResult.totalItems}</dd>
+                            </div>
+                            {returnResult.debtCancelled > 0 ? (
+                                <>
+                                    <div className="flex justify-between px-4 py-2.5 shadow-[inset_0_-1px_0_var(--hairline)]">
+                                        <dt className="text-muted-foreground">Items value</dt>
+                                        <dd className="font-medium tabular-nums text-foreground">{formatCurrency(returnResult.refundAmount)}</dd>
+                                    </div>
+                                    <div className="flex justify-between px-4 py-2.5 shadow-[inset_0_-1px_0_var(--hairline)]">
+                                        <dt className="text-muted-foreground">Cash to refund</dt>
+                                        <dd className="font-semibold tabular-nums text-destructive">{formatCurrency(returnResult.cashRefundAmount)}</dd>
+                                    </div>
+                                    <div className="flex justify-between px-4 py-2.5 shadow-[inset_0_-1px_0_var(--hairline)]">
+                                        <dt className="text-muted-foreground">Debt written off</dt>
+                                        <dd className="tabular-nums text-muted-foreground">{formatCurrency(returnResult.debtCancelled)}</dd>
+                                    </div>
+                                </>
+                            ) : (
+                                <div className="flex justify-between px-4 py-2.5 shadow-[inset_0_-1px_0_var(--hairline)]">
+                                    <dt className="text-muted-foreground">{returnResult.refundMethod === 'ledger_adjust' ? 'Credited to their account' : 'Cash to refund'}</dt>
+                                    <dd className="font-semibold tabular-nums text-destructive">{formatCurrency(returnResult.cashRefundAmount ?? returnResult.refundAmount)}</dd>
+                                </div>
+                            )}
+                            <div className="flex justify-between px-4 py-2.5">
+                                <dt className="text-muted-foreground">Refunded as</dt>
+                                <dd className="font-medium text-foreground capitalize">{(returnResult.refundMethod || refundMethod).replace('_', ' ')}</dd>
+                            </div>
+                        </dl>
+                        {returnResult.creditMoves?.length > 0 && (
+                            <div className="flex flex-col gap-1">
+                                {returnResult.creditMoves.map((m, i) => (
+                                    <p key={i} className="text-body-sm text-success">
+                                        {formatCurrency(m.amount)} credit applied to Bill #{m.toNumber}
+                                    </p>
+                                ))}
+                            </div>
+                        )}
+                        {!returnResult.creditMoves?.length && returnResult.keptCredit > 0 && (
+                            <p className="text-body-sm text-success">{formatCurrency(returnResult.keptCredit)} kept as credit for the customer</p>
+                        )}
+
+                        <Button variant="primary" size="touch" className="w-full" onClick={resetForm}>
+                            New return
+                        </Button>
                     </div>
-                </div>
+                </DialogShell>
             )}
         </div>
     );

@@ -1,4 +1,9 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import { TableSkeleton } from '../components/ui/PageSkeleton';
+import { cn, Spinner, EmptyState, StatusChip, TablePager, TABLE_CARD, TABLE_HEAD_ROW, TABLE_TH, TABLE_ROW, TABLE_TD, TABLE_GROUP_ROW, TABLE_GROUP_TD, TABLE_SCROLL, TableScroll } from '../components/ui';
+import { getStatus } from '../utils/statusTones';
+import { PageHeader } from '../components/ui/PageHeader';
+import { DialogShell } from '../components/ui/Dialog';
 import { useBusiness } from '../context/BusinessContext';
 import { getCashBook, getCashBalance, setOpeningBalance, manualDeposit, manualWithdraw } from '../services/api/cashbook';
 import {
@@ -31,15 +36,15 @@ const TYPE_LABELS = {
 };
 
 const TYPE_COLORS = {
-    opening_balance: 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400',
-    manual_deposit: 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400',
-    manual_withdrawal: 'bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400',
-    sale_collection: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400',
-    vendor_payment: 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400',
-    customer_refund: 'bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-400',
-    sale_cancel: 'bg-slate-200 text-slate-700 dark:bg-slate-700/40 dark:text-slate-300',
-    expense: 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400',
-    expense_reversal: 'bg-teal-100 text-teal-700 dark:bg-teal-900/30 dark:text-teal-400',
+    opening_balance: 'bg-info-chip text-info',
+    manual_deposit: 'bg-success-chip text-success',
+    manual_withdrawal: 'bg-warning-chip text-warning-chip-foreground',
+    sale_collection: 'bg-success-chip text-success',
+    vendor_payment: 'bg-destructive-chip text-destructive',
+    customer_refund: 'bg-destructive-chip text-destructive',
+    sale_cancel: 'bg-muted text-foreground',
+    expense: 'bg-accent text-primary',
+    expense_reversal: 'bg-success-chip text-success',
 };
 
 const CashBook = () => {
@@ -275,74 +280,74 @@ const CashBook = () => {
     // =========================================================================
 
     return (
-        <div className="h-full flex flex-col bg-slate-50 dark:bg-d-bg overflow-auto print:overflow-visible">
+        <div className="h-full flex flex-col overflow-auto print:overflow-visible">
             <div className="flex-1 p-6 max-w-7xl mx-auto w-full">
 
                 {/* Header */}
-                <div className="flex items-center justify-between mb-6 print:mb-2">
-                    <div>
-                        <h1 className="text-2xl font-bold text-slate-800 dark:text-d-heading">Cash Book</h1>
-                        <p className="text-slate-500 dark:text-d-muted">Track all cash movements in your business</p>
-                    </div>
-                    <div className="flex items-center gap-2 print:hidden">
-                        <button onClick={handleRefresh} className="flex items-center gap-2 px-3 py-2 text-slate-500 dark:text-d-muted hover:bg-slate-100 dark:hover:bg-d-glass rounded-xl transition-all">
+                <PageHeader
+                    title={<>Cash Book</>}
+                    subtitle={<>Track all cash movements in your business</>}
+                    actions={
+                        <>
+                            <button onClick={handleRefresh} className="flex items-center gap-2 px-3 py-2 text-muted-foreground hover:bg-[var(--hover-overlay)] rounded-xl transition-all">
                             <FiRefreshCw size={16} className={loading ? 'animate-spin' : ''} />
                         </button>
-                        <button onClick={downloadCsv} className="flex items-center gap-2 px-3 py-2 text-slate-500 dark:text-d-muted hover:bg-slate-100 dark:hover:bg-d-glass rounded-xl transition-all">
+                        <button onClick={downloadCsv} className="flex items-center gap-2 px-3 py-2 text-muted-foreground hover:bg-[var(--hover-overlay)] rounded-xl transition-all">
                             <FiDownload size={16} />
                         </button>
-                        <button onClick={handlePrint} className="flex items-center gap-2 px-3 py-2 text-slate-500 dark:text-d-muted hover:bg-slate-100 dark:hover:bg-d-glass rounded-xl transition-all">
+                        <button onClick={handlePrint} className="flex items-center gap-2 px-3 py-2 text-muted-foreground hover:bg-[var(--hover-overlay)] rounded-xl transition-all">
                             <FiPrinter size={16} />
                         </button>
-                    </div>
-                </div>
+                        </>
+                    }
+                />
 
                 {/* Balance + Summary Cards */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6 print:grid-cols-4 print:gap-2">
                     {/* Current Balance */}
-                    <div className="bg-white dark:bg-d-card border border-slate-200 dark:border-d-border rounded-2xl p-5 sm:col-span-2 lg:col-span-1">
+                    <div className="bg-card border border-hairline rounded-2xl p-5 sm:col-span-2 lg:col-span-1">
                         <div className="flex items-center gap-3 mb-2">
-                            <div className="w-10 h-10 bg-[rgba(52,232,161,0.15)] rounded-xl flex items-center justify-center">
-                                <FiInbox className="text-d-green" size={20} />
+                            <div className="w-10 h-10 bg-success-chip rounded-xl flex items-center justify-center">
+                                <FiInbox className="text-success" size={20} />
                             </div>
-                            <span className="text-slate-500 dark:text-d-muted text-sm">Cash in Hand</span>
+                            <span className="text-muted-foreground text-sm">Cash in Hand</span>
                         </div>
-                        <p className={`text-2xl font-bold font-display ${balance >= 0 ? 'text-d-green' : 'text-d-red'}`}>
+                        <p className={`text-2xl font-bold font-display ${balance >= 0 ? 'text-success' : 'text-destructive'}`}>
                             {formatCurrency(balance)}
                         </p>
                     </div>
 
                     {/* Today Cash In */}
-                    <div className="bg-white dark:bg-d-card border border-slate-200 dark:border-d-border rounded-2xl p-5">
+                    <div className="bg-card border border-hairline rounded-2xl p-5">
                         <div className="flex items-center gap-3 mb-2">
-                            <div className="w-10 h-10 bg-[rgba(52,232,161,0.1)] rounded-xl flex items-center justify-center">
-                                <FiArrowDownCircle className="text-d-green" size={20} />
+                            <div className="w-10 h-10 bg-success-chip rounded-xl flex items-center justify-center">
+                                <FiArrowDownCircle className="text-success" size={20} />
                             </div>
-                            <span className="text-slate-500 dark:text-d-muted text-sm">Today In</span>
+                            <span className="text-muted-foreground text-sm">Today In</span>
                         </div>
-                        <p className="text-xl font-bold text-d-green font-display">{formatCurrency(todayIn)}</p>
+                        <p className="text-xl font-bold text-success font-display">{formatCurrency(todayIn)}</p>
                     </div>
 
                     {/* Today Cash Out */}
-                    <div className="bg-white dark:bg-d-card border border-slate-200 dark:border-d-border rounded-2xl p-5">
+                    <div className="bg-card border border-hairline rounded-2xl p-5">
                         <div className="flex items-center gap-3 mb-2">
-                            <div className="w-10 h-10 bg-[rgba(255,107,107,0.1)] rounded-xl flex items-center justify-center">
-                                <FiArrowUpCircle className="text-d-red" size={20} />
+                            <div className="w-10 h-10 bg-destructive-chip rounded-xl flex items-center justify-center">
+                                <FiArrowUpCircle className="text-destructive" size={20} />
                             </div>
-                            <span className="text-slate-500 dark:text-d-muted text-sm">Today Out</span>
+                            <span className="text-muted-foreground text-sm">Today Out</span>
                         </div>
-                        <p className="text-xl font-bold text-d-red font-display">{formatCurrency(todayOut)}</p>
+                        <p className="text-xl font-bold text-destructive font-display">{formatCurrency(todayOut)}</p>
                     </div>
 
                     {/* Today Net */}
-                    <div className="bg-white dark:bg-d-card border border-slate-200 dark:border-d-border rounded-2xl p-5">
+                    <div className="bg-card border border-hairline rounded-2xl p-5">
                         <div className="flex items-center gap-3 mb-2">
-                            <div className="w-10 h-10 bg-[rgba(91,156,246,0.1)] rounded-xl flex items-center justify-center">
-                                <FiDollarSign className="text-d-blue" size={20} />
+                            <div className="w-10 h-10 bg-info-chip rounded-xl flex items-center justify-center">
+                                <FiDollarSign className="text-info" size={20} />
                             </div>
-                            <span className="text-slate-500 dark:text-d-muted text-sm">Today Net</span>
+                            <span className="text-muted-foreground text-sm">Today Net</span>
                         </div>
-                        <p className={`text-xl font-bold font-display ${(todayIn - todayOut) >= 0 ? 'text-d-green' : 'text-d-red'}`}>
+                        <p className={`text-xl font-bold font-display ${(todayIn - todayOut) >= 0 ? 'text-success' : 'text-destructive'}`}>
                             {(todayIn - todayOut) >= 0 ? '+' : '-'}{formatCurrency(Math.abs(todayIn - todayOut))}
                         </p>
                     </div>
@@ -352,19 +357,19 @@ const CashBook = () => {
                 <div className="flex flex-wrap gap-3 mb-6 print:hidden">
                     <button
                         onClick={() => { setShowModal('opening'); setModalForm({ amount: '', note: '', description: '' }); setModalError(''); }}
-                        className="flex items-center gap-2 px-4 py-2.5 bg-blue-500 hover:bg-blue-600 text-white rounded-xl transition-colors text-sm font-medium"
+                        className="flex items-center gap-2 px-4 py-2.5 bg-info hover:bg-info/90 text-white rounded-xl transition-colors text-sm font-medium"
                     >
                         <FiDollarSign size={16} /> Set Opening Balance
                     </button>
                     <button
                         onClick={() => { setShowModal('deposit'); setModalForm({ amount: '', note: '', description: '' }); setModalError(''); }}
-                        className="flex items-center gap-2 px-4 py-2.5 bg-emerald-500 hover:bg-emerald-600 text-white rounded-xl transition-colors text-sm font-medium"
+                        className="flex items-center gap-2 px-4 py-2.5 bg-success hover:bg-success/90 text-white rounded-xl transition-colors text-sm font-medium"
                     >
                         <FiPlus size={16} /> Deposit Cash
                     </button>
                     <button
                         onClick={() => { setShowModal('withdraw'); setModalForm({ amount: '', note: '', description: '' }); setModalError(''); }}
-                        className="flex items-center gap-2 px-4 py-2.5 bg-orange-500 hover:bg-orange-600 text-white rounded-xl transition-colors text-sm font-medium"
+                        className="flex items-center gap-2 px-4 py-2.5 bg-warning hover:bg-warning/90 text-white rounded-xl transition-colors text-sm font-medium"
                     >
                         <FiMinus size={16} /> Withdraw Cash
                     </button>
@@ -373,20 +378,20 @@ const CashBook = () => {
                 {/* Filters */}
                 <div className="flex flex-wrap items-center gap-3 mb-4 print:hidden">
                     <div className="relative flex-1 max-w-xs">
-                        <FiSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 dark:text-d-faint" />
+                        <FiSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
                         <input
                             type="text"
                             value={searchQuery}
                             onChange={(e) => setSearchQuery(e.target.value)}
                             placeholder="Search entries..."
-                            className="w-full pl-10 pr-4 py-2.5 bg-white dark:bg-d-card border border-slate-200 dark:border-d-border rounded-xl text-slate-700 dark:text-d-text placeholder-d-faint focus:outline-none focus:border-d-border-hover text-sm"
+                            className="w-full pl-10 pr-4 py-2.5 bg-card border border-hairline rounded-xl text-foreground placeholder:text-placeholder focus:outline-none focus:border-primary/45 text-sm"
                         />
                     </div>
 
                     <select
                         value={typeFilter}
                         onChange={(e) => setTypeFilter(e.target.value)}
-                        className="px-3 py-2.5 bg-white dark:bg-d-card border border-slate-200 dark:border-d-border rounded-xl text-slate-700 dark:text-d-text text-sm focus:outline-none"
+                        className="px-3 py-2.5 bg-card border border-hairline rounded-xl text-foreground text-sm focus:outline-none"
                     >
                         <option value="all">All Types</option>
                         <option value="opening_balance">Opening Balance</option>
@@ -401,26 +406,26 @@ const CashBook = () => {
                     </select>
 
                     <div className="flex items-center gap-2">
-                        <FiCalendar className="text-slate-400 dark:text-d-faint" size={16} />
+                        <FiCalendar className="text-muted-foreground" size={16} />
                         <input
                             type="date"
                             value={startDate}
                             onChange={(e) => setStartDate(e.target.value)}
-                            className="px-3 py-2.5 bg-white dark:bg-d-card border border-slate-200 dark:border-d-border rounded-xl text-slate-700 dark:text-d-text text-sm focus:outline-none"
+                            className="px-3 py-2.5 bg-card border border-hairline rounded-xl text-foreground text-sm focus:outline-none"
                         />
-                        <span className="text-slate-400 dark:text-d-faint text-sm">to</span>
+                        <span className="text-muted-foreground text-sm">to</span>
                         <input
                             type="date"
                             value={endDate}
                             onChange={(e) => setEndDate(e.target.value)}
-                            className="px-3 py-2.5 bg-white dark:bg-d-card border border-slate-200 dark:border-d-border rounded-xl text-slate-700 dark:text-d-text text-sm focus:outline-none"
+                            className="px-3 py-2.5 bg-card border border-hairline rounded-xl text-foreground text-sm focus:outline-none"
                         />
                     </div>
 
                     {(startDate || endDate || typeFilter !== 'all') && (
                         <button
                             onClick={() => { setStartDate(''); setEndDate(''); setTypeFilter('all'); }}
-                            className="px-3 py-2.5 text-slate-500 dark:text-d-muted hover:text-slate-700 dark:hover:text-d-text text-sm"
+                            className="px-3 py-2.5 text-muted-foreground hover:text-foreground text-sm"
                         >
                             Clear Filters
                         </button>
@@ -428,45 +433,41 @@ const CashBook = () => {
                 </div>
 
                 {/* Ledger Table */}
-                <div className="bg-white dark:bg-d-card border border-slate-200 dark:border-d-border rounded-2xl overflow-hidden">
+                <section className={TABLE_CARD} aria-label="Cash book entries">
                     {loading ? (
-                        <div className="flex items-center justify-center py-16">
-                            <div className="w-8 h-8 border-4 border-primary-500 dark:border-d-accent border-t-transparent rounded-full animate-spin" />
-                        </div>
+                        <TableSkeleton toolbar={false} columns={6} className="border-0 shadow-none rounded-none" />
                     ) : filteredEntries.length === 0 ? (
-                        <div className="flex flex-col items-center justify-center py-16 text-slate-400 dark:text-d-faint">
-                            <FiInbox size={40} className="mb-3 opacity-40" />
-                            <p className="text-lg font-medium">No entries yet</p>
-                            <p className="text-sm mt-1">Set your opening balance to get started</p>
-                        </div>
+                        <EmptyState icon={FiInbox} title="No entries yet">
+                            Set your opening balance to get started.
+                        </EmptyState>
                     ) : (
-                        <div className="overflow-x-auto">
-                            <table className="w-full text-sm">
+                        <TableScroll>
+                            <table className="w-full border-collapse">
                                 <thead>
-                                    <tr className="border-b border-slate-100 dark:border-d-border bg-slate-50 dark:bg-d-elevated">
-                                        <th className="text-left px-4 py-3 font-semibold text-slate-500 dark:text-d-muted">#</th>
-                                        <th className="text-left px-4 py-3 font-semibold text-slate-500 dark:text-d-muted">Time</th>
-                                        <th className="text-left px-4 py-3 font-semibold text-slate-500 dark:text-d-muted">Type</th>
-                                        <th className="text-left px-4 py-3 font-semibold text-slate-500 dark:text-d-muted">Description</th>
-                                        <th className="text-right px-4 py-3 font-semibold text-d-green">Cash In</th>
-                                        <th className="text-right px-4 py-3 font-semibold text-d-red">Cash Out</th>
-                                        <th className="text-right px-4 py-3 font-semibold text-slate-500 dark:text-d-muted">Balance</th>
+                                    <tr className={TABLE_HEAD_ROW}>
+                                        <th className={TABLE_TH}>#</th>
+                                        <th className={TABLE_TH}>Time</th>
+                                        <th className={TABLE_TH}>Type</th>
+                                        <th className={TABLE_TH}>Description</th>
+                                        <th className={cn(TABLE_TH, 'text-right')}>Cash In</th>
+                                        <th className={cn(TABLE_TH, 'text-right')}>Cash Out</th>
+                                        <th className={cn(TABLE_TH, 'text-right')}>Balance</th>
                                     </tr>
                                 </thead>
                                 <tbody>
                                     {groupedByDay.map((group) => (
                                         <React.Fragment key={group.dateKey}>
                                             {/* Day header with opening balance */}
-                                            <tr className="bg-slate-100/80 dark:bg-d-elevated border-b border-slate-200 dark:border-d-border">
-                                                <td colSpan={4} className="px-4 py-2.5">
-                                                    <span className="font-semibold text-slate-700 dark:text-d-heading text-sm">
+                                            <tr className={TABLE_GROUP_ROW}>
+                                                <td colSpan={4} className={TABLE_GROUP_TD}>
+                                                    <span className="font-semibold text-foreground text-body">
                                                         {group.date.toLocaleDateString('en-US', { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' })}
                                                     </span>
                                                 </td>
-                                                <td colSpan={2} className="px-4 py-2.5 text-right text-xs text-slate-500 dark:text-d-muted font-medium">
+                                                <td colSpan={2} className={cn(TABLE_GROUP_TD, 'text-right')}>
                                                     Opening Balance
                                                 </td>
-                                                <td className={`px-4 py-2.5 text-right font-semibold text-sm ${group.openingBalance < 0 ? 'text-d-red' : 'text-slate-700 dark:text-d-heading'}`}>
+                                                <td className={cn(TABLE_GROUP_TD, 'text-right tabular-nums font-semibold', group.openingBalance < 0 ? 'text-destructive' : 'text-foreground')}>
                                                     {formatCurrency(group.openingBalance)}
                                                 </td>
                                             </tr>
@@ -475,35 +476,33 @@ const CashBook = () => {
                                             {group.entries.map((entry) => {
                                                 const d = new Date(entry.createdAt);
                                                 return (
-                                                    <tr key={entry._id} className="border-b border-slate-50 dark:border-d-border/50 hover:bg-slate-50 dark:hover:bg-[rgba(255,255,255,0.03)] transition-colors">
-                                                        <td className="px-4 py-3 text-slate-400 dark:text-d-faint">{entry.entryNumber}</td>
-                                                        <td className="px-4 py-3">
-                                                            <p className="text-xs text-slate-400 dark:text-d-faint">{d.toLocaleTimeString()}</p>
+                                                    <tr key={entry._id} className={TABLE_ROW}>
+                                                        <td className={cn(TABLE_TD, 'font-mono text-mono-sm text-muted-foreground')}>{entry.entryNumber}</td>
+                                                        <td className={cn(TABLE_TD, 'text-muted-foreground whitespace-nowrap')}>
+                                                            <p>{d.toLocaleTimeString()}</p>
                                                         </td>
-                                                        <td className="px-4 py-3">
-                                                            <span className={`inline-block px-2.5 py-1 rounded-lg text-xs font-medium ${TYPE_COLORS[entry.type] || 'bg-slate-100 text-slate-600'}`}>
-                                                                {TYPE_LABELS[entry.type] || entry.type}
-                                                            </span>
+                                                        <td className={TABLE_TD}>
+                                                            <StatusChip size="sm" shape="tag" tone={getStatus('entry', entry.type)?.tone || 'neutral'} label={TYPE_LABELS[entry.type] || entry.type} />
                                                         </td>
-                                                        <td className="px-4 py-3">
-                                                            <p className="text-slate-700 dark:text-d-text">{entry.description}</p>
+                                                        <td className={cn(TABLE_TD, 'py-2')}>
+                                                            <p>{entry.description}</p>
                                                             {entry.referenceNumber && (
-                                                                <p className="text-xs text-slate-400 dark:text-d-faint">{entry.referenceNumber}</p>
+                                                                <p className="font-mono text-mono-xs text-muted-foreground">{entry.referenceNumber}</p>
                                                             )}
                                                             {entry.note && (
-                                                                <p className="text-xs text-slate-400 dark:text-d-faint italic">{entry.note}</p>
+                                                                <p className="text-body-sm text-muted-foreground italic">{entry.note}</p>
                                                             )}
                                                             {entry.performedBy && (
-                                                                <p className="text-xs text-slate-400 dark:text-d-faint">by {entry.performedBy}</p>
+                                                                <p className="text-body-sm text-muted-foreground">by {entry.performedBy}</p>
                                                             )}
                                                         </td>
-                                                        <td className="px-4 py-3 text-right font-medium text-d-green">
+                                                        <td className={cn(TABLE_TD, 'text-right tabular-nums font-medium text-success')}>
                                                             {entry.direction === 'in' ? formatCurrency(entry.amount) : ''}
                                                         </td>
-                                                        <td className="px-4 py-3 text-right font-medium text-d-red">
+                                                        <td className={cn(TABLE_TD, 'text-right tabular-nums font-medium text-destructive')}>
                                                             {entry.direction === 'out' ? formatCurrency(entry.amount) : ''}
                                                         </td>
-                                                        <td className={`px-4 py-3 text-right font-bold ${entry.runningBalance < 0 ? 'text-d-red' : 'text-slate-800 dark:text-d-heading'}`}>
+                                                        <td className={cn(TABLE_TD, 'text-right tabular-nums font-semibold', entry.runningBalance < 0 && 'text-destructive')}>
                                                             {formatCurrency(entry.runningBalance)}
                                                         </td>
                                                     </tr>
@@ -511,12 +510,12 @@ const CashBook = () => {
                                             })}
 
                                             {/* Closing balance row */}
-                                            <tr className="bg-slate-100 dark:bg-d-elevated border-b-2 border-slate-200 dark:border-d-border">
-                                                <td colSpan={4} className="px-4 py-2.5"></td>
-                                                <td colSpan={2} className="px-4 py-2.5 text-right text-xs font-semibold text-slate-600 dark:text-d-text">
+                                            <tr className={cn(TABLE_GROUP_ROW, 'shadow-[inset_0_-1px_0_var(--border)]')}>
+                                                <td colSpan={4} className={TABLE_GROUP_TD}></td>
+                                                <td colSpan={2} className={cn(TABLE_GROUP_TD, 'text-right font-semibold text-foreground')}>
                                                     Closing Balance
                                                 </td>
-                                                <td className={`px-4 py-2.5 text-right font-bold text-sm ${group.closingBalance < 0 ? 'text-d-red' : 'text-slate-800 dark:text-d-heading'}`}>
+                                                <td className={cn(TABLE_GROUP_TD, 'text-right tabular-nums font-semibold', group.closingBalance < 0 ? 'text-destructive' : 'text-foreground')}>
                                                     {formatCurrency(group.closingBalance)}
                                                 </td>
                                             </tr>
@@ -524,61 +523,45 @@ const CashBook = () => {
                                     ))}
                                 </tbody>
                             </table>
-                        </div>
+                        </TableScroll>
                     )}
 
-                    {/* Pagination */}
                     {pagination.pages > 1 && (
-                        <div className="flex items-center justify-between px-4 py-3 border-t border-slate-100 dark:border-d-border">
-                            <p className="text-sm text-slate-500 dark:text-d-muted">
-                                Page {pagination.page} of {pagination.pages} ({pagination.total} entries)
-                            </p>
-                            <div className="flex gap-2">
-                                <button
-                                    disabled={pagination.page <= 1}
-                                    onClick={() => fetchEntries(pagination.page - 1)}
-                                    className="px-3 py-1.5 text-sm rounded-lg bg-slate-100 dark:bg-d-elevated hover:bg-slate-200 dark:hover:bg-d-glass disabled:opacity-40 transition-colors text-slate-700 dark:text-d-text"
-                                >
-                                    Previous
-                                </button>
-                                <button
-                                    disabled={pagination.page >= pagination.pages}
-                                    onClick={() => fetchEntries(pagination.page + 1)}
-                                    className="px-3 py-1.5 text-sm rounded-lg bg-slate-100 dark:bg-d-elevated hover:bg-slate-200 dark:hover:bg-d-glass disabled:opacity-40 transition-colors text-slate-700 dark:text-d-text"
-                                >
-                                    Next
-                                </button>
-                            </div>
-                        </div>
+                        <TablePager
+                            page={pagination.page}
+                            pageSize={pagination.limit || Math.ceil((pagination.total || 0) / pagination.pages) || 50}
+                            total={pagination.total || 0}
+                            onPageChange={fetchEntries}
+                            noun="entries"
+                        />
                     )}
-                </div>
+                </section>
             </div>
 
             {/* ═══════════════════════════════════════════════════════════ */}
             {/* Modal: Opening Balance / Deposit / Withdraw                */}
             {/* ═══════════════════════════════════════════════════════════ */}
             {showModal && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
-                    <div className="bg-white dark:bg-d-card rounded-2xl w-full max-w-md border border-slate-200 dark:border-d-border shadow-2xl max-h-[90vh] overflow-y-auto">
-                        <div className="flex items-center justify-between p-5 border-b border-slate-100 dark:border-d-border">
-                            <h2 className="text-lg font-bold text-slate-800 dark:text-d-heading">
+                <DialogShell size="md" className="max-h-[90vh] overflow-y-auto">
+                        <div className="flex items-center justify-between p-5 border-b border-hairline">
+                            <h2 className="text-lg font-bold text-foreground">
                                 {showModal === 'opening' ? 'Set Opening Balance' :
                                  showModal === 'deposit' ? 'Deposit Cash' : 'Withdraw Cash'}
                             </h2>
-                            <button onClick={() => setShowModal(null)} className="p-2 text-slate-400 hover:text-slate-600 dark:text-d-faint dark:hover:text-d-text rounded-lg hover:bg-slate-100 dark:hover:bg-d-glass">
+                            <button data-dialog-close onClick={() => setShowModal(null)} className="p-2 text-muted-foreground hover:text-foreground rounded-lg hover:bg-[var(--hover-overlay)]">
                                 <FiX size={18} />
                             </button>
                         </div>
 
                         <form onSubmit={submitModal} className="p-5 space-y-4">
                             {modalError && (
-                                <div className="flex items-center gap-2 p-3 bg-red-50 dark:bg-[rgba(239,68,68,0.08)] border border-red-200 dark:border-[rgba(239,68,68,0.2)] rounded-xl">
-                                    <FiAlertCircle className="text-red-500 dark:text-red-400 flex-shrink-0" size={14} />
-                                    <span className="text-xs text-red-700 dark:text-red-400 font-medium">{modalError}</span>
+                                <div className="flex items-center gap-2 p-3 bg-destructive-chip border border-destructive/30 rounded-xl">
+                                    <FiAlertCircle className="text-destructive flex-shrink-0" size={14} />
+                                    <span className="text-xs text-destructive font-medium">{modalError}</span>
                                 </div>
                             )}
                             <div>
-                                <label className="block text-sm font-medium text-slate-600 dark:text-d-muted mb-1.5">
+                                <label className="block text-sm font-medium text-muted-foreground mb-1.5">
                                     Amount (Rs)
                                 </label>
                                 <input
@@ -587,7 +570,7 @@ const CashBook = () => {
                                     step="0.01"
                                     value={modalForm.amount}
                                     onChange={(e) => setModalForm(f => ({ ...f, amount: e.target.value }))}
-                                    className="w-full px-4 py-3 bg-slate-50 dark:bg-d-elevated border border-slate-200 dark:border-d-border rounded-xl text-slate-700 dark:text-d-text text-lg font-bold focus:outline-none focus:border-d-accent"
+                                    className="w-full px-4 py-3 bg-muted/40 border border-hairline rounded-xl text-foreground text-lg font-bold focus:outline-none focus:border-primary"
                                     placeholder="0.00"
                                     autoFocus
                                     required
@@ -596,27 +579,27 @@ const CashBook = () => {
 
                             {showModal !== 'opening' && (
                                 <div>
-                                    <label className="block text-sm font-medium text-slate-600 dark:text-d-muted mb-1.5">
+                                    <label className="block text-sm font-medium text-muted-foreground mb-1.5">
                                         Description
                                     </label>
                                     <input
                                         type="text"
                                         value={modalForm.description}
                                         onChange={(e) => setModalForm(f => ({ ...f, description: e.target.value }))}
-                                        className="w-full px-4 py-2.5 bg-slate-50 dark:bg-d-elevated border border-slate-200 dark:border-d-border rounded-xl text-slate-700 dark:text-d-text focus:outline-none focus:border-d-border-hover text-sm"
+                                        className="w-full px-4 py-2.5 bg-muted/40 border border-hairline rounded-xl text-foreground focus:outline-none focus:border-primary/45 text-sm"
                                         placeholder={showModal === 'deposit' ? 'e.g. Cash from bank' : 'e.g. Bank deposit'}
                                     />
                                 </div>
                             )}
 
                             <div>
-                                <label className="block text-sm font-medium text-slate-600 dark:text-d-muted mb-1.5">
+                                <label className="block text-sm font-medium text-muted-foreground mb-1.5">
                                     Note (optional)
                                 </label>
                                 <textarea
                                     value={modalForm.note}
                                     onChange={(e) => setModalForm(f => ({ ...f, note: e.target.value }))}
-                                    className="w-full px-4 py-2.5 bg-slate-50 dark:bg-d-elevated border border-slate-200 dark:border-d-border rounded-xl text-slate-700 dark:text-d-text focus:outline-none focus:border-d-border-hover text-sm resize-none"
+                                    className="w-full px-4 py-2.5 bg-muted/40 border border-hairline rounded-xl text-foreground focus:outline-none focus:border-primary/45 text-sm resize-none"
                                     rows={2}
                                     placeholder="Any additional notes..."
                                 />
@@ -626,7 +609,7 @@ const CashBook = () => {
                                 <button
                                     type="button"
                                     onClick={() => setShowModal(null)}
-                                    className="flex-1 py-2.5 text-sm font-medium text-slate-600 dark:text-d-muted bg-slate-100 dark:bg-d-elevated rounded-xl hover:bg-slate-200 dark:hover:bg-d-glass transition-colors"
+                                    className="flex-1 py-2.5 text-sm font-medium text-muted-foreground bg-muted rounded-xl hover:bg-[var(--hover-overlay)] transition-colors"
                                 >
                                     Cancel
                                 </button>
@@ -634,8 +617,8 @@ const CashBook = () => {
                                     type="submit"
                                     disabled={submitting}
                                     className={`flex-1 py-2.5 text-sm font-medium text-white rounded-xl transition-colors disabled:opacity-60 ${
-                                        showModal === 'withdraw' ? 'bg-orange-500 hover:bg-orange-600' :
-                                        'bg-emerald-500 hover:bg-emerald-600'
+                                        showModal === 'withdraw' ? 'bg-warning hover:bg-warning/90' :
+                                        'bg-success hover:bg-success/90'
                                     }`}
                                 >
                                     {submitting ? 'Processing...' :
@@ -644,8 +627,7 @@ const CashBook = () => {
                                 </button>
                             </div>
                         </form>
-                    </div>
-                </div>
+                    </DialogShell>
             )}
         </div>
     );

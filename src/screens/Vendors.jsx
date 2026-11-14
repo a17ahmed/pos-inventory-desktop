@@ -1,4 +1,8 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { TableSkeleton } from '../components/ui/PageSkeleton';
+import { PageHeader, Tabs, Button, DataTable, rowActions, Dash, StatusBadge, StatusChip, FilterButton, DateRangeFields, rangeLabel, Field, Select } from '../components/ui';
+import { DialogShell } from '../components/ui/Dialog';
+import { toast } from '../components/ui/Toast';
 import { todayLocalDate, toLocalDateStr } from '../utils/date';
 import { useNavigate } from 'react-router-dom';
 import { useBusiness } from '../context/BusinessContext';
@@ -108,6 +112,8 @@ const TABS = [
 // Component
 // ---------------------------------------------------------------------------
 
+const PAY_STATUS_LABEL = { unpaid: 'Unpaid', partial: 'Partial', paid: 'Paid' };
+
 const Vendors = () => {
     const navigate = useNavigate();
     const { business } = useBusiness();
@@ -124,6 +130,7 @@ const Vendors = () => {
 
     // ── Products list (for supply item picker) ───────────────────────────────
     const [products, setProducts] = useState([]);
+    const [productsLoading, setProductsLoading] = useState(false);
 
     // ── Supplies list ────────────────────────────────────────────────────────
     const [supplies, setSupplies] = useState([]); // current page only
@@ -132,6 +139,21 @@ const Vendors = () => {
     const [searchQuery, setSearchQuery] = useState('');
     const [statusFilter, setStatusFilter] = useState('all');
     const [vendorFilter, setVendorFilter] = useState('');
+    const [supplyRange, setSupplyRange] = useState({ from: '', to: '' }); // bill date; '' = all dates
+    const [supplyPageSize, setSupplyPageSize] = useState(() => {
+        try {
+            return JSON.parse(localStorage.getItem('ds.table.supplies.pageSize')) || 50;
+        } catch {
+            return 50;
+        }
+    });
+    // Search text also goes to the server (debounced); older servers ignore it and the
+    // page shown is filtered here instead.
+    const [serverSearch, setServerSearch] = useState('');
+    useEffect(() => {
+        const t = setTimeout(() => setServerSearch(searchQuery.trim()), 300);
+        return () => clearTimeout(t);
+    }, [searchQuery]);
 
     // ── Stats ─────────────────────────────────────────────────────────────────
     const [stats, setStats] = useState(null);
@@ -170,11 +192,7 @@ const Vendors = () => {
     const [returnNote, setReturnNote] = useState('');
     const [returning, setReturning] = useState(false);
 
-    const [toast, setToast] = useState('');
-    const showToast = (message) => {
-        setToast(message);
-        setTimeout(() => setToast(''), 4500);
-    };
+    const showToast = (message) => toast.success(message, { id: 'vendors', duration: 4500 });
     const [paying, setPaying] = useState(false);
 
     // ── Vendor modal ─────────────────────────────────────────────────────────
@@ -206,13 +224,18 @@ const Vendors = () => {
         }
     }, []);
 
+    // Products are only needed inside the supply / return / new-product popups, so they're loaded
+    // when one of those opens — not with the page (a big catalogue made the page slow to open).
     const fetchProducts = useCallback(async () => {
+        setProductsLoading(true);
         try {
             const res = await getProducts();
             const data = res.data;
             setProducts(Array.isArray(data) ? data : data?.products || []);
         } catch (err) {
             console.error('Error fetching products:', err);
+        } finally {
+            setProductsLoading(false);
         }
     }, []);
 
@@ -222,9 +245,12 @@ const Vendors = () => {
         setLoading(true);
         setError(null);
         try {
-            const params = { page: pageNum, limit: 50 };
+            const params = { page: pageNum, limit: supplyPageSize };
             if (statusFilter !== 'all') params.paymentStatus = statusFilter;
             if (vendorFilter) params.vendor = vendorFilter;
+            if (supplyRange.from) params.startDate = supplyRange.from;
+            if (supplyRange.to) params.endDate = supplyRange.to;
+            if (serverSearch) params.search = serverSearch;
             const res = await getSupplies(params);
             const data = res.data;
             const list = Array.isArray(data?.supplies)
@@ -240,7 +266,7 @@ const Vendors = () => {
         } finally {
             setLoading(false);
         }
-    }, [statusFilter, vendorFilter]);
+    }, [statusFilter, vendorFilter, supplyRange.from, supplyRange.to, supplyPageSize, serverSearch]);
 
     const fetchStats = useCallback(async () => {
         try {
@@ -251,24 +277,50 @@ const Vendors = () => {
         }
     }, []);
 
-    // Initial load
+    const resetSupplyFilters = () => {
+        setStatusFilter('all');
+        setVendorFilter('');
+        setSupplyRange({ from: '', to: '' });
+    };
+
+    // Switching tabs only reloads data that is older than FRESH_MS. Saving, paying or returning
+    // still reloads at once (those call the fetch functions directly).
+    const FRESH_MS = 30000;
+    const loadedAt = useRef({ vendors: 0, stats: 0, supplies: { key: null, at: 0 } });
+    const fresh = (at) => Date.now() - at < FRESH_MS;
+
+    // Initial load (products wait for a popup that needs them)
     useEffect(() => {
-        fetchVendors();
-        fetchProducts();
-    }, [fetchVendors, fetchProducts]);
+        fetchVendors().then(() => {
+            loadedAt.current.vendors = Date.now();
+        });
+    }, [fetchVendors]);
 
     useEffect(() => {
-        if (activeTab === 'supplies') fetchSupplies();
+        if (activeTab !== 'supplies') return;
+        // a filter change always reloads; coming back to the tab only when stale
+        const key = JSON.stringify([statusFilter, vendorFilter, supplyRange, supplyPageSize, serverSearch]);
+        const last = loadedAt.current.supplies;
+        if (last.key === key && fresh(last.at)) return;
+        loadedAt.current.supplies = { key, at: Date.now() };
+        fetchSupplies();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [activeTab, fetchSupplies]);
 
-    // Vendor totals change with every supply, payment and return — reload on tab switch
+    // Vendor totals change with every supply, payment and return — reload on tab switch when stale
     useEffect(() => {
-        if (activeTab === 'vendors') fetchVendors();
+        if (activeTab !== 'vendors' || fresh(loadedAt.current.vendors)) return;
+        loadedAt.current.vendors = Date.now();
+        fetchVendors();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [activeTab, fetchVendors]);
 
     useEffect(() => {
-        // Both tabs show money cards sourced from stats, so load it for either.
-        if (activeTab === 'supplies' || activeTab === 'stats') fetchStats();
+        // Both tabs show money cards sourced from stats, so load it for either (when stale).
+        if ((activeTab !== 'supplies' && activeTab !== 'stats') || fresh(loadedAt.current.stats)) return;
+        loadedAt.current.stats = Date.now();
+        fetchStats();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [activeTab, fetchStats]);
 
     // =========================================================================
@@ -711,19 +763,19 @@ const Vendors = () => {
             case 'paid':
                 return {
                     icon: FiCheckCircle,
-                    color: 'bg-green-100 text-green-700 dark:bg-[rgba(52,232,161,0.15)] dark:text-d-green',
+                    color: 'bg-success-chip text-success',
                     label: 'Paid',
                 };
             case 'partial':
                 return {
                     icon: FiClock,
-                    color: 'bg-yellow-100 text-yellow-700 dark:bg-[rgba(255,210,100,0.15)] dark:text-d-accent',
+                    color: 'bg-warning-chip text-warning-chip-foreground',
                     label: 'Partial',
                 };
             default:
                 return {
                     icon: FiAlertCircle,
-                    color: 'bg-red-100 text-red-700 dark:bg-[rgba(255,107,107,0.15)] dark:text-d-red',
+                    color: 'bg-destructive-chip text-destructive',
                     label: 'Unpaid',
                 };
         }
@@ -733,26 +785,24 @@ const Vendors = () => {
     // Render helpers
     // =========================================================================
 
+    // Loading: the table's shape in grey (the label is kept for screen readers)
     const renderLoadingSpinner = (label = 'Loading...') => (
-        <div className="flex items-center justify-center py-20">
-            <div className="flex flex-col items-center gap-4">
-                <div className="w-12 h-12 border-4 border-primary-500 dark:border-d-accent border-t-transparent rounded-full animate-spin" />
-                <p className="text-slate-500 dark:text-d-muted">{label}</p>
-            </div>
+        <div aria-label={label}>
+            <TableSkeleton columns={6} />
         </div>
     );
 
     const renderError = () => (
         <div className="flex items-center justify-center py-20">
             <div className="flex flex-col items-center gap-4 text-center">
-                <div className="w-16 h-16 bg-red-100 dark:bg-[rgba(255,107,107,0.15)] rounded-full flex items-center justify-center">
-                    <FiXCircle size={32} className="text-red-500 dark:text-d-red" />
+                <div className="w-16 h-16 bg-destructive-chip rounded-full flex items-center justify-center">
+                    <FiXCircle size={32} className="text-destructive" />
                 </div>
-                <h2 className="text-xl font-semibold text-slate-800 dark:text-d-heading">Failed to load data</h2>
-                <p className="text-slate-500 dark:text-d-muted">{error}</p>
+                <h2 className="text-xl font-semibold text-foreground">Failed to load data</h2>
+                <p className="text-muted-foreground">{error}</p>
                 <button
                     onClick={() => fetchSupplies(1)}
-                    className="px-4 py-2 bg-primary-500 text-white rounded-xl hover:bg-primary-600 transition-colors"
+                    className="px-4 py-2 bg-primary text-white rounded-xl hover:bg-primary/90 transition-colors"
                 >
                     Try Again
                 </button>
@@ -764,227 +814,195 @@ const Vendors = () => {
     // TAB: Supplies
     // =========================================================================
 
+    const vendorNameOf = (x) => (typeof x.vendor === 'object' ? x.vendor?.name || '' : x.vendor || '');
+    const supplyColumns = [
+        {
+            id: 'date',
+            header: 'Date',
+            accessorFn: (x) => new Date(x.billDate || x.createdAt).getTime() || 0,
+            cell: ({ row: { original: x } }) => <span className="text-muted-foreground whitespace-nowrap">{new Date(x.billDate || x.createdAt).toLocaleDateString()}</span>,
+        },
+        { id: 'vendor', header: 'Vendor', accessorFn: vendorNameOf, cell: ({ getValue }) => (getValue() ? <span className="font-medium">{getValue()}</span> : <Dash />) },
+        { id: 'bill', header: 'Bill #', accessorFn: (x) => x.billNumber || '', meta: { mono: true }, cell: ({ getValue }) => getValue() || <Dash /> },
+        {
+            id: 'items',
+            header: 'Items',
+            accessorFn: (x) => x.items?.length || 0,
+            meta: { align: 'right' },
+            cell: ({ getValue }) => <span className="text-muted-foreground">{getValue()}</span>,
+        },
+        {
+            id: 'total',
+            header: 'Total',
+            accessorFn: (x) => Number(x.totalAmount) || 0,
+            meta: { align: 'right' },
+            cell: ({ row: { original: x } }) => (
+                <div>
+                    <span className="font-medium">{formatCurrency(x.totalAmount)}</span>
+                    {(x.totalReturned || 0) > 0 && <p className="text-body-sm text-warning-chip-foreground whitespace-nowrap">− {formatCurrency(x.totalReturned)} returned</p>}
+                </div>
+            ),
+        },
+        {
+            id: 'paid',
+            header: 'Paid',
+            accessorFn: (x) => Number(x.paidAmount) || 0,
+            meta: { align: 'right' },
+            cell: ({ row: { original: x } }) => (
+                <div>
+                    <span>{formatCurrency(x.paidAmount)}</span>
+                    {(x.creditApplied || 0) > 0 && <p className="text-body-sm text-muted-foreground whitespace-nowrap">incl. {formatCurrency(x.creditApplied)} vendor credit</p>}
+                </div>
+            ),
+        },
+        {
+            id: 'remaining',
+            header: 'Remaining',
+            accessorFn: (x) => Number(x.remainingAmount) || 0,
+            meta: { align: 'right' },
+            cell: ({ getValue }) => <span className={getValue() > 0 ? 'text-destructive font-medium' : 'text-muted-foreground'}>{formatCurrency(getValue())}</span>,
+        },
+        {
+            id: 'status',
+            header: 'Status',
+            accessorFn: (x) => x.paymentStatus || '',
+            cell: ({ row: { original: x } }) => {
+                const owes = (x.balance || 0) < 0 ? -x.balance : 0;
+                return (
+                    <div className="flex flex-col items-start gap-1">
+                        <StatusBadge kind="payment" value={x.paymentStatus} size="sm" />
+                        {owes > 0 && <StatusChip size="xs" tone="success" label={`Vendor owes you ${formatCurrency(owes)}`} />}
+                    </div>
+                );
+            },
+        },
+        rowActions(
+            (x) => {
+                const canDelete = !(x.payments?.length > 0) && !(x.returns?.length > 0);
+                return [
+                    x.paymentStatus !== 'paid' && { label: 'Record payment', icon: FiCreditCard, onSelect: () => openPayModal(x) },
+                    (x.items || []).some((i) => returnableQty(i) > 0) && { label: 'Return items to vendor', icon: FiCornerUpLeft, onSelect: () => openReturnModal(x) },
+                    { label: 'Edit', icon: FiEdit2, onSelect: () => openSupplyModal(x) },
+                    ...(canDelete ? [{ separator: true }, { label: 'Delete', icon: FiTrash2, danger: true, onSelect: () => handleDeleteSupply(x._id) }] : []),
+                ];
+            },
+            { label: 'Supply actions' }
+        ),
+    ];
+
+    const vendorColumns = [
+        { id: 'name', header: 'Name', accessorFn: (v) => v.name || '', cell: ({ getValue }) => <span className="font-medium">{getValue()}</span> },
+        { id: 'company', header: 'Company', accessorFn: (v) => v.company || '', cell: ({ getValue }) => getValue() || <Dash /> },
+        { id: 'phone', header: 'Phone', accessorFn: (v) => v.phone || '', meta: { mono: true }, cell: ({ getValue }) => getValue() || <Dash /> },
+        { id: 'business', header: 'Total business', accessorFn: (v) => Number(v.totalBusiness) || 0, meta: { align: 'right' }, cell: ({ getValue }) => formatCurrency(getValue()) },
+        { id: 'paid', header: 'Total paid', accessorFn: (v) => Number(v.totalPaid) || 0, meta: { align: 'right' }, cell: ({ getValue }) => formatCurrency(getValue()) },
+        {
+            id: 'remaining',
+            header: 'Remaining',
+            accessorFn: (v) => Number(v.totalRemaining) || 0,
+            meta: { align: 'right' },
+            cell: ({ row: { original: v } }) => (
+                <div>
+                    <span className={(v.totalRemaining || 0) > 0 ? 'text-destructive font-medium' : 'text-muted-foreground'}>{formatCurrency(v.totalRemaining || 0)}</span>
+                    {(v.totalCredit || 0) > 0 && <p className="text-body-sm text-success whitespace-nowrap">Credit: {formatCurrency(v.totalCredit)} (vendor owes you)</p>}
+                </div>
+            ),
+        },
+        { id: 'supplies', header: 'Supplies', accessorFn: (v) => v.supplyCount ?? 0, meta: { align: 'right' } },
+        rowActions(
+            (v) => [
+                { label: 'View ledger', icon: FiBookOpen, onSelect: () => navigate(`/vendors/${v._id}/ledger`) },
+                { label: 'Edit', icon: FiEdit2, onSelect: () => openVendorModal(v) },
+                { separator: true },
+                { label: 'Delete', icon: FiTrash2, danger: true, onSelect: () => handleDeleteVendor(v._id) },
+            ],
+            { label: 'Vendor actions' }
+        ),
+    ];
+
     const renderSuppliesTab = () => (
         <>
             {/* Stats Cards */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-                <div className="bg-white dark:bg-d-card rounded-2xl p-6 shadow-sm dark:shadow-[0_4px_20px_rgba(0,0,0,0.3)] border border-slate-100 dark:border-d-border">
-                    <p className="text-sm text-slate-500 dark:text-d-muted">Total Outstanding</p>
-                    <p className="text-2xl font-bold text-red-600 dark:text-d-red">{formatCurrency(outstandingTotal)}</p>
+                <div className="bg-card rounded-2xl p-6 shadow-sm border border-hairline">
+                    <p className="text-sm text-muted-foreground">Total Outstanding</p>
+                    <p className="text-2xl font-bold text-destructive">{formatCurrency(outstandingTotal)}</p>
                 </div>
-                <div className="bg-white dark:bg-d-card rounded-2xl p-6 shadow-sm dark:shadow-[0_4px_20px_rgba(0,0,0,0.3)] border border-slate-100 dark:border-d-border">
-                    <p className="text-sm text-slate-500 dark:text-d-muted">This Month</p>
-                    <p className="text-2xl font-bold text-slate-800 dark:text-d-heading">{formatCurrency(thisMonthTotal)}</p>
+                <div className="bg-card rounded-2xl p-6 shadow-sm border border-hairline">
+                    <p className="text-sm text-muted-foreground">This Month</p>
+                    <p className="text-2xl font-bold text-foreground">{formatCurrency(thisMonthTotal)}</p>
                 </div>
-                <div className="bg-white dark:bg-d-card rounded-2xl p-6 shadow-sm dark:shadow-[0_4px_20px_rgba(0,0,0,0.3)] border border-slate-100 dark:border-d-border">
-                    <p className="text-sm text-slate-500 dark:text-d-muted">Total Supplies</p>
-                    <p className="text-2xl font-bold text-primary-600">{supplyTotal}</p>
+                <div className="bg-card rounded-2xl p-6 shadow-sm border border-hairline">
+                    <p className="text-sm text-muted-foreground">Total Supplies</p>
+                    <p className="text-2xl font-bold text-primary">{supplyTotal}</p>
                 </div>
             </div>
 
-            {/* Filters */}
-            <div className="flex flex-wrap items-center gap-4 mb-6">
-                <div className="relative flex-1 max-w-md">
-                    <FiSearch className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 dark:text-d-faint" />
-                    <input
-                        type="text"
-                        value={searchQuery}
-                        onChange={(e) => setSearchQuery(e.target.value)}
-                        placeholder="Search by vendor or bill #..."
-                        className="w-full pl-12 pr-4 py-3 bg-white dark:bg-d-bg border border-slate-200 dark:border-d-border rounded-xl focus:ring-2 focus:ring-primary-500 dark:focus:border-d-border-hover focus:outline-none text-slate-800 dark:text-d-text placeholder-slate-400 dark:placeholder-d-faint"
-                    />
-                </div>
-
-                <div className="flex items-center gap-2 bg-white dark:bg-d-card rounded-xl p-1 border border-slate-200 dark:border-d-border">
-                    {['all', 'unpaid', 'partial', 'paid'].map((s) => (
-                        <button
-                            key={s}
-                            onClick={() => setStatusFilter(s)}
-                            className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors capitalize ${
-                                statusFilter === s
-                                    ? 'bg-primary-500 dark:bg-d-accent text-white dark:text-d-card'
-                                    : 'text-slate-600 dark:text-d-text hover:bg-slate-100 dark:hover:bg-d-glass-hover'
-                            }`}
-                        >
-                            {s}
-                        </button>
-                    ))}
-                </div>
-
-                {vendorFilter && (
-                    <button
-                        onClick={() => setVendorFilter('')}
-                        className="flex items-center gap-1 px-3 py-2 bg-primary-50 text-primary-600 border border-primary-200 rounded-xl text-sm font-medium hover:bg-primary-100 transition-colors"
+            <DataTable
+                caption="Supplies"
+                data={filteredSupplies}
+                columns={supplyColumns}
+                getRowId={(x) => x._id}
+                loading={loading}
+                error={error ? { message: error, onRetry: () => fetchSupplies(supplyPagination.page) } : null}
+                search={{ value: searchQuery, onChange: setSearchQuery, placeholder: 'Search by vendor or bill #' }}
+                filters={
+                    <FilterButton
+                        label="Filter supplies"
+                        summary={[
+                            rangeLabel(supplyRange),
+                            statusFilter !== 'all' && PAY_STATUS_LABEL[statusFilter],
+                            vendorFilter && (vendors.find((v) => v._id === vendorFilter)?.name || 'One vendor'),
+                        ].filter(Boolean).join(' · ')}
+                        count={(statusFilter !== 'all') + !!vendorFilter}
+                        onReset={resetSupplyFilters}
                     >
-                        <FiX size={14} />
-                        Clear Vendor Filter
-                    </button>
-                )}
-            </div>
-
-            {/* Table */}
-            {loading ? (
-                renderLoadingSpinner('Loading supplies...')
-            ) : error ? (
-                renderError()
-            ) : (
-                <div className="bg-white dark:bg-d-card rounded-2xl shadow-sm dark:shadow-[0_4px_20px_rgba(0,0,0,0.3)] border border-slate-100 dark:border-d-border overflow-hidden">
-                    <table className="w-full">
-                        <thead className="bg-slate-50 dark:bg-d-glass">
-                            <tr>
-                                <th className="text-left py-4 px-6 font-medium text-slate-600 dark:text-d-muted">Date</th>
-                                <th className="text-left py-4 px-6 font-medium text-slate-600 dark:text-d-muted">Vendor</th>
-                                <th className="text-left py-4 px-6 font-medium text-slate-600 dark:text-d-muted">Bill #</th>
-                                <th className="text-left py-4 px-6 font-medium text-slate-600 dark:text-d-muted">Items</th>
-                                <th className="text-right py-4 px-6 font-medium text-slate-600 dark:text-d-muted">Total</th>
-                                <th className="text-right py-4 px-6 font-medium text-slate-600 dark:text-d-muted">Paid</th>
-                                <th className="text-right py-4 px-6 font-medium text-slate-600 dark:text-d-muted">Remaining</th>
-                                <th className="text-left py-4 px-6 font-medium text-slate-600 dark:text-d-muted">Status</th>
-                                <th className="text-right py-4 px-6 font-medium text-slate-600 dark:text-d-muted">Actions</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {filteredSupplies.map((supply) => {
-                                const badge = getStatusBadge(supply.paymentStatus);
-                                // remainingAmount already accounts for returns and credit
-                                const remaining = supply.remainingAmount || 0;
-                                const vendorOwes = (supply.balance || 0) < 0 ? -supply.balance : 0;
-                                const canDelete = !(supply.payments?.length > 0) && !(supply.returns?.length > 0);
-                                const vendorName =
-                                    typeof supply.vendor === 'object'
-                                        ? supply.vendor?.name || '—'
-                                        : supply.vendor || '—';
-                                return (
-                                    <tr
-                                        key={supply._id}
-                                        className="border-t border-slate-100 dark:border-d-border hover:bg-slate-50 dark:hover:bg-[rgba(255,255,255,0.02)] transition-colors"
-                                    >
-                                        <td className="py-4 px-6 text-slate-500 dark:text-d-muted text-sm whitespace-nowrap">
-                                            {new Date(supply.billDate || supply.createdAt).toLocaleDateString()}
-                                        </td>
-                                        <td className="py-4 px-6 font-medium text-slate-800 dark:text-d-heading">
-                                            {vendorName}
-                                        </td>
-                                        <td className="py-4 px-6 text-slate-600 dark:text-d-text text-sm">
-                                            {supply.billNumber || '—'}
-                                        </td>
-                                        <td className="py-4 px-6 text-slate-600 dark:text-d-text text-sm">
-                                            <span className="px-2 py-1 bg-slate-100 dark:bg-d-glass text-slate-600 dark:text-d-muted rounded-full text-xs font-medium">
-                                                {supply.items?.length || 0} item{supply.items?.length !== 1 ? 's' : ''}
-                                            </span>
-                                        </td>
-                                        <td className="py-4 px-6 text-right font-semibold text-slate-800 dark:text-d-heading">
-                                            {formatCurrency(supply.totalAmount)}
-                                            {(supply.totalReturned || 0) > 0 && (
-                                                <div className="text-[11px] font-normal text-amber-600 dark:text-d-accent whitespace-nowrap">
-                                                    − {formatCurrency(supply.totalReturned)} returned
-                                                </div>
-                                            )}
-                                        </td>
-                                        <td className="py-4 px-6 text-right text-green-600 dark:text-d-green font-medium">
-                                            {formatCurrency(supply.paidAmount)}
-                                            {(supply.creditApplied || 0) > 0 && (
-                                                <div className="text-[11px] italic font-normal text-slate-400 dark:text-d-faint whitespace-nowrap">
-                                                    incl. {formatCurrency(supply.creditApplied)} vendor credit
-                                                </div>
-                                            )}
-                                        </td>
-                                        <td className={`py-4 px-6 text-right font-semibold ${remaining > 0 ? 'text-red-600 dark:text-d-red' : 'text-slate-400 dark:text-d-faint'}`}>
-                                            {formatCurrency(remaining)}
-                                        </td>
-                                        <td className="py-4 px-6">
-                                            <div className="flex flex-col items-start gap-1">
-                                                <span
-                                                    className={`inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-medium ${badge.color}`}
-                                                >
-                                                    <badge.icon size={11} />
-                                                    {badge.label}
-                                                </span>
-                                                {vendorOwes > 0 && (
-                                                    <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium whitespace-nowrap bg-emerald-50 text-emerald-700 dark:bg-[rgba(52,232,161,0.12)] dark:text-d-green">
-                                                        Vendor owes you {formatCurrency(vendorOwes)}
-                                                    </span>
-                                                )}
-                                            </div>
-                                        </td>
-                                        <td className="py-4 px-6">
-                                            <div className="flex items-center justify-end gap-1">
-                                                {supply.paymentStatus !== 'paid' && (
-                                                    <button
-                                                        onClick={() => openPayModal(supply)}
-                                                        className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium bg-green-50 dark:bg-[rgba(52,232,161,0.1)] text-green-600 dark:text-d-green hover:bg-green-100 dark:hover:bg-[rgba(52,232,161,0.18)] rounded-lg transition-colors"
-                                                        title="Record Payment"
-                                                    >
-                                                        <FiCreditCard size={13} />
-                                                        Pay
-                                                    </button>
-                                                )}
-                                                {(supply.items || []).some((i) => returnableQty(i) > 0) && (
-                                                    <button
-                                                        onClick={() => openReturnModal(supply)}
-                                                        className="p-2 text-slate-500 dark:text-d-muted hover:text-amber-600 dark:hover:text-d-accent hover:bg-amber-50 dark:hover:bg-[rgba(255,185,50,0.1)] rounded-lg transition-colors"
-                                                        title="Return items to vendor"
-                                                    >
-                                                        <FiCornerUpLeft size={15} />
-                                                    </button>
-                                                )}
-                                                <button
-                                                    onClick={() => openSupplyModal(supply)}
-                                                    className="p-2 text-slate-500 dark:text-d-muted hover:text-primary-500 hover:bg-primary-50 dark:hover:bg-[rgba(255,255,255,0.06)] rounded-lg transition-colors"
-                                                    title="Edit"
-                                                >
-                                                    <FiEdit2 size={15} />
-                                                </button>
-                                                {canDelete && (
-                                                    <button
-                                                        onClick={() => handleDeleteSupply(supply._id)}
-                                                        className="p-2 text-slate-500 dark:text-d-muted hover:text-red-500 dark:hover:text-d-red hover:bg-red-50 dark:hover:bg-[rgba(255,107,107,0.1)] rounded-lg transition-colors"
-                                                        title="Delete"
-                                                    >
-                                                        <FiTrash2 size={15} />
-                                                    </button>
-                                                )}
-                                            </div>
-                                        </td>
-                                    </tr>
-                                );
-                            })}
-                        </tbody>
-                    </table>
-                    {filteredSupplies.length === 0 && (
-                        <div className="flex flex-col items-center justify-center py-16 text-slate-400 dark:text-d-faint">
-                            <FiPackage size={48} />
-                            <p className="mt-4 text-base">No supplies found</p>
-                            <p className="text-sm mt-1">Add your first supply record to get started</p>
+                        <DateRangeFields label="Bill date" value={supplyRange} onChange={setSupplyRange} />
+                        <div className="grid grid-cols-2 gap-2">
+                            <Field label="Payment">
+                                <Select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
+                                    <option value="all">All</option>
+                                    <option value="unpaid">Unpaid</option>
+                                    <option value="partial">Partial</option>
+                                    <option value="paid">Paid</option>
+                                </Select>
+                            </Field>
+                            <Field label="Vendor">
+                                <Select value={vendorFilter} onChange={(e) => setVendorFilter(e.target.value)}>
+                                    <option value="">All vendors</option>
+                                    {vendors.map((v) => (
+                                        <option key={v._id} value={v._id}>
+                                            {v.name}
+                                        </option>
+                                    ))}
+                                </Select>
+                            </Field>
                         </div>
-                    )}
-
-                    {/* Pagination */}
-                    {supplyPagination.totalPages > 1 && (
-                        <div className="flex items-center justify-between px-4 py-3 border-t border-slate-100 dark:border-d-border">
-                            <p className="text-sm text-slate-500 dark:text-d-muted">
-                                Page {supplyPagination.page} of {supplyPagination.totalPages} ({supplyTotal} supplies)
-                            </p>
-                            <div className="flex gap-2">
-                                <button
-                                    disabled={supplyPagination.page <= 1 || loading}
-                                    onClick={() => fetchSupplies(supplyPagination.page - 1)}
-                                    className="px-3 py-1.5 text-sm rounded-lg bg-slate-100 dark:bg-d-elevated hover:bg-slate-200 dark:hover:bg-d-glass disabled:opacity-40 transition-colors text-slate-700 dark:text-d-text"
-                                >
-                                    Previous
-                                </button>
-                                <button
-                                    disabled={supplyPagination.page >= supplyPagination.totalPages || loading}
-                                    onClick={() => fetchSupplies(supplyPagination.page + 1)}
-                                    className="px-3 py-1.5 text-sm rounded-lg bg-slate-100 dark:bg-d-elevated hover:bg-slate-200 dark:hover:bg-d-glass disabled:opacity-40 transition-colors text-slate-700 dark:text-d-text"
-                                >
-                                    Next
-                                </button>
-                            </div>
-                        </div>
-                    )}
-                </div>
-            )}
+                    </FilterButton>
+                }
+                isFiltered={!!searchQuery || statusFilter !== 'all' || !!vendorFilter || !!supplyRange.from || !!supplyRange.to}
+                onClearFilters={() => {
+                    setSearchQuery('');
+                    resetSupplyFilters();
+                }}
+                empty={{ icon: FiPackage, title: 'No supplies yet', description: 'Add your first supply record to get started.' }}
+                onRowClick={(x) => openSupplyModal(x)}
+                rowLabel={(x) => `Edit supply ${x.billNumber || ''}`}
+                server={{
+                    page: supplyPagination.page,
+                    pageSize: supplyPageSize,
+                    total: supplyTotal,
+                    onPageChange: (p) => fetchSupplies(p),
+                    onPageSizeChange: (n) => {
+                        setSupplyPageSize(n);
+                        try {
+                            localStorage.setItem('ds.table.supplies.pageSize', JSON.stringify(n));
+                        } catch {
+                            /* storage blocked */
+                        }
+                    },
+                }}
+            />
         </>
     );
 
@@ -993,101 +1011,17 @@ const Vendors = () => {
     // =========================================================================
 
     const renderVendorsTab = () => (
-        <div className="bg-white dark:bg-d-card rounded-2xl shadow-sm dark:shadow-[0_4px_20px_rgba(0,0,0,0.3)] border border-slate-100 dark:border-d-border overflow-hidden">
-            <table className="w-full">
-                <thead className="bg-slate-50 dark:bg-d-glass">
-                    <tr>
-                        <th className="text-left py-4 px-6 font-medium text-slate-600 dark:text-d-muted">Name</th>
-                        <th className="text-left py-4 px-6 font-medium text-slate-600 dark:text-d-muted">Company</th>
-                        <th className="text-left py-4 px-6 font-medium text-slate-600 dark:text-d-muted">Phone</th>
-                        <th className="text-right py-4 px-6 font-medium text-slate-600 dark:text-d-muted">Total Business</th>
-                        <th className="text-right py-4 px-6 font-medium text-slate-600 dark:text-d-muted">Total Paid</th>
-                        <th className="text-right py-4 px-6 font-medium text-slate-600 dark:text-d-muted">Remaining</th>
-                        <th className="text-right py-4 px-6 font-medium text-slate-600 dark:text-d-muted">Supplies</th>
-                        <th className="text-right py-4 px-6 font-medium text-slate-600 dark:text-d-muted">Actions</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {vendors.map((vendor) => {
-                        const remaining = vendor.totalRemaining || 0;
-                        const credit = vendor.totalCredit || 0;
-                        return (
-                            <tr
-                                key={vendor._id}
-                                className="border-t border-slate-100 dark:border-d-border hover:bg-slate-50 dark:hover:bg-[rgba(255,255,255,0.02)] transition-colors cursor-pointer"
-                                onClick={() => drillToVendor(vendor._id)}
-                            >
-                                <td className="py-4 px-6 font-semibold text-slate-800 dark:text-d-heading">
-                                    {vendor.name}
-                                </td>
-                                <td className="py-4 px-6 text-slate-600 dark:text-d-text">
-                                    {vendor.company || '—'}
-                                </td>
-                                <td className="py-4 px-6 text-slate-600 dark:text-d-text">
-                                    {vendor.phone || '—'}
-                                </td>
-                                <td className="py-4 px-6 text-right font-medium text-slate-800 dark:text-d-heading">
-                                    {formatCurrency(vendor.totalBusiness)}
-                                </td>
-                                <td className="py-4 px-6 text-right text-green-600 dark:text-d-green font-medium">
-                                    {formatCurrency(vendor.totalPaid)}
-                                </td>
-                                <td className="py-4 px-6 text-right font-semibold">
-                                    <span className={remaining > 0 ? 'text-red-600 dark:text-d-red' : 'text-slate-500 dark:text-d-muted'}>
-                                        {formatCurrency(remaining)}
-                                    </span>
-                                    {credit > 0 && (
-                                        <div className="text-[11px] font-medium text-emerald-600 dark:text-d-green whitespace-nowrap">
-                                            Credit: {formatCurrency(credit)} (vendor owes you)
-                                        </div>
-                                    )}
-                                </td>
-                                <td className="py-4 px-6 text-right">
-                                    <span className="px-2 py-1 bg-slate-100 dark:bg-d-glass text-slate-600 dark:text-d-muted rounded-full text-xs font-medium">
-                                        {vendor.supplyCount ?? 0}
-                                    </span>
-                                </td>
-                                <td className="py-4 px-6">
-                                    <div
-                                        className="flex items-center justify-end gap-1"
-                                        onClick={(e) => e.stopPropagation()}
-                                    >
-                                        <button
-                                            onClick={() => navigate(`/vendors/${vendor._id}/ledger`)}
-                                            className="p-2 text-slate-500 dark:text-d-muted hover:text-blue-500 hover:bg-blue-50 dark:hover:bg-[rgba(91,156,246,0.1)] rounded-lg transition-colors"
-                                            title="View Ledger"
-                                        >
-                                            <FiBookOpen size={15} />
-                                        </button>
-                                        <button
-                                            onClick={() => openVendorModal(vendor)}
-                                            className="p-2 text-slate-500 dark:text-d-muted hover:text-primary-500 hover:bg-primary-50 dark:hover:bg-[rgba(255,255,255,0.06)] rounded-lg transition-colors"
-                                            title="Edit"
-                                        >
-                                            <FiEdit2 size={15} />
-                                        </button>
-                                        <button
-                                            onClick={() => handleDeleteVendor(vendor._id)}
-                                            className="p-2 text-slate-500 dark:text-d-muted hover:text-red-500 dark:hover:text-d-red hover:bg-red-50 dark:hover:bg-[rgba(255,107,107,0.1)] rounded-lg transition-colors"
-                                            title="Delete"
-                                        >
-                                            <FiTrash2 size={15} />
-                                        </button>
-                                    </div>
-                                </td>
-                            </tr>
-                        );
-                    })}
-                </tbody>
-            </table>
-            {vendors.length === 0 && (
-                <div className="flex flex-col items-center justify-center py-16 text-slate-400 dark:text-d-faint">
-                    <FiUsers size={48} />
-                    <p className="mt-4 text-base">No vendors yet</p>
-                    <p className="text-sm mt-1">Add vendors to start tracking supply purchases</p>
-                </div>
-            )}
-        </div>
+        <DataTable
+            id="vendors"
+            caption="Vendors"
+            data={vendors}
+            columns={vendorColumns}
+            getRowId={(v) => v._id}
+            empty={{ icon: FiUsers, title: 'No vendors yet', description: 'Add vendors to start tracking supply purchases.' }}
+            onRowClick={(v) => drillToVendor(v._id)}
+            rowLabel={(v) => `Open ledger of ${v.name}`}
+            initialSort={[{ id: 'name', desc: false }]}
+        />
     );
 
     // =========================================================================
@@ -1104,15 +1038,15 @@ const Vendors = () => {
 
         const statusConfig = {
             paid: {
-                color: 'bg-green-100 text-green-700 dark:bg-[rgba(52,232,161,0.15)] dark:text-d-green',
+                color: 'bg-success-chip text-success',
                 label: 'Paid',
             },
             partial: {
-                color: 'bg-yellow-100 text-yellow-700 dark:bg-[rgba(255,210,100,0.15)] dark:text-d-accent',
+                color: 'bg-warning-chip text-warning-chip-foreground',
                 label: 'Partial',
             },
             unpaid: {
-                color: 'bg-red-100 text-red-700 dark:bg-[rgba(255,107,107,0.15)] dark:text-d-red',
+                color: 'bg-destructive-chip text-destructive',
                 label: 'Unpaid',
             },
         };
@@ -1121,91 +1055,91 @@ const Vendors = () => {
             <div className="space-y-6">
                 {/* Summary Cards */}
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-                    <div className="bg-white dark:bg-d-card rounded-2xl p-6 shadow-sm dark:shadow-[0_4px_20px_rgba(0,0,0,0.3)] border border-slate-100 dark:border-d-border">
+                    <div className="bg-card rounded-2xl p-6 shadow-sm border border-hairline">
                         <div className="flex items-center gap-3 mb-3">
-                            <div className="w-10 h-10 bg-red-100 dark:bg-[rgba(255,107,107,0.15)] rounded-xl flex items-center justify-center">
-                                <FiAlertCircle className="text-red-500 dark:text-d-red" size={20} />
+                            <div className="w-10 h-10 bg-destructive-chip rounded-xl flex items-center justify-center">
+                                <FiAlertCircle className="text-destructive" size={20} />
                             </div>
-                            <p className="text-sm text-slate-500 dark:text-d-muted">Total Outstanding</p>
+                            <p className="text-sm text-muted-foreground">Total Outstanding</p>
                         </div>
-                        <p className="text-2xl font-bold text-red-600 dark:text-d-red">
+                        <p className="text-2xl font-bold text-destructive">
                             {formatCurrency(overall.totalRemaining ?? overall.totalOutstanding ?? overall.outstanding ?? 0)}
                         </p>
                     </div>
 
-                    <div className="bg-white dark:bg-d-card rounded-2xl p-6 shadow-sm dark:shadow-[0_4px_20px_rgba(0,0,0,0.3)] border border-slate-100 dark:border-d-border">
+                    <div className="bg-card rounded-2xl p-6 shadow-sm border border-hairline">
                         <div className="flex items-center gap-3 mb-3">
-                            <div className="w-10 h-10 bg-blue-100 dark:bg-[rgba(96,165,250,0.15)] rounded-xl flex items-center justify-center">
-                                <FiDollarSign className="text-blue-500 dark:text-[#60a5fa]" size={20} />
+                            <div className="w-10 h-10 bg-info-chip rounded-xl flex items-center justify-center">
+                                <FiDollarSign className="text-info" size={20} />
                             </div>
-                            <p className="text-sm text-slate-500 dark:text-d-muted">This Month Total</p>
+                            <p className="text-sm text-muted-foreground">This Month Total</p>
                         </div>
-                        <p className="text-2xl font-bold text-slate-800 dark:text-d-heading">
+                        <p className="text-2xl font-bold text-foreground">
                             {formatCurrency(thisMonth.totalAmount || thisMonth.total || 0)}
                         </p>
                     </div>
 
-                    <div className="bg-white dark:bg-d-card rounded-2xl p-6 shadow-sm dark:shadow-[0_4px_20px_rgba(0,0,0,0.3)] border border-slate-100 dark:border-d-border">
+                    <div className="bg-card rounded-2xl p-6 shadow-sm border border-hairline">
                         <div className="flex items-center gap-3 mb-3">
-                            <div className="w-10 h-10 bg-primary-100 rounded-xl flex items-center justify-center">
-                                <FiPackage className="text-primary-500" size={20} />
+                            <div className="w-10 h-10 bg-accent rounded-xl flex items-center justify-center">
+                                <FiPackage className="text-primary" size={20} />
                             </div>
-                            <p className="text-sm text-slate-500 dark:text-d-muted">Total Supplies</p>
+                            <p className="text-sm text-muted-foreground">Total Supplies</p>
                         </div>
-                        <p className="text-2xl font-bold text-primary-600">
+                        <p className="text-2xl font-bold text-primary">
                             {overall.totalSupplies || overall.count || 0}
                         </p>
                     </div>
 
-                    <div className="bg-white dark:bg-d-card rounded-2xl p-6 shadow-sm dark:shadow-[0_4px_20px_rgba(0,0,0,0.3)] border border-slate-100 dark:border-d-border">
+                    <div className="bg-card rounded-2xl p-6 shadow-sm border border-hairline">
                         <div className="flex items-center gap-3 mb-3">
-                            <div className="w-10 h-10 bg-purple-100 dark:bg-[rgba(168,85,247,0.15)] rounded-xl flex items-center justify-center">
-                                <FiUsers className="text-purple-500 dark:text-[#c084fc]" size={20} />
+                            <div className="w-10 h-10 bg-accent rounded-xl flex items-center justify-center">
+                                <FiUsers className="text-primary" size={20} />
                             </div>
-                            <p className="text-sm text-slate-500 dark:text-d-muted">Total Vendors</p>
+                            <p className="text-sm text-muted-foreground">Total Vendors</p>
                         </div>
-                        <p className="text-2xl font-bold text-purple-600 dark:text-[#c084fc]">{vendors.length}</p>
+                        <p className="text-2xl font-bold text-primary">{vendors.length}</p>
                     </div>
                 </div>
 
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                     {/* Top Vendors */}
-                    <div className="bg-white dark:bg-d-card rounded-2xl shadow-sm dark:shadow-[0_4px_20px_rgba(0,0,0,0.3)] border border-slate-100 dark:border-d-border overflow-hidden">
-                        <div className="px-6 py-4 border-b border-slate-100 dark:border-d-border">
-                            <h3 className="font-semibold text-slate-800 dark:text-d-heading">Top Vendors by Outstanding</h3>
+                    <div className="bg-card rounded-2xl shadow-sm border border-hairline overflow-hidden">
+                        <div className="px-6 py-4 border-b border-hairline">
+                            <h3 className="font-semibold text-foreground">Top Vendors by Outstanding</h3>
                         </div>
                         {byVendor.length === 0 ? (
-                            <div className="flex flex-col items-center justify-center py-12 text-slate-400 dark:text-d-faint">
+                            <div className="flex flex-col items-center justify-center py-12 text-muted-foreground">
                                 <FiUsers size={36} />
                                 <p className="mt-3 text-sm">No vendor data available</p>
                             </div>
                         ) : (
                             <table className="w-full">
-                                <thead className="bg-slate-50 dark:bg-d-glass">
+                                <thead className="bg-muted/40">
                                     <tr>
-                                        <th className="text-left py-3 px-6 text-sm font-medium text-slate-600 dark:text-d-muted">Vendor</th>
-                                        <th className="text-right py-3 px-6 text-sm font-medium text-slate-600 dark:text-d-muted">Total</th>
-                                        <th className="text-right py-3 px-6 text-sm font-medium text-slate-600 dark:text-d-muted">Remaining</th>
+                                        <th className="text-left py-3 px-6 text-sm font-medium text-muted-foreground">Vendor</th>
+                                        <th className="text-right py-3 px-6 text-sm font-medium text-muted-foreground">Total</th>
+                                        <th className="text-right py-3 px-6 text-sm font-medium text-muted-foreground">Remaining</th>
                                     </tr>
                                 </thead>
                                 <tbody>
                                     {byVendor.slice(0, 8).map((v, idx) => (
                                         <tr
                                             key={v._id || idx}
-                                            className="border-t border-slate-100 dark:border-d-border hover:bg-slate-50 dark:hover:bg-[rgba(255,255,255,0.02)] transition-colors"
+                                            className="border-t border-hairline hover:bg-[var(--hover-overlay)] transition-colors"
                                         >
-                                            <td className="py-3 px-6 font-medium text-slate-800 dark:text-d-heading">
+                                            <td className="py-3 px-6 font-medium text-foreground">
                                                 {v.name || v.vendorName || '—'}
                                             </td>
-                                            <td className="py-3 px-6 text-right text-slate-700 dark:text-d-text">
+                                            <td className="py-3 px-6 text-right text-foreground">
                                                 {formatCurrency(v.totalAmount || v.total || 0)}
                                             </td>
                                             <td className="py-3 px-6 text-right font-semibold">
                                                 <span
                                                     className={
                                                         (v.remaining || v.totalRemaining || 0) > 0
-                                                            ? 'text-red-600 dark:text-d-red'
-                                                            : 'text-green-600 dark:text-d-green'
+                                                            ? 'text-destructive'
+                                                            : 'text-success'
                                                     }
                                                 >
                                                     {formatCurrency(v.remaining || v.totalRemaining || 0)}
@@ -1219,13 +1153,13 @@ const Vendors = () => {
                     </div>
 
                     {/* Status Breakdown */}
-                    <div className="bg-white dark:bg-d-card rounded-2xl shadow-sm dark:shadow-[0_4px_20px_rgba(0,0,0,0.3)] border border-slate-100 dark:border-d-border overflow-hidden">
-                        <div className="px-6 py-4 border-b border-slate-100 dark:border-d-border">
-                            <h3 className="font-semibold text-slate-800 dark:text-d-heading">Payment Status Breakdown</h3>
+                    <div className="bg-card rounded-2xl shadow-sm border border-hairline overflow-hidden">
+                        <div className="px-6 py-4 border-b border-hairline">
+                            <h3 className="font-semibold text-foreground">Payment Status Breakdown</h3>
                         </div>
                         <div className="p-6 space-y-4">
                             {byStatus.length === 0 ? (
-                                <div className="flex flex-col items-center justify-center py-8 text-slate-400 dark:text-d-faint">
+                                <div className="flex flex-col items-center justify-center py-8 text-muted-foreground">
                                     <FiBarChart2 size={36} />
                                     <p className="mt-3 text-sm">No status data available</p>
                                 </div>
@@ -1239,7 +1173,7 @@ const Vendors = () => {
                                     return (
                                         <div
                                             key={statusKey || idx}
-                                            className="flex items-center justify-between p-4 rounded-xl bg-slate-50 dark:bg-d-glass border border-slate-100 dark:border-d-border"
+                                            className="flex items-center justify-between p-4 rounded-xl bg-muted/40 border border-hairline"
                                         >
                                             <div className="flex items-center gap-3">
                                                 <span
@@ -1247,11 +1181,11 @@ const Vendors = () => {
                                                 >
                                                     {cfg.label}
                                                 </span>
-                                                <span className="text-sm text-slate-500 dark:text-d-muted">
+                                                <span className="text-sm text-muted-foreground">
                                                     {s.count || 0} record{(s.count || 0) !== 1 ? 's' : ''}
                                                 </span>
                                             </div>
-                                            <span className="font-semibold text-slate-800 dark:text-d-heading">
+                                            <span className="font-semibold text-foreground">
                                                 {formatCurrency(s.totalAmount || s.total || 0)}
                                             </span>
                                         </div>
@@ -1270,52 +1204,36 @@ const Vendors = () => {
     // =========================================================================
 
     return (
-        <div className="p-6 animate-fadeIn bg-slate-50 dark:bg-d-bg min-h-full">
-            {/* ── Page Header ──────────────────────────────────────────────── */}
-            <div className="flex items-center justify-between mb-6">
-                <div>
-                    <h1 className="text-2xl font-bold text-slate-800 dark:text-d-heading">Vendors & Supplies</h1>
-                    <p className="text-slate-500 dark:text-d-muted">Manage suppliers and incoming inventory purchases</p>
-                </div>
-
-                {activeTab === 'supplies' && (
-                    <button
-                        onClick={() => openSupplyModal()}
-                        className="flex items-center gap-2 px-4 py-2 bg-primary-500 text-white rounded-xl hover:bg-primary-600 transition-colors"
-                    >
-                        <FiPlus />
-                        Add Supply
-                    </button>
-                )}
-
-                {activeTab === 'vendors' && (
-                    <button
-                        onClick={() => openVendorModal()}
-                        className="flex items-center gap-2 px-4 py-2 bg-primary-500 text-white rounded-xl hover:bg-primary-600 transition-colors"
-                    >
-                        <FiPlus />
-                        Add Vendor
-                    </button>
-                )}
-            </div>
-
-            {/* ── Tab Bar ──────────────────────────────────────────────────── */}
-            <div className="flex items-center gap-1 bg-white dark:bg-d-card rounded-xl p-1 border border-slate-200 dark:border-d-border mb-6 w-fit">
-                {TABS.map((tab) => (
-                    <button
-                        key={tab.id}
-                        onClick={() => setActiveTab(tab.id)}
-                        className={`flex items-center gap-2 px-5 py-2.5 rounded-lg text-sm font-medium transition-colors ${
-                            activeTab === tab.id
-                                ? 'bg-primary-500 dark:bg-d-accent text-white dark:text-d-card shadow-sm'
-                                : 'text-slate-600 dark:text-d-text hover:bg-slate-100 dark:hover:bg-d-glass-hover'
-                        }`}
-                    >
-                        <tab.icon size={15} />
-                        {tab.label}
-                    </button>
-                ))}
-            </div>
+        <div className="p-6 animate-fadeIn min-h-full">
+            {/* ── Page Header + tabs ──────────────────────────────────── */}
+            <PageHeader
+                title="Vendors & Supplies"
+                subtitle="Manage suppliers and incoming inventory purchases"
+                actions={
+                    <>
+                        {activeTab === 'supplies' && (
+                            <Button onClick={() => openSupplyModal()}>
+                                <FiPlus aria-hidden="true" />
+                                Add Supply
+                            </Button>
+                        )}
+                        {activeTab === 'vendors' && (
+                            <Button onClick={() => openVendorModal()}>
+                                <FiPlus aria-hidden="true" />
+                                Add Vendor
+                            </Button>
+                        )}
+                    </>
+                }
+                tabs={
+                    <Tabs
+                        label="Vendors sections"
+                        value={activeTab}
+                        onChange={setActiveTab}
+                        items={TABS.map((t) => ({ value: t.id, label: t.label, icon: t.icon }))}
+                    />
+                }
+            />
 
             {/* ── Tab Content ──────────────────────────────────────────────── */}
             {activeTab === 'supplies' && renderSuppliesTab()}
@@ -1326,16 +1244,15 @@ const Vendors = () => {
                 MODAL: Add / Edit Supply
             ================================================================ */}
             {showSupplyModal && (
-                <div className="fixed inset-0 bg-black/50 dark:bg-black/60 flex items-center justify-center z-50 p-4">
-                    <div className="bg-white dark:bg-d-card dark:border dark:border-d-border rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto animate-fadeIn">
+                <DialogShell size="lg" className="max-h-[90vh] overflow-y-auto">
                         {/* Header */}
-                        <div className="flex items-center justify-between p-6 border-b border-slate-200 dark:border-d-border sticky top-0 bg-white dark:bg-d-card z-10">
-                            <h3 className="text-xl font-semibold text-slate-800 dark:text-d-heading">
+                        <div className="flex items-center justify-between p-6 border-b border-hairline sticky top-0 bg-card z-10">
+                            <h3 className="text-xl font-semibold text-foreground">
                                 {editingSupply ? 'Edit Supply' : 'Add Supply'}
                             </h3>
-                            <button
+                            <button data-dialog-close
                                 onClick={closeSupplyModal}
-                                className="p-2 hover:bg-slate-100 dark:hover:bg-d-glass-hover rounded-lg transition-colors text-slate-500 dark:text-d-muted"
+                                className="p-2 hover:bg-[var(--hover-overlay)] rounded-lg transition-colors text-muted-foreground"
                             >
                                 <FiX />
                             </button>
@@ -1345,7 +1262,7 @@ const Vendors = () => {
                             {/* Vendor + Bill Number */}
                             <div className="grid grid-cols-2 gap-4">
                                 <div>
-                                    <label className="block text-sm font-medium text-slate-700 dark:text-d-text mb-1">
+                                    <label className="block text-sm font-medium text-foreground mb-1">
                                         Vendor *
                                     </label>
                                     <div className="relative">
@@ -1354,7 +1271,7 @@ const Vendors = () => {
                                             onChange={(e) => handleVendorSelectChange(e.target.value)}
                                             required
                                             disabled={!!editingSupply}
-                                            className="appearance-none w-full px-4 py-2 pr-10 bg-white dark:bg-d-bg border border-slate-200 dark:border-d-border rounded-xl focus:ring-2 focus:ring-primary-500 dark:focus:border-d-border-hover focus:outline-none text-slate-800 dark:text-d-text disabled:opacity-60 disabled:cursor-not-allowed"
+                                            className="appearance-none w-full px-4 py-2 pr-10 bg-card border border-hairline rounded-xl focus:ring-2 focus:ring-ring focus:outline-none text-foreground disabled:opacity-60 disabled:cursor-not-allowed"
                                         >
                                             <option value="">Select vendor...</option>
                                             {vendors.map((v) => (
@@ -1365,14 +1282,14 @@ const Vendors = () => {
                                             ))}
                                             {!editingSupply && <option value={ADD_VENDOR_OPTION}>+ Add New Vendor</option>}
                                         </select>
-                                        <FiChevronDown className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 dark:text-d-muted" />
+                                        <FiChevronDown className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
                                         {editingSupply && (
-                                            <p className="mt-1 text-xs text-slate-500 dark:text-d-muted">Vendor cannot be changed after a supply is created.</p>
+                                            <p className="mt-1 text-xs text-muted-foreground">Vendor cannot be changed after a supply is created.</p>
                                         )}
                                     </div>
                                 </div>
                                 <div>
-                                    <label className="block text-sm font-medium text-slate-700 dark:text-d-text mb-1">
+                                    <label className="block text-sm font-medium text-foreground mb-1">
                                         Bill Number
                                     </label>
                                     <input
@@ -1382,7 +1299,7 @@ const Vendors = () => {
                                             setSupplyForm({ ...supplyForm, billNumber: e.target.value })
                                         }
                                         placeholder="e.g. INV-1023"
-                                        className="w-full px-4 py-2 bg-white dark:bg-d-bg border border-slate-200 dark:border-d-border rounded-xl focus:ring-2 focus:ring-primary-500 dark:focus:border-d-border-hover focus:outline-none text-slate-800 dark:text-d-text placeholder-slate-400 dark:placeholder-d-faint"
+                                        className="w-full px-4 py-2 bg-card border border-hairline rounded-xl focus:ring-2 focus:ring-ring focus:outline-none text-foreground placeholder:text-placeholder"
                                     />
                                 </div>
                             </div>
@@ -1390,7 +1307,7 @@ const Vendors = () => {
                             {/* Bill Date */}
                             <div className="grid grid-cols-2 gap-4">
                                 <div>
-                                    <label className="block text-sm font-medium text-slate-700 dark:text-d-text mb-1">
+                                    <label className="block text-sm font-medium text-foreground mb-1">
                                         Bill Date
                                     </label>
                                     <input
@@ -1399,19 +1316,19 @@ const Vendors = () => {
                                         onChange={(e) =>
                                             setSupplyForm({ ...supplyForm, billDate: e.target.value })
                                         }
-                                        className="w-full px-4 py-2 bg-white dark:bg-d-bg border border-slate-200 dark:border-d-border rounded-xl focus:ring-2 focus:ring-primary-500 dark:focus:border-d-border-hover focus:outline-none text-slate-800 dark:text-d-text"
+                                        className="w-full px-4 py-2 bg-card border border-hairline rounded-xl focus:ring-2 focus:ring-ring focus:outline-none text-foreground"
                                     />
                                 </div>
                                 <div>
                                     <div className="flex items-center justify-between mb-1">
-                                        <label className="block text-sm font-medium text-slate-700 dark:text-d-text">
+                                        <label className="block text-sm font-medium text-foreground">
                                             Paid Amount
                                         </label>
                                         {!moneyBookOn && !editingSupply && supplyCashBalance != null && (
                                             <span className={`text-xs font-medium ${
                                                 (Number(supplyForm.paidAmount) || 0) > supplyCashBalance
-                                                    ? 'text-red-500 dark:text-d-red'
-                                                    : 'text-slate-400 dark:text-d-faint'
+                                                    ? 'text-destructive'
+                                                    : 'text-muted-foreground'
                                             }`}>
                                                 Cash: {supplyCashBalance < 0 ? '-' : ''}{formatCurrency(Math.abs(supplyCashBalance))}
                                             </span>
@@ -1427,23 +1344,23 @@ const Vendors = () => {
                                         }
                                         readOnly={!!editingSupply}
                                         placeholder="0"
-                                        className={`w-full px-4 py-2 bg-white dark:bg-d-bg border rounded-xl focus:ring-2 focus:ring-primary-500 dark:focus:border-d-border-hover focus:outline-none text-slate-800 dark:text-d-text placeholder-slate-400 dark:placeholder-d-faint read-only:opacity-60 read-only:cursor-not-allowed read-only:focus:ring-0 ${
+                                        className={`w-full px-4 py-2 bg-card border rounded-xl focus:ring-2 focus:ring-ring focus:outline-none text-foreground placeholder:text-placeholder read-only:opacity-60 read-only:cursor-not-allowed read-only:focus:ring-0 ${
                                             !moneyBookOn && !editingSupply && (Number(supplyForm.paidAmount) || 0) > supplyCashBalance && supplyCashBalance != null
-                                                ? 'border-red-400 dark:border-red-500'
-                                                : 'border-slate-200 dark:border-d-border'
+                                                ? 'border-destructive'
+                                                : 'border-hairline'
                                         }`}
                                     />
                                     {editingSupply && (
-                                        <p className="mt-1 text-xs text-slate-500 dark:text-d-muted">Use "Pay" to record a payment.</p>
+                                        <p className="mt-1 text-xs text-muted-foreground">Use "Pay" to record a payment.</p>
                                     )}
                                 </div>
                             </div>
 
                             {/* Money Book on: how the paid-now part is paid */}
                             {moneyBookOn && !editingSupply && (Number(supplyForm.paidAmount) || 0) > 0 && (
-                                <div className="space-y-3 p-4 rounded-xl border border-slate-200 dark:border-d-border">
+                                <div className="space-y-3 p-4 rounded-xl border border-hairline">
                                     <div>
-                                        <label className="block text-sm font-medium text-slate-700 dark:text-d-text mb-1">Paid by</label>
+                                        <label className="block text-sm font-medium text-foreground mb-1">Paid by</label>
                                         <div className="flex flex-wrap gap-1.5">
                                             {payMethods.map((m) => (
                                                 <button
@@ -1452,8 +1369,8 @@ const Vendors = () => {
                                                     onClick={() => setSupplyPay((p) => ({ ...p, method: m.id }))}
                                                     className={`px-3 py-2 rounded-lg text-xs font-semibold transition-colors ${
                                                         supplyPay.method === m.id
-                                                            ? 'bg-primary-500 dark:bg-d-accent text-white dark:text-d-card'
-                                                            : 'bg-slate-50 dark:bg-d-bg border border-slate-200 dark:border-d-border text-slate-600 dark:text-d-muted hover:border-slate-300'
+                                                            ? 'bg-primary text-white'
+                                                            : 'bg-muted/40 border border-hairline text-muted-foreground hover:border-border'
                                                     }`}
                                                 >
                                                     {m.label}
@@ -1483,14 +1400,14 @@ const Vendors = () => {
                             {/* Items Section */}
                             <div>
                                 <div className="flex items-center justify-between mb-2">
-                                    <label className="text-sm font-medium text-slate-700 dark:text-d-text">
+                                    <label className="text-sm font-medium text-foreground">
                                         Items *
                                     </label>
                                     {!itemsLocked && (
                                         <button
                                             type="button"
                                             onClick={addItem}
-                                            className="flex items-center gap-1 text-sm text-primary-600 hover:text-primary-700 font-medium transition-colors"
+                                            className="flex items-center gap-1 text-sm text-primary hover:text-primary font-medium transition-colors"
                                         >
                                             <FiPlus size={14} />
                                             Add Item
@@ -1499,22 +1416,27 @@ const Vendors = () => {
                                 </div>
 
                                 {itemsLocked && (
-                                    <div className="mb-3 p-3 bg-slate-50 dark:bg-d-glass border border-slate-200 dark:border-d-border rounded-xl text-xs text-slate-600 dark:text-d-muted">
+                                    <div className="mb-3 p-3 bg-muted/40 border border-hairline rounded-xl text-xs text-muted-foreground">
                                         This supply has returns, so its items can't be changed. Bill number, date and notes can still be edited.
                                     </div>
                                 )}
 
                                 {/* Items Header */}
                                 <div className="grid grid-cols-12 gap-2 mb-2 px-1">
-                                    <span className="col-span-5 text-xs text-slate-500 dark:text-d-muted font-medium">Product</span>
-                                    <span className="col-span-2 text-xs text-slate-500 dark:text-d-muted font-medium">Qty</span>
-                                    <span className="col-span-2 text-xs text-slate-500 dark:text-d-muted font-medium">Unit Price</span>
-                                    <span className="col-span-2 text-xs text-slate-500 dark:text-d-muted font-medium">Total</span>
+                                    <span className="col-span-5 text-xs text-muted-foreground font-medium">Product</span>
+                                    <span className="col-span-2 text-xs text-muted-foreground font-medium">Qty</span>
+                                    <span className="col-span-2 text-xs text-muted-foreground font-medium">Unit Price</span>
+                                    <span className="col-span-2 text-xs text-muted-foreground font-medium">Total</span>
                                     <span className="col-span-1" />
                                 </div>
 
-                                {products.length === 0 && (
-                                    <div className="mb-3 p-3 bg-yellow-50 dark:bg-[rgba(255,210,100,0.08)] border border-yellow-200 dark:border-[rgba(255,210,100,0.22)] rounded-xl text-xs text-yellow-800 dark:text-d-accent">
+                                {productsLoading && products.length === 0 && (
+                                    <p className="mb-3 text-body-sm text-muted-foreground" role="status">
+                                        Loading products…
+                                    </p>
+                                )}
+                                {!productsLoading && products.length === 0 && (
+                                    <div className="mb-3 p-3 bg-warning-chip border border-warning/30 rounded-xl text-xs text-warning-chip-foreground">
                                         No products found. Please add products first from the Products screen, then come back to record a supply.
                                     </div>
                                 )}
@@ -1528,7 +1450,7 @@ const Vendors = () => {
                                                     onChange={(e) => handleProductSelectChange(idx, e.target.value)}
                                                     required
                                                     disabled={itemsLocked}
-                                                    className="disabled:opacity-60 disabled:cursor-not-allowed appearance-none w-full px-3 py-2 pr-9 bg-white dark:bg-d-bg border border-slate-200 dark:border-d-border rounded-xl text-sm focus:ring-2 focus:ring-primary-500 dark:focus:border-d-border-hover focus:outline-none text-slate-800 dark:text-d-text"
+                                                    className="disabled:opacity-60 disabled:cursor-not-allowed appearance-none w-full px-3 py-2 pr-9 bg-card border border-hairline rounded-xl text-sm focus:ring-2 focus:ring-ring focus:outline-none text-foreground"
                                                 >
                                                     <option value="">Select product…</option>
                                                     {products
@@ -1541,7 +1463,7 @@ const Vendors = () => {
                                                     ))}
                                                     <option value={ADD_PRODUCT_OPTION}>+ Add New Product</option>
                                                 </select>
-                                                <FiChevronDown className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 dark:text-d-muted" />
+                                                <FiChevronDown className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground" />
                                             </div>
                                             <input
                                                 type="number"
@@ -1549,7 +1471,7 @@ const Vendors = () => {
                                                 value={item.qty}
                                                 onChange={(e) => updateItem(idx, 'qty', e.target.value)}
                                                 disabled={itemsLocked}
-                                                className="disabled:opacity-60 disabled:cursor-not-allowed col-span-2 px-3 py-2 bg-white dark:bg-d-bg border border-slate-200 dark:border-d-border rounded-xl text-sm focus:ring-2 focus:ring-primary-500 dark:focus:border-d-border-hover focus:outline-none text-slate-800 dark:text-d-text"
+                                                className="disabled:opacity-60 disabled:cursor-not-allowed col-span-2 px-3 py-2 bg-card border border-hairline rounded-xl text-sm focus:ring-2 focus:ring-ring focus:outline-none text-foreground"
                                             />
                                             <input
                                                 type="number"
@@ -1560,16 +1482,16 @@ const Vendors = () => {
                                                 placeholder="0"
                                                 required
                                                 disabled={itemsLocked}
-                                                className="disabled:opacity-60 disabled:cursor-not-allowed col-span-2 px-3 py-2 bg-white dark:bg-d-bg border border-slate-200 dark:border-d-border rounded-xl text-sm focus:ring-2 focus:ring-primary-500 dark:focus:border-d-border-hover focus:outline-none text-slate-800 dark:text-d-text placeholder-slate-400 dark:placeholder-d-faint"
+                                                className="disabled:opacity-60 disabled:cursor-not-allowed col-span-2 px-3 py-2 bg-card border border-hairline rounded-xl text-sm focus:ring-2 focus:ring-ring focus:outline-none text-foreground placeholder:text-placeholder"
                                             />
-                                            <div className="col-span-2 px-3 py-2 bg-slate-50 dark:bg-d-glass border border-slate-200 dark:border-d-border rounded-xl text-sm text-slate-600 dark:text-d-text font-medium text-right">
+                                            <div className="col-span-2 px-3 py-2 bg-muted/40 border border-hairline rounded-xl text-sm text-muted-foreground font-medium text-right">
                                                 {item.total.toLocaleString()}
                                             </div>
                                             <button
                                                 type="button"
                                                 onClick={() => removeItem(idx)}
                                                 disabled={supplyItems.length === 1 || itemsLocked}
-                                                className="col-span-1 p-2 text-slate-400 dark:text-d-faint hover:text-red-500 dark:hover:text-d-red hover:bg-red-50 dark:hover:bg-[rgba(255,107,107,0.1)] rounded-lg transition-colors disabled:opacity-30 disabled:cursor-not-allowed flex items-center justify-center"
+                                                className="col-span-1 p-2 text-muted-foreground hover:text-destructive hover:bg-destructive-chip rounded-lg transition-colors disabled:opacity-30 disabled:cursor-not-allowed flex items-center justify-center"
                                             >
                                                 <FiMinus size={14} />
                                             </button>
@@ -1578,10 +1500,10 @@ const Vendors = () => {
                                 </div>
 
                                 {/* Items Total */}
-                                <div className="flex justify-end mt-3 pt-3 border-t border-slate-100 dark:border-d-border">
+                                <div className="flex justify-end mt-3 pt-3 border-t border-hairline">
                                     <div className="flex items-center gap-3">
-                                        <span className="text-sm text-slate-500 dark:text-d-muted">Items Total:</span>
-                                        <span className="font-bold text-slate-800 dark:text-d-heading text-lg">
+                                        <span className="text-sm text-muted-foreground">Items Total:</span>
+                                        <span className="font-bold text-foreground text-lg">
                                             {formatCurrency(itemsTotal)}
                                         </span>
                                     </div>
@@ -1590,11 +1512,11 @@ const Vendors = () => {
 
                             {/* Receipt Image */}
                             <div>
-                                <label className="block text-sm font-medium text-slate-700 dark:text-d-text mb-1">
+                                <label className="block text-sm font-medium text-foreground mb-1">
                                     Receipt Image
                                 </label>
                                 <div className="flex items-center gap-3">
-                                    <label className="flex items-center gap-2 px-4 py-2 border border-dashed border-slate-300 dark:border-[rgba(255,255,255,0.15)] rounded-xl cursor-pointer hover:border-primary-400 dark:hover:border-d-border-hover hover:bg-primary-50 dark:hover:bg-[rgba(255,210,100,0.05)] transition-colors text-sm text-slate-600 dark:text-d-text">
+                                    <label className="flex items-center gap-2 px-4 py-2 border border-dashed border-border rounded-xl cursor-pointer hover:border-primary hover:bg-accent transition-colors text-sm text-muted-foreground">
                                         <FiImage size={16} />
                                         {receiptFile ? receiptFile.name : 'Choose image...'}
                                         <input
@@ -1608,7 +1530,7 @@ const Vendors = () => {
                                         <button
                                             type="button"
                                             onClick={() => setReceiptFile(null)}
-                                            className="p-1.5 text-slate-400 dark:text-d-faint hover:text-red-500 dark:hover:text-d-red rounded-lg hover:bg-red-50 dark:hover:bg-[rgba(255,107,107,0.1)] transition-colors"
+                                            className="p-1.5 text-muted-foreground hover:text-destructive rounded-lg hover:bg-destructive-chip transition-colors"
                                         >
                                             <FiX size={14} />
                                         </button>
@@ -1618,7 +1540,7 @@ const Vendors = () => {
 
                             {/* Notes */}
                             <div>
-                                <label className="block text-sm font-medium text-slate-700 dark:text-d-text mb-1">
+                                <label className="block text-sm font-medium text-foreground mb-1">
                                     Notes
                                 </label>
                                 <textarea
@@ -1628,7 +1550,7 @@ const Vendors = () => {
                                     }
                                     placeholder="Any additional notes..."
                                     rows={3}
-                                    className="w-full px-4 py-2 bg-white dark:bg-d-bg border border-slate-200 dark:border-d-border rounded-xl focus:ring-2 focus:ring-primary-500 dark:focus:border-d-border-hover focus:outline-none resize-none text-slate-800 dark:text-d-text placeholder-slate-400 dark:placeholder-d-faint"
+                                    className="w-full px-4 py-2 bg-card border border-hairline rounded-xl focus:ring-2 focus:ring-ring focus:outline-none resize-none text-foreground placeholder:text-placeholder"
                                 />
                             </div>
 
@@ -1637,17 +1559,17 @@ const Vendors = () => {
                                 <button
                                     type="button"
                                     onClick={closeSupplyModal}
-                                    className="flex-1 py-3 border border-slate-200 dark:border-d-border rounded-xl font-medium text-slate-600 dark:text-d-text hover:bg-slate-50 dark:hover:bg-d-glass transition-colors"
+                                    className="flex-1 py-3 border border-hairline rounded-xl font-medium text-muted-foreground hover:bg-[var(--hover-overlay)] transition-colors"
                                 >
                                     Cancel
                                 </button>
                                 <button
                                     type="submit"
                                     disabled={submitting}
-                                    className="flex-1 py-3 bg-primary-500 text-white rounded-xl font-medium hover:bg-primary-600 transition-colors flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
+                                    className="flex-1 py-3 bg-primary text-white rounded-xl font-medium hover:bg-primary/90 transition-colors flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
                                 >
                                     {submitting ? (
-                                        <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                                        <div className="w-4 h-4 border-2 border-hairline border-t-transparent rounded-full animate-spin" />
                                     ) : (
                                         <FiSave size={16} />
                                     )}
@@ -1655,29 +1577,27 @@ const Vendors = () => {
                                 </button>
                             </div>
                         </form>
-                    </div>
-                </div>
+                    </DialogShell>
             )}
 
             {/* ================================================================
                 MODAL: Record Payment
             ================================================================ */}
             {showPayModal && payingSupply && (
-                <div className="fixed inset-0 bg-black/50 dark:bg-black/60 flex items-center justify-center z-50 p-4">
-                    <div className="bg-white dark:bg-d-card dark:border dark:border-d-border rounded-2xl w-full max-w-sm animate-fadeIn max-h-[90vh] overflow-y-auto">
-                        <div className="flex items-center justify-between p-6 border-b border-slate-200 dark:border-d-border">
+                <DialogShell size="sm" className="max-h-[90vh] overflow-y-auto">
+                        <div className="flex items-center justify-between p-6 border-b border-hairline">
                             <div>
-                                <h3 className="text-lg font-semibold text-slate-800 dark:text-d-heading">Record Payment</h3>
-                                <p className="text-sm text-slate-500 dark:text-d-muted mt-0.5">
+                                <h3 className="text-lg font-semibold text-foreground">Record Payment</h3>
+                                <p className="text-sm text-muted-foreground mt-0.5">
                                     Remaining:{' '}
-                                    <span className="font-semibold text-red-600 dark:text-d-red">
+                                    <span className="font-semibold text-destructive">
                                         {formatCurrency(payingSupply.remainingAmount || 0)}
                                     </span>
                                 </p>
                             </div>
-                            <button
+                            <button data-dialog-close
                                 onClick={() => setShowPayModal(false)}
-                                className="p-2 hover:bg-slate-100 dark:hover:bg-d-glass-hover rounded-lg transition-colors text-slate-500 dark:text-d-muted"
+                                className="p-2 hover:bg-[var(--hover-overlay)] rounded-lg transition-colors text-muted-foreground"
                             >
                                 <FiX />
                             </button>
@@ -1685,7 +1605,7 @@ const Vendors = () => {
 
                         <form onSubmit={handlePay} className="p-6 space-y-4">
                             <div>
-                                <label className="block text-sm font-medium text-slate-700 dark:text-d-text mb-1">
+                                <label className="block text-sm font-medium text-foreground mb-1">
                                     Payment Amount *
                                 </label>
                                 <input
@@ -1697,12 +1617,12 @@ const Vendors = () => {
                                     placeholder="Enter amount"
                                     required
                                     autoFocus
-                                    className="w-full px-4 py-2.5 bg-white dark:bg-d-bg border border-slate-200 dark:border-d-border rounded-xl focus:ring-2 focus:ring-primary-500 dark:focus:border-d-border-hover focus:outline-none text-lg font-medium text-slate-800 dark:text-d-text placeholder-slate-400 dark:placeholder-d-faint"
+                                    className="w-full px-4 py-2.5 bg-card border border-hairline rounded-xl focus:ring-2 focus:ring-ring focus:outline-none text-lg font-medium text-foreground placeholder:text-placeholder"
                                 />
                             </div>
 
                             <div>
-                                <label className="block text-sm font-medium text-slate-700 dark:text-d-text mb-1">
+                                <label className="block text-sm font-medium text-foreground mb-1">
                                     Method
                                 </label>
                                 <div className="grid grid-cols-5 gap-1.5">
@@ -1713,8 +1633,8 @@ const Vendors = () => {
                                             onClick={() => setPayMethod(m.id)}
                                             className={`py-2 rounded-lg text-xs font-semibold transition-colors ${
                                                 payMethod === m.id
-                                                    ? 'bg-primary-500 dark:bg-d-accent text-white dark:text-d-card'
-                                                    : 'bg-slate-50 dark:bg-d-bg border border-slate-200 dark:border-d-border text-slate-600 dark:text-d-muted hover:border-slate-300'
+                                                    ? 'bg-primary text-white'
+                                                    : 'bg-muted/40 border border-hairline text-muted-foreground hover:border-border'
                                             }`}
                                         >
                                             {m.label}
@@ -1744,17 +1664,17 @@ const Vendors = () => {
                                 <button
                                     type="button"
                                     onClick={() => setShowPayModal(false)}
-                                    className="flex-1 py-3 border border-slate-200 dark:border-d-border rounded-xl font-medium text-slate-600 dark:text-d-text hover:bg-slate-50 dark:hover:bg-d-glass transition-colors"
+                                    className="flex-1 py-3 border border-hairline rounded-xl font-medium text-muted-foreground hover:bg-[var(--hover-overlay)] transition-colors"
                                 >
                                     Cancel
                                 </button>
                                 <button
                                     type="submit"
                                     disabled={paying}
-                                    className="flex-1 py-3 bg-green-500 text-white rounded-xl font-medium hover:bg-green-600 transition-colors flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
+                                    className="flex-1 py-3 bg-success text-white rounded-xl font-medium hover:bg-success/90 transition-colors flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
                                 >
                                     {paying ? (
-                                        <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                                        <div className="w-4 h-4 border-2 border-hairline border-t-transparent rounded-full animate-spin" />
                                     ) : (
                                         <FiCheckCircle size={16} />
                                     )}
@@ -1762,36 +1682,34 @@ const Vendors = () => {
                                 </button>
                             </div>
                         </form>
-                    </div>
-                </div>
+                    </DialogShell>
             )}
 
             {/* ================================================================
                 MODAL: Return items to vendor
             ================================================================ */}
             {returningSupply && (
-                <div className="fixed inset-0 bg-black/50 dark:bg-black/60 flex items-center justify-center z-50 p-4">
-                    <div className="bg-white dark:bg-d-card dark:border dark:border-d-border rounded-2xl w-full max-w-xl animate-fadeIn max-h-[90vh] flex flex-col">
-                        <div className="flex items-center justify-between p-6 border-b border-slate-200 dark:border-d-border">
+                <DialogShell size="lg" className="max-h-[90vh] flex flex-col">
+                        <div className="flex items-center justify-between p-6 border-b border-hairline">
                             <div>
-                                <h3 className="text-lg font-semibold text-slate-800 dark:text-d-heading">Return items to vendor</h3>
-                                <p className="text-sm text-slate-500 dark:text-d-muted mt-0.5">
+                                <h3 className="text-lg font-semibold text-foreground">Return items to vendor</h3>
+                                <p className="text-sm text-muted-foreground mt-0.5">
                                     Supply #{returningSupply.supplyNumber}
                                     {returningSupply.billNumber ? ` · Bill ${returningSupply.billNumber}` : ''}
                                     {' · '}
                                     {typeof returningSupply.vendor === 'object' ? returningSupply.vendor?.name : ''}
                                 </p>
                             </div>
-                            <button
+                            <button data-dialog-close
                                 onClick={() => setReturningSupply(null)}
-                                className="p-2 hover:bg-slate-100 dark:hover:bg-d-glass-hover rounded-lg transition-colors text-slate-500 dark:text-d-muted"
+                                className="p-2 hover:bg-[var(--hover-overlay)] rounded-lg transition-colors text-muted-foreground"
                             >
                                 <FiX />
                             </button>
                         </div>
 
                         <div className="p-6 space-y-4 overflow-y-auto">
-                            <div className="grid grid-cols-12 gap-2 px-1 text-xs font-medium text-slate-500 dark:text-d-muted">
+                            <div className="grid grid-cols-12 gap-2 px-1 text-xs font-medium text-muted-foreground">
                                 <span className="col-span-5">Item</span>
                                 <span className="col-span-2 text-center">Can return</span>
                                 <span className="col-span-2">Qty</span>
@@ -1805,19 +1723,19 @@ const Vendors = () => {
                                 return (
                                     <div key={productId} className={`grid grid-cols-12 gap-2 items-center ${max === 0 ? 'opacity-50' : ''}`}>
                                         <div className="col-span-5 min-w-0">
-                                            <div className="text-sm font-medium text-slate-800 dark:text-d-heading truncate">{item.name}</div>
-                                            <div className="text-[11px] text-slate-400 dark:text-d-faint">
+                                            <div className="text-sm font-medium text-foreground truncate">{item.name}</div>
+                                            <div className="text-caption text-muted-foreground">
                                                 {formatCurrency(item.unitPrice)} each
                                                 {item.gst > 0 ? ` + ${item.gst}% GST` : ''}
                                                 {item.returnedQty > 0 ? ` · ${item.returnedQty} already returned` : ''}
                                             </div>
                                             {inStock < fromSupply && (
-                                                <div className="text-[11px] text-amber-600 dark:text-d-accent">
+                                                <div className="text-caption text-primary">
                                                     Only {inStock} in stock — the rest was sold
                                                 </div>
                                             )}
                                         </div>
-                                        <div className="col-span-2 text-center text-sm text-slate-600 dark:text-d-text">{max}</div>
+                                        <div className="col-span-2 text-center text-sm text-muted-foreground">{max}</div>
                                         <input
                                             type="number"
                                             min="0"
@@ -1830,15 +1748,15 @@ const Vendors = () => {
                                                 setReturnLine(productId, { qty: v });
                                             }}
                                             placeholder="0"
-                                            className={`col-span-2 px-3 py-2 bg-white dark:bg-d-bg border rounded-xl text-sm text-slate-800 dark:text-d-text focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:cursor-not-allowed ${
-                                                qty > 0 ? 'border-amber-300 dark:border-d-accent/50' : 'border-slate-200 dark:border-d-border'
+                                            className={`col-span-2 px-3 py-2 bg-card border rounded-xl text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring disabled:cursor-not-allowed ${
+                                                qty > 0 ? 'border-primary/30' : 'border-hairline'
                                             }`}
                                         />
                                         <select
                                             value={line.reason || 'defective'}
                                             disabled={max === 0}
                                             onChange={(e) => setReturnLine(productId, { reason: e.target.value })}
-                                            className="col-span-3 px-2 py-2 bg-white dark:bg-d-bg border border-slate-200 dark:border-d-border rounded-xl text-sm text-slate-800 dark:text-d-text focus:outline-none disabled:cursor-not-allowed"
+                                            className="col-span-3 px-2 py-2 bg-card border border-hairline rounded-xl text-sm text-foreground focus:outline-none disabled:cursor-not-allowed"
                                         >
                                             {RETURN_REASONS.map((r) => (
                                                 <option key={r.id} value={r.id}>{r.label}</option>
@@ -1849,33 +1767,33 @@ const Vendors = () => {
                             })}
 
                             <div>
-                                <label className="block text-sm font-medium text-slate-700 dark:text-d-text mb-1">Note (optional)</label>
+                                <label className="block text-sm font-medium text-foreground mb-1">Note (optional)</label>
                                 <input
                                     type="text"
                                     value={returnNote}
                                     onChange={(e) => setReturnNote(e.target.value)}
                                     placeholder="e.g. 2 cartons broken in delivery"
-                                    className="w-full px-4 py-2 bg-white dark:bg-d-bg border border-slate-200 dark:border-d-border rounded-xl text-sm text-slate-800 dark:text-d-text placeholder-slate-400 dark:placeholder-d-faint focus:outline-none focus:ring-2 focus:ring-primary-500"
+                                    className="w-full px-4 py-2 bg-card border border-hairline rounded-xl text-sm text-foreground placeholder:text-placeholder focus:outline-none focus:ring-2 focus:ring-ring"
                                 />
                             </div>
 
-                            <div className="p-3 rounded-xl bg-slate-50 dark:bg-d-glass border border-slate-200 dark:border-d-border text-sm space-y-1">
-                                <div className="flex justify-between font-semibold text-slate-800 dark:text-d-heading">
+                            <div className="p-3 rounded-xl bg-muted/40 border border-hairline text-sm space-y-1">
+                                <div className="flex justify-between font-semibold text-foreground">
                                     <span>Return amount</span>
                                     <span>{formatCurrency(returnTotal)}</span>
                                 </div>
-                                <p className="text-xs text-slate-500 dark:text-d-muted">
+                                <p className="text-xs text-muted-foreground">
                                     Reduces what you owe on this supply. If it's already paid, the vendor owes you the
                                     difference, and that credit is used on their unpaid supplies automatically.
                                 </p>
                             </div>
                         </div>
 
-                        <div className="flex gap-3 p-6 border-t border-slate-200 dark:border-d-border">
+                        <div className="flex gap-3 p-6 border-t border-hairline">
                             <button
                                 type="button"
                                 onClick={() => setReturningSupply(null)}
-                                className="flex-1 py-3 border border-slate-200 dark:border-d-border rounded-xl font-medium text-slate-600 dark:text-d-text hover:bg-slate-50 dark:hover:bg-d-glass transition-colors"
+                                className="flex-1 py-3 border border-hairline rounded-xl font-medium text-muted-foreground hover:bg-[var(--hover-overlay)] transition-colors"
                             >
                                 Cancel
                             </button>
@@ -1883,39 +1801,31 @@ const Vendors = () => {
                                 type="button"
                                 onClick={handleReturn}
                                 disabled={returning || returnSelection.length === 0}
-                                className="flex-1 py-3 bg-amber-500 text-white rounded-xl font-medium hover:bg-amber-600 transition-colors flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                                className="flex-1 py-3 bg-primary text-white rounded-xl font-medium hover:bg-primary/90 transition-colors flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                             >
                                 {returning ? (
-                                    <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                                    <div className="w-4 h-4 border-2 border-hairline border-t-transparent rounded-full animate-spin" />
                                 ) : (
                                     <FiCornerUpLeft size={16} />
                                 )}
                                 {returning ? 'Returning...' : 'Return items'}
                             </button>
                         </div>
-                    </div>
-                </div>
-            )}
-
-            {toast && (
-                <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[60] px-4 py-2.5 rounded-xl shadow-lg bg-slate-800 dark:bg-d-elevated border border-transparent dark:border-d-border text-sm text-white dark:text-d-text animate-pop-in">
-                    {toast}
-                </div>
+                    </DialogShell>
             )}
 
             {/* ================================================================
                 MODAL: Add / Edit Vendor
             ================================================================ */}
             {showVendorModal && (
-                <div className="fixed inset-0 bg-black/50 dark:bg-black/60 flex items-center justify-center z-50 p-4">
-                    <div className="bg-white dark:bg-d-card dark:border dark:border-d-border rounded-2xl w-full max-w-md animate-fadeIn max-h-[90vh] overflow-y-auto">
-                        <div className="flex items-center justify-between p-6 border-b border-slate-200 dark:border-d-border">
-                            <h3 className="text-xl font-semibold text-slate-800 dark:text-d-heading">
+                <DialogShell size="md" className="max-h-[90vh] overflow-y-auto">
+                        <div className="flex items-center justify-between p-6 border-b border-hairline">
+                            <h3 className="text-xl font-semibold text-foreground">
                                 {editingVendor ? 'Edit Vendor' : 'Add Vendor'}
                             </h3>
-                            <button
+                            <button data-dialog-close
                                 onClick={closeVendorModal}
-                                className="p-2 hover:bg-slate-100 dark:hover:bg-d-glass-hover rounded-lg transition-colors text-slate-500 dark:text-d-muted"
+                                className="p-2 hover:bg-[var(--hover-overlay)] rounded-lg transition-colors text-muted-foreground"
                             >
                                 <FiX />
                             </button>
@@ -1923,7 +1833,7 @@ const Vendors = () => {
 
                         <form onSubmit={handleVendorSubmit} className="p-6 space-y-4">
                             <div>
-                                <label className="block text-sm font-medium text-slate-700 dark:text-d-text mb-1">
+                                <label className="block text-sm font-medium text-foreground mb-1">
                                     Name *
                                 </label>
                                 <input
@@ -1934,12 +1844,12 @@ const Vendors = () => {
                                     }
                                     placeholder="Vendor / contact name"
                                     required
-                                    className="w-full px-4 py-2 bg-white dark:bg-d-bg border border-slate-200 dark:border-d-border rounded-xl focus:ring-2 focus:ring-primary-500 dark:focus:border-d-border-hover focus:outline-none text-slate-800 dark:text-d-text placeholder-slate-400 dark:placeholder-d-faint"
+                                    className="w-full px-4 py-2 bg-card border border-hairline rounded-xl focus:ring-2 focus:ring-ring focus:outline-none text-foreground placeholder:text-placeholder"
                                 />
                             </div>
 
                             <div>
-                                <label className="block text-sm font-medium text-slate-700 dark:text-d-text mb-1">
+                                <label className="block text-sm font-medium text-foreground mb-1">
                                     Company
                                 </label>
                                 <input
@@ -1949,12 +1859,12 @@ const Vendors = () => {
                                         setVendorForm({ ...vendorForm, company: e.target.value })
                                     }
                                     placeholder="Company or business name"
-                                    className="w-full px-4 py-2 bg-white dark:bg-d-bg border border-slate-200 dark:border-d-border rounded-xl focus:ring-2 focus:ring-primary-500 dark:focus:border-d-border-hover focus:outline-none text-slate-800 dark:text-d-text placeholder-slate-400 dark:placeholder-d-faint"
+                                    className="w-full px-4 py-2 bg-card border border-hairline rounded-xl focus:ring-2 focus:ring-ring focus:outline-none text-foreground placeholder:text-placeholder"
                                 />
                             </div>
 
                             <div>
-                                <label className="block text-sm font-medium text-slate-700 dark:text-d-text mb-1">
+                                <label className="block text-sm font-medium text-foreground mb-1">
                                     Phone
                                 </label>
                                 <input
@@ -1964,14 +1874,14 @@ const Vendors = () => {
                                         setVendorForm({ ...vendorForm, phone: e.target.value })
                                     }
                                     placeholder="+92 300 0000000"
-                                    className="w-full px-4 py-2 bg-white dark:bg-d-bg border border-slate-200 dark:border-d-border rounded-xl focus:ring-2 focus:ring-primary-500 dark:focus:border-d-border-hover focus:outline-none text-slate-800 dark:text-d-text placeholder-slate-400 dark:placeholder-d-faint"
+                                    className="w-full px-4 py-2 bg-card border border-hairline rounded-xl focus:ring-2 focus:ring-ring focus:outline-none text-foreground placeholder:text-placeholder"
                                 />
                             </div>
 
                             {/* Opening Balance — only when adding new vendor */}
                             {!editingVendor && (
                                 <div>
-                                    <label className="block text-sm font-medium text-slate-700 dark:text-d-text mb-1">
+                                    <label className="block text-sm font-medium text-foreground mb-1">
                                         Opening Balance
                                     </label>
                                     <input
@@ -1983,14 +1893,14 @@ const Vendors = () => {
                                             setVendorForm({ ...vendorForm, openingBalance: e.target.value })
                                         }
                                         placeholder="0"
-                                        className="w-full px-4 py-2 bg-white dark:bg-d-bg border border-slate-200 dark:border-d-border rounded-xl focus:ring-2 focus:ring-primary-500 dark:focus:border-d-border-hover focus:outline-none text-slate-800 dark:text-d-text placeholder-slate-400 dark:placeholder-d-faint"
+                                        className="w-full px-4 py-2 bg-card border border-hairline rounded-xl focus:ring-2 focus:ring-ring focus:outline-none text-foreground placeholder:text-placeholder"
                                     />
-                                    <p className="text-xs text-slate-400 dark:text-d-faint mt-1">Previous balance from old system (if any)</p>
+                                    <p className="text-xs text-muted-foreground mt-1">Previous balance from old system (if any)</p>
                                 </div>
                             )}
 
                             <div>
-                                <label className="block text-sm font-medium text-slate-700 dark:text-d-text mb-1">
+                                <label className="block text-sm font-medium text-foreground mb-1">
                                     Notes
                                 </label>
                                 <textarea
@@ -2000,7 +1910,7 @@ const Vendors = () => {
                                     }
                                     placeholder="Any notes about this vendor..."
                                     rows={3}
-                                    className="w-full px-4 py-2 bg-white dark:bg-d-bg border border-slate-200 dark:border-d-border rounded-xl focus:ring-2 focus:ring-primary-500 dark:focus:border-d-border-hover focus:outline-none resize-none text-slate-800 dark:text-d-text placeholder-slate-400 dark:placeholder-d-faint"
+                                    className="w-full px-4 py-2 bg-card border border-hairline rounded-xl focus:ring-2 focus:ring-ring focus:outline-none resize-none text-foreground placeholder:text-placeholder"
                                 />
                             </div>
 
@@ -2008,17 +1918,17 @@ const Vendors = () => {
                                 <button
                                     type="button"
                                     onClick={closeVendorModal}
-                                    className="flex-1 py-3 border border-slate-200 dark:border-d-border rounded-xl font-medium text-slate-600 dark:text-d-text hover:bg-slate-50 dark:hover:bg-d-glass transition-colors"
+                                    className="flex-1 py-3 border border-hairline rounded-xl font-medium text-muted-foreground hover:bg-[var(--hover-overlay)] transition-colors"
                                 >
                                     Cancel
                                 </button>
                                 <button
                                     type="submit"
                                     disabled={vendorSubmitting}
-                                    className="flex-1 py-3 bg-primary-500 text-white rounded-xl font-medium hover:bg-primary-600 transition-colors flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
+                                    className="flex-1 py-3 bg-primary text-white rounded-xl font-medium hover:bg-primary/90 transition-colors flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
                                 >
                                     {vendorSubmitting ? (
-                                        <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                                        <div className="w-4 h-4 border-2 border-hairline border-t-transparent rounded-full animate-spin" />
                                     ) : (
                                         <FiSave size={16} />
                                     )}
@@ -2026,8 +1936,7 @@ const Vendors = () => {
                                 </button>
                             </div>
                         </form>
-                    </div>
-                </div>
+                    </DialogShell>
             )}
 
             <ProductFormModal

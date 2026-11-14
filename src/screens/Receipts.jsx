@@ -1,13 +1,18 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { PageHeader, Button, DataTable, KpiStrip, KpiCard, rowActions, StatusChip, SegmentedControl, DrawerShell, Input, Select, Dash, Popover, Field } from '../components/ui';
+import { DialogShell } from '../components/ui/Dialog';
+import { toast } from '../components/ui/Toast';
 import { useBusiness } from '../context/BusinessContext';
 import { useAuth } from '../context/AuthContext';
-import { getReceipts, getReceiptStats } from '../services/api/receipts';
+import { getReceipts, getReceiptStats, getReceipt } from '../services/api/receipts';
 import { cancelBill } from '../services/api/bills';
 import { getCancelState, estimateCashReversal, isCancelledBill, isCancelledHold } from '../utils/billCancel';
 import { getCreditPayments, getPrimaryPaymentMethod, formatPaymentMethod } from '../utils/billCredit';
 import { printReceipt } from '../utils/printReceipt';
 import { downloadReceipt } from '../utils/downloadReceipt';
 import { mergeReceiptItems } from '../utils/receiptItems';
+import BillDetailDrawer from '../components/receipts/BillDetailDrawer';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useMoneyBook } from '../context/MoneyBookContext';
 import {
     FiSearch,
@@ -17,15 +22,12 @@ import {
     FiPrinter,
     FiEye,
     FiX,
-    FiDollarSign,
-    FiShoppingCart,
-    FiTrendingUp,
     FiRefreshCw,
     FiLoader,
     FiCornerDownLeft,
-    FiInbox,
     FiSlash,
     FiAlertTriangle,
+    FiFilter,
 } from 'react-icons/fi';
 
 // Local YYYY-MM-DD — never toISOString(), which shifts to UTC and can land on
@@ -34,29 +36,9 @@ import {
 const fmtLocalDate = (d) =>
     `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 
-// Server-side date-range params for a filter. "Week" = rolling last 7 days, to
-// match the rest of the app (Reports/Dashboard), not a calendar week.
-const dateRangeParams = (filter) => {
-    const now = new Date();
-    const today = fmtLocalDate(now);
-    switch (filter) {
-        case 'today':
-            return { startDate: today, endDate: today };
-        case 'week': {
-            const start = new Date(now);
-            start.setDate(start.getDate() - 7);
-            return { startDate: fmtLocalDate(start), endDate: today };
-        }
-        case 'month': {
-            const start = new Date(now.getFullYear(), now.getMonth(), 1);
-            return { startDate: fmtLocalDate(start), endDate: today };
-        }
-        default:
-            return {};
-    }
-};
 
 const Receipts = () => {
+    const navigate = useNavigate();
     const { business } = useBusiness();
     // Money Book: account names for payments that carry one
     const { accountsById } = useMoneyBook();
@@ -65,18 +47,42 @@ const Receipts = () => {
     const canViewProfit = !permissions || permissions.pos?.viewProfit === true;
     const [receipts, setReceipts] = useState([]);
     const [loading, setLoading] = useState(true);
-    const [loadingMore, setLoadingMore] = useState(false);
     const [searchQuery, setSearchQuery] = useState('');
-    const [dateFilter, setDateFilter] = useState('all');
+    // Date range (local YYYY-MM-DD, '' = open). Opens on today, like the reference "Bills" list.
+    const [range, setRange] = useState(() => {
+        const t = fmtLocalDate(new Date());
+        return { from: t, to: t };
+    });
     const [showDetail, setShowDetail] = useState(null);
-    const [statusFilter, setStatusFilter] = useState('all'); // 'all' | 'cancelled'
+    // /receipts?bill=<id> (e.g. from the Dashboard's "Today & bills") opens that bill's window
+    const [searchParams, setSearchParams] = useSearchParams();
+    const linkedBillId = searchParams.get('bill');
+    useEffect(() => {
+        if (!linkedBillId) return undefined;
+        let live = true;
+        getReceipt(linkedBillId)
+            .then((res) => live && setShowDetail(res.data))
+            .catch((err) => {
+                if (!live) return;
+                toast.error(err.response?.status === 404 ? 'That bill was not found.' : "Couldn't open that bill.");
+                setSearchParams({}, { replace: true });
+            });
+        return () => {
+            live = false;
+        };
+    }, [linkedBillId]); // eslint-disable-line react-hooks/exhaustive-deps
+    const closeDetail = () => {
+        setShowDetail(null);
+        if (linkedBillId) setSearchParams({}, { replace: true });
+    };
+    const [statusFilter, setStatusFilter] = useState('all'); // all | paid | partial | unpaid | cancelled
+    const [methodFilter, setMethodFilter] = useState('all'); // all | cash | card | online | store_credit
 
     // Cancel bill (for bills created by mistake)
     const [cancelTarget, setCancelTarget] = useState(null);
     const [cancelReason, setCancelReason] = useState('');
     const [cancelError, setCancelError] = useState('');
     const [cancelling, setCancelling] = useState(false);
-    const [toast, setToast] = useState('');
     const [online, setOnline] = useState(navigator.onLine);
     useEffect(() => {
         const up = () => setOnline(true);
@@ -88,16 +94,24 @@ const Receipts = () => {
             window.removeEventListener('offline', down);
         };
     }, []);
-    // Collapses the stat cards into a slim strip once the list is scrolled,
-    // handing the freed vertical space to the receipts table.
-    const [collapsed, setCollapsed] = useState(false);
-
-    // Pagination state
+    // Paging (Stage 6): real pages instead of the endless scroll
     const [page, setPage] = useState(1);
-    const [hasMore, setHasMore] = useState(true);
+    const [pageSize, setPageSize] = useState(() => {
+        try {
+            return JSON.parse(localStorage.getItem('ds.table.receipts.pageSize')) || 25;
+        } catch {
+            return 25;
+        }
+    });
     const [totalReceipts, setTotalReceipts] = useState(0);
-    const scrollContainerRef = useRef(null);
-    const stickyBarRef = useRef(null);
+    const [loadError, setLoadError] = useState(null);
+    // The search text is sent to the server (debounced); servers that don't search yet
+    // ignore it and the page shown is filtered here instead.
+    const [serverSearch, setServerSearch] = useState('');
+    useEffect(() => {
+        const t = setTimeout(() => setServerSearch(searchQuery.trim()), 300);
+        return () => clearTimeout(t);
+    }, [searchQuery]);
 
     // Stats from API
     const [stats, setStats] = useState({
@@ -113,21 +127,18 @@ const Receipts = () => {
     });
 
     useEffect(() => {
-        fetchReceipts(1, true);
         fetchStats();
     }, []);
 
-    // When the date filter changes, reset to page 1 and re-fetch server-side.
-    // Date scoping now happens on the backend (startDate/endDate + pagination),
-    // so every filter paginates the same way — no more all=true + client filter.
+    // Any filter change → back to page 1 (date scoping and paging are server-side)
     useEffect(() => {
-        // New view → show full cards again and jump back to the top.
-        setCollapsed(false);
-        scrollContainerRef.current?.scrollTo({ top: 0 });
         setPage(1);
-        setHasMore(true);
-        fetchReceipts(1, true);
-    }, [dateFilter, statusFilter]);
+    }, [range.from, range.to, statusFilter, methodFilter, serverSearch, pageSize]);
+
+    useEffect(() => {
+        fetchReceipts(page);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [page, pageSize, range.from, range.to, statusFilter, methodFilter, serverSearch]);
 
     const fetchStats = async () => {
         try {
@@ -149,129 +160,89 @@ const Receipts = () => {
         }
     };
 
-    // silent: reload in place without the full-page spinner (keeps toasts and
-    // scroll position visible, e.g. after cancelling a bill).
-    const fetchReceipts = async (pageNum = 1, reset = false, silent = false) => {
-        if (silent) {
-            // no spinner
-        } else if (reset) {
-            setLoading(true);
-        } else {
-            setLoadingMore(true);
-        }
-
+    // silent: reload in place without the loading rows (e.g. after cancelling a bill)
+    const requestSeq = useRef(0);
+    const fetchReceipts = async (pageNum = page, silent = false) => {
+        const seq = ++requestSeq.current; // only the newest answer is shown
+        if (!silent) setLoading(true);
+        setLoadError(null);
         try {
             // Server-side date scoping when a filter is active (empty for "All").
-            // Backend caps limit at 100 — 30 is well within that.
             const params = {
                 page: pageNum,
-                limit: 30,
-                ...dateRangeParams(dateFilter),
-                ...(statusFilter === 'cancelled' ? { status: 'cancelled' } : {}),
+                limit: pageSize,
+                ...(range.from ? { startDate: range.from } : {}),
+                ...(range.to ? { endDate: range.to } : {}),
+                ...(statusFilter === 'cancelled' ? { status: 'cancelled' } : statusFilter !== 'all' ? { paymentStatus: statusFilter } : {}),
+                // Not supported by the server yet (backend prompt stage 6) — also filtered below
+                ...(methodFilter !== 'all' ? { paymentMethod: methodFilter } : {}),
+                ...(serverSearch ? { search: serverSearch } : {}),
             };
             const res = await getReceipts(params);
+            if (seq !== requestSeq.current) return;
 
             // Handle both old (array) and new (object with receipts) response formats
             const data = res.data?.receipts || res.data || [];
             const pagination = res.data?.pagination;
-
-            if (reset) {
-                setReceipts(Array.isArray(data) ? data : []);
-            } else {
-                setReceipts(prev => [...prev, ...(Array.isArray(data) ? data : [])]);
-            }
-
-            if (pagination) {
-                setHasMore(pagination.hasMore);
-                setTotalReceipts(pagination.total);
-                setPage(pagination.page);
-            } else {
-                // Fallback for old API format
-                setHasMore(data.length === 30);
-                setTotalReceipts(data.length);
-            }
+            setReceipts(Array.isArray(data) ? data : []);
+            setTotalReceipts(pagination ? pagination.total : Array.isArray(data) ? data.length : 0);
         } catch (error) {
+            if (seq !== requestSeq.current) return;
             console.error('Error fetching receipts:', error);
+            setLoadError(error.response?.data?.message || "Couldn't load the receipts. Check the connection and try again.");
         } finally {
-            setLoading(false);
-            setLoadingMore(false);
+            if (seq === requestSeq.current) setLoading(false);
         }
     };
 
-    // Use ref to track current page for scroll handler
-    const pageRef = useRef(page);
-    const loadingMoreRef = useRef(loadingMore);
-    const hasMoreRef = useRef(hasMore);
-
-    // Keep refs in sync with state
-    useEffect(() => {
-        pageRef.current = page;
-    }, [page]);
-
-    useEffect(() => {
-        loadingMoreRef.current = loadingMore;
-    }, [loadingMore]);
-
-    useEffect(() => {
-        hasMoreRef.current = hasMore;
-    }, [hasMore]);
-
-
-    // Handle scroll for infinite loading (only when viewing "All" receipts)
-    const handleScroll = useCallback(() => {
-        const container = scrollContainerRef.current;
-        if (!container) return;
-
-        const { scrollTop, scrollHeight, clientHeight } = container;
-
-        // The whole page scrolls. Collapse the stat cards into the compact strip
-        // exactly when the sticky controls bar reaches the top of the scroll
-        // area (i.e. the cards have scrolled out of view). Rect-based so there's
-        // no threshold guesswork and no bounce — showing the strip lives *inside*
-        // the sticky bar, so it never moves the bar's own top.
-        const bar = stickyBarRef.current;
-        if (bar) {
-            const stuck = bar.getBoundingClientRect().top - container.getBoundingClientRect().top <= 1;
-            setCollapsed(stuck);
-        }
-
-        // Infinite loading — works in every mode now (date filters paginate
-        // server-side too).
-        if (loadingMoreRef.current || !hasMoreRef.current) return;
-
-        const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
-        // Load more when user scrolls to within 300px of bottom
-        if (distanceFromBottom < 300) {
-            fetchReceipts(pageRef.current + 1, false);
-        }
-    }, [dateFilter, statusFilter]);
-
-    useEffect(() => {
-        const container = scrollContainerRef.current;
-        if (container) {
-            // Use passive listener for better scroll performance
-            container.addEventListener('scroll', handleScroll, { passive: true });
-            return () => container.removeEventListener('scroll', handleScroll);
-        }
-        // `loading` is a dep because the table (and thus scrollContainerRef) only
-        // mounts after the initial spinner clears — re-run then to attach the listener.
-    }, [handleScroll, loading]);
-
     const handleRefresh = () => {
-        setPage(1);
-        setHasMore(true);
-        setCollapsed(false);
-        fetchReceipts(1, true);
+        fetchReceipts(page);
         fetchStats();
     };
 
-    // Date scoping is server-side now; only the search box filters locally
-    // (over the pages loaded so far).
-    const filteredReceipts = receipts.filter((r) =>
-        r.receiptNumber?.toString().includes(searchQuery) ||
-        r.billNumber?.toString().includes(searchQuery) ||
-        r.customerName?.toLowerCase().includes(searchQuery.toLowerCase())
+    // Also filtered here, for servers that don't search yet (harmless when they do)
+    const usesMethod = (r, m) =>
+        (r.payments || []).some((p) => (p.creditFrom ? 'store_credit' : p.method || 'cash') === m) || (!(r.payments || []).length && (r.paymentMethod || 'cash') === m);
+    const filteredReceipts = receipts.filter(
+        (r) =>
+            (r.receiptNumber?.toString().includes(searchQuery) ||
+                r.billNumber?.toString().includes(searchQuery) ||
+                r.customerName?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                (r.customerPhone || '').includes(searchQuery)) &&
+            (methodFilter === 'all' || usesMethod(r, methodFilter))
     );
+    const singleDay = !!range.from && range.from === range.to;
+    const rangeText = !range.from && !range.to
+        ? 'All dates'
+        : singleDay
+          ? new Date(`${range.from}T00:00`).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })
+          : `${range.from ? new Date(`${range.from}T00:00`).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) : '…'} – ${range.to ? new Date(`${range.to}T00:00`).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) : 'today'}`;
+    const presetRange = (key) => {
+        const now = new Date();
+        const t = fmtLocalDate(now);
+        if (key === 'today') return { from: t, to: t };
+        if (key === 'week') {
+            const st = new Date(now);
+            st.setDate(st.getDate() - 6);
+            return { from: fmtLocalDate(st), to: t };
+        }
+        if (key === 'month') return { from: fmtLocalDate(new Date(now.getFullYear(), now.getMonth(), 1)), to: t };
+        return { from: '', to: '' };
+    };
+    const activePreset = ['today', 'week', 'month', 'all'].find((k) => {
+        const p = presetRange(k);
+        return p.from === range.from && p.to === range.to;
+    });
+    const STATUS_WORD = { paid: 'Paid', partial: 'Part paid', unpaid: 'Unpaid', cancelled: 'Cancelled' };
+    const METHOD_WORD = { cash: 'Cash', card: 'Card', online: 'Online', store_credit: 'Store credit' };
+    const filterSummary = [
+        { today: 'Today', week: '7 days', month: 'This month', all: 'All dates' }[activePreset] || rangeText,
+        STATUS_WORD[statusFilter],
+        METHOD_WORD[methodFilter],
+    ]
+        .filter(Boolean)
+        .join(' · ');
+    const extraFilters = (statusFilter !== 'all' ? 1 : 0) + (methodFilter !== 'all' ? 1 : 0);
 
     const currency = business?.currency || 'Rs.';
 
@@ -351,22 +322,128 @@ const Receipts = () => {
         if (isCancelledBill(receipt)) {
             return {
                 label: isCancelledHold(receipt) ? 'Cancelled hold' : 'Cancelled',
-                color: 'bg-slate-200 text-slate-600 dark:bg-white/10 dark:text-d-muted',
+                color: 'bg-muted text-muted-foreground',
                 hasReturns: false,
                 cancelled: true,
             };
         }
         if (receipt.type === 'refund') {
-            return { label: 'Refund', color: 'bg-[rgba(255,107,107,0.15)] text-d-red', hasReturns: false };
+            return { label: 'Refund', color: 'bg-destructive-chip text-destructive', hasReturns: false };
         }
         // Check if this sale has returns
         const hasReturns = (receipt.totalReturned > 0) || (receipt.returns && receipt.returns.length > 0);
         return {
             label: 'Sale',
-            color: 'bg-[rgba(52,232,161,0.15)] text-d-green',
+            color: 'bg-success-chip text-success',
             hasReturns
         };
     };
+
+    const billStatus = (r) => {
+        const type = getReceiptType(r);
+        if (type.cancelled) return { label: type.label, tone: 'destructive' };
+        if (type.label === 'Refund') return { label: 'Refund', tone: 'destructive' };
+        if (r.paymentStatus === 'partial') return { label: 'Part paid', tone: 'warning' };
+        if (r.paymentStatus === 'unpaid') return { label: 'Unpaid', tone: 'neutral' };
+        return { label: 'Paid', tone: 'success' };
+    };
+    const timeOf = (iso) => new Date(iso).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+
+    const receiptColumns = [
+        {
+            id: 'number',
+            header: 'Bill',
+            accessorFn: (r) => Number(r.receiptNumber || r.billNumber) || 0,
+            cell: ({ row: { original: r } }) => <span className="font-semibold tabular-nums">#{r.receiptNumber || r.billNumber || '-'}</span>,
+        },
+        {
+            id: 'time',
+            header: 'Time',
+            accessorFn: (r) => new Date(r.createdAt).getTime() || 0,
+            cell: ({ row: { original: r } }) => (
+                <div className="whitespace-nowrap text-muted-foreground tabular-nums">
+                    {timeOf(r.createdAt)}
+                    {/* a longer range also needs the day */}
+                    {!singleDay ? <p className="text-body-sm">{new Date(r.createdAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}</p> : null}
+                </div>
+            ),
+        },
+        {
+            id: 'customer',
+            header: 'Customer',
+            accessorFn: (r) => r.customerName || '',
+            cell: ({ row: { original: r } }) =>
+                r.customerName ? (
+                    <div className="min-w-0">
+                        <p className="truncate">{r.customerName}</p>
+                        {r.customerPhone ? <p className="font-mono text-mono-xs text-muted-foreground">{r.customerPhone}</p> : null}
+                    </div>
+                ) : (
+                    <span className="text-muted-foreground">Walk-in</span>
+                ),
+        },
+        { id: 'cashier', header: 'Cashier', accessorFn: (r) => r.cashierName || '', cell: ({ getValue }) => getValue() || <Dash /> },
+        {
+            id: 'items',
+            header: 'Items',
+            accessorFn: (r) => r.totalQty || (r.items || []).reduce((n, it) => n + (it.qty || it.quantity || 0), 0),
+            meta: { align: 'right' },
+        },
+        {
+            id: 'total',
+            header: 'Total',
+            accessorFn: (r) => r.totalBill ?? r.total ?? 0,
+            meta: { align: 'right' },
+            cell: ({ row: { original: r } }) => {
+                const type = getReceiptType(r);
+                const v = r.totalBill ?? r.total ?? 0;
+                return (
+                    <span className={type.cancelled ? 'line-through text-muted-foreground' : v < 0 ? 'text-destructive font-semibold' : 'font-semibold'}>
+                        {formatCurrency(Math.abs(v))}
+                    </span>
+                );
+            },
+        },
+        {
+            id: 'paid',
+            header: 'Paid',
+            accessorFn: (r) => r.amountPaid || 0,
+            meta: { align: 'right' },
+            cell: ({ getValue }) => formatCurrency(getValue()),
+        },
+        {
+            id: 'due',
+            header: 'Due',
+            accessorFn: (r) => (getReceiptType(r).cancelled ? 0 : Math.max(0, r.amountDue || 0)),
+            meta: { align: 'right' },
+            cell: ({ getValue }) => (getValue() > 0 ? <span className="font-medium text-warning-chip-foreground">{formatCurrency(getValue())}</span> : <Dash />),
+        },
+        {
+            id: 'status',
+            header: 'Status',
+            accessorFn: (r) => billStatus(r).label,
+            cell: ({ row: { original: r } }) => {
+                const st = billStatus(r);
+                return (
+                    <div className="flex flex-wrap items-center gap-1">
+                        <StatusChip size="sm" shape="tag" tone={st.tone} label={st.label} />
+                        {getReceiptType(r).hasReturns ? <StatusChip size="sm" shape="tag" tone="warning" icon={FiCornerDownLeft} label={r.returnStatus === 'full' ? 'Returned' : 'Part returned'} /> : null}
+                    </div>
+                );
+            },
+        },
+        rowActions(
+            (r) => [
+                { label: 'View details', icon: FiEye, onSelect: () => setShowDetail(r) },
+                { label: 'Print', icon: FiPrinter, onSelect: () => handlePrint(r) },
+                { label: 'Download', icon: FiDownload, onSelect: () => handleDownload(r) },
+                ...(cancelStateFor(r).allowed
+                    ? [{ separator: true }, { label: 'Cancel bill', icon: FiSlash, danger: true, onSelect: () => openCancel(r) }]
+                    : []),
+            ],
+            { label: 'Receipt actions' }
+        ),
+    ];
 
 
     const cancelStateFor = (receipt) => getCancelState(receipt, { isAdmin, permissions, business, online });
@@ -393,13 +470,10 @@ const Receipts = () => {
             const moneyText = reversed.length
                 ? ` — ${reversed.map((x) => `${formatCurrency(x.amount)} back from ${x.name}`).join(', ')}`
                 : cash > 0 ? ` — ${formatCurrency(cash)} taken out of the cash book` : '';
-            setToast(`${res.data?.message || 'Bill cancelled'}${moneyText}`);
-            setTimeout(() => setToast(''), 5000);
+            toast.success(`${res.data?.message || 'Bill cancelled'}${moneyText}`, { id: 'receipts', duration: 5000 });
             setCancelTarget(null);
             setShowDetail(null);
-            setPage(1);
-            setHasMore(true);
-            fetchReceipts(1, true, true);
+            fetchReceipts(page, true);
             fetchStats();
         } catch (err) {
             setCancelError(err.response?.data?.message || 'Failed to cancel the bill');
@@ -408,790 +482,245 @@ const Receipts = () => {
         }
     };
 
-    if (loading) {
-        return (
-            <div className="flex items-center justify-center h-full bg-slate-50 dark:bg-d-bg">
-                <div className="flex flex-col items-center gap-4">
-                    <div className="w-12 h-12 border-4 border-d-accent border-t-transparent rounded-full animate-spin" />
-                    <p className="text-slate-500 dark:text-d-muted">Loading receipts...</p>
-                </div>
-            </div>
-        );
-    }
-
     return (
-        <div ref={scrollContainerRef} className="h-full bg-slate-50 dark:bg-d-bg overflow-y-auto">
+        <div className="h-full overflow-y-auto">
             <div className="p-6 animate-fade-slide-up">
                 {/* Header */}
-                <div className="flex items-center justify-between mb-6">
-                    <div>
-                        <h1 className="text-2xl font-bold text-slate-800 dark:text-d-heading">Sales Report</h1>
-                        <p className="text-slate-500 dark:text-d-muted">
-                            {totalReceipts > 0 ? `${totalReceipts} total receipts` : `${receipts.length} receipts`}
-                        </p>
-                    </div>
-                    <button
-                        onClick={handleRefresh}
-                        className="flex items-center gap-2 px-4 py-2.5 text-slate-500 dark:text-d-muted hover:text-slate-700 dark:hover:text-d-text hover:bg-slate-100 dark:hover:bg-d-glass rounded-xl transition-all"
-                    >
-                        <FiRefreshCw size={18} className={loading ? 'animate-spin' : ''} />
-                        Refresh
-                    </button>
-                </div>
+                <PageHeader
+                    title={<>Sales Report</>}
+                    subtitle={<>{totalReceipts > 0 ? `${totalReceipts} total receipts` : `${receipts.length} receipts`}</>}
+                    actions={
+                        <Button variant="ghost" onClick={handleRefresh}>
+                            <FiRefreshCw aria-hidden="true" className={loading ? 'animate-spin' : ''} />
+                            Refresh
+                        </Button>
+                    }
+                />
 
-                {/* Stats Cards — Row 1: Sales overview (scroll away on page scroll) */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-4">
-                    {/* Today's Sales (total billed) */}
-                    <div className="bg-white dark:bg-d-card border border-slate-200 dark:border-d-border rounded-2xl p-4">
-                        <div className="flex items-center gap-3 mb-2">
-                            <div className="w-10 h-10 bg-[rgba(91,156,246,0.1)] rounded-xl flex items-center justify-center">
-                                <FiDollarSign className="text-d-blue" size={20} />
-                            </div>
-                            <span className="text-slate-500 dark:text-d-muted text-sm">Today's Sales</span>
-                        </div>
-                        <p className="text-2xl font-bold text-slate-800 dark:text-d-heading font-display">{formatCurrency(stats.todaySales)}</p>
-                        <p className="text-xs text-slate-400 dark:text-d-faint mt-1">Total billed</p>
-                    </div>
+                {/* Today at a glance — admins can open the dashboard window behind each tile */}
+                <KpiStrip cols={5} className="mb-5">
+                    <KpiCard
+                        label="Sales today"
+                        value={formatCurrency(stats.todaySales)}
+                        note={`${stats.todayOrders || 0} bill${stats.todayOrders === 1 ? '' : 's'} · ${stats.totalSales || totalReceipts} this month`}
+                        onClick={isAdmin ? () => navigate('/dashboard?insight=sales') : undefined}
+                        ariaLabel="Sales today — open the sales window"
+                    />
+                    <KpiCard
+                        label="Collected"
+                        value={formatCurrency(stats.todayCollected)}
+                        tone="success"
+                        note="Received from customers"
+                        onClick={isAdmin ? () => navigate('/dashboard?insight=payments') : undefined}
+                        ariaLabel="Collected today — open payment methods"
+                    />
+                    <KpiCard
+                        label="On credit"
+                        value={formatCurrency(stats.todayCredit)}
+                        tone={stats.todayCredit > 0 ? 'destructive' : undefined}
+                        note="Owed by customers"
+                    />
+                    <KpiCard
+                        label="Refunded"
+                        value={formatCurrency(stats.todayRefunded)}
+                        tone={stats.todayRefunded > 0 ? 'destructive' : undefined}
+                        note={
+                            stats.todayRefunded > 0
+                                ? [stats.todayCashRefund > 0 && `Cash ${formatCurrency(stats.todayCashRefund)}`, stats.todayLedgerAdjust > 0 && `Ledger ${formatCurrency(stats.todayLedgerAdjust)}`].filter(Boolean).join(' · ')
+                                : 'No refunds today'
+                        }
+                    />
+                    <KpiCard
+                        label="Cash in drawer"
+                        value={formatCurrency(stats.todayCashInDrawer)}
+                        tone="success"
+                        note="Collected minus cash refunds"
+                        onClick={isAdmin ? () => navigate('/dashboard?insight=money') : undefined}
+                        ariaLabel="Cash in drawer — open the money window"
+                    />
+                </KpiStrip>
 
-                    {/* Collected (paid by customers) */}
-                    <div className="bg-white dark:bg-d-card border border-slate-200 dark:border-d-border rounded-2xl p-4">
-                        <div className="flex items-center gap-3 mb-2">
-                            <div className="w-10 h-10 bg-[rgba(52,232,161,0.1)] rounded-xl flex items-center justify-center">
-                                <FiDollarSign className="text-d-green" size={20} />
-                            </div>
-                            <span className="text-slate-500 dark:text-d-muted text-sm">Collected</span>
-                        </div>
-                        <p className="text-2xl font-bold text-d-green font-display">{formatCurrency(stats.todayCollected)}</p>
-                        <p className="text-xs text-slate-400 dark:text-d-faint mt-1">Amount received from customers</p>
-                    </div>
-
-                    {/* Credit (owed by customers) */}
-                    <div className="bg-white dark:bg-d-card border border-slate-200 dark:border-d-border rounded-2xl p-4">
-                        <div className="flex items-center gap-3 mb-2">
-                            <div className="w-10 h-10 bg-[rgba(255,107,107,0.1)] rounded-xl flex items-center justify-center">
-                                <FiTrendingUp className="text-d-red" size={20} />
-                            </div>
-                            <span className="text-slate-500 dark:text-d-muted text-sm">Credit</span>
-                        </div>
-                        <p className="text-2xl font-bold text-d-red font-display">{formatCurrency(stats.todayCredit)}</p>
-                        <p className="text-xs text-slate-400 dark:text-d-faint mt-1">Amount owed by customers</p>
-                    </div>
-                </div>
-
-                {/* Stats Cards — Row 2: Refunds & Drawer */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-                    {/* Total Refunded */}
-                    <div className="bg-white dark:bg-d-card border border-slate-200 dark:border-d-border rounded-2xl p-4">
-                        <div className="flex items-center gap-3 mb-2">
-                            <div className="w-10 h-10 bg-[rgba(255,107,107,0.1)] rounded-xl flex items-center justify-center">
-                                <FiCornerDownLeft className="text-d-red" size={20} />
-                            </div>
-                            <span className="text-slate-500 dark:text-d-muted text-sm">Total Refunded</span>
-                        </div>
-                        <p className="text-2xl font-bold text-d-red font-display">{formatCurrency(stats.todayRefunded)}</p>
-                        <div className="flex flex-col gap-0.5 mt-2">
-                            {stats.todayCashRefund > 0 && (
-                                <p className="text-xs text-slate-400 dark:text-d-faint">Cash return: {formatCurrency(stats.todayCashRefund)}</p>
-                            )}
-                            {stats.todayLedgerAdjust > 0 && (
-                                <p className="text-xs text-slate-400 dark:text-d-faint">Ledger adjust: {formatCurrency(stats.todayLedgerAdjust)}</p>
-                            )}
-                            {stats.todayRefunded === 0 && (
-                                <p className="text-xs text-slate-400 dark:text-d-faint">No refunds today</p>
-                            )}
-                        </div>
-                    </div>
-
-                    {/* Cash in Drawer = Collected - Cash Refunds */}
-                    <div className="bg-white dark:bg-d-card border border-slate-200 dark:border-d-border rounded-2xl p-4">
-                        <div className="flex items-center gap-3 mb-2">
-                            <div className="w-10 h-10 bg-[rgba(52,232,161,0.15)] rounded-xl flex items-center justify-center">
-                                <FiInbox className="text-d-green" size={20} />
-                            </div>
-                            <span className="text-slate-500 dark:text-d-muted text-sm">Cash in Drawer</span>
-                        </div>
-                        <p className="text-2xl font-bold text-d-green font-display">{formatCurrency(stats.todayCashInDrawer)}</p>
-                        <p className="text-xs text-slate-400 dark:text-d-faint mt-1">Collected minus cash refunds</p>
-                    </div>
-
-                    {/* Today's Orders */}
-                    <div className="bg-white dark:bg-d-card border border-slate-200 dark:border-d-border rounded-2xl p-4">
-                        <div className="flex items-center gap-3 mb-2">
-                            <div className="w-10 h-10 bg-[rgba(255,210,100,0.1)] rounded-xl flex items-center justify-center">
-                                <FiShoppingCart className="text-d-accent" size={20} />
-                            </div>
-                            <span className="text-slate-500 dark:text-d-muted text-sm">Today's Orders</span>
-                        </div>
-                        <p className="text-2xl font-bold text-slate-800 dark:text-d-heading">{stats.todayOrders}</p>
-                    </div>
-
-                    {/* Month Orders */}
-                    <div className="bg-white dark:bg-d-card border border-slate-200 dark:border-d-border rounded-2xl p-4">
-                        <div className="flex items-center gap-3 mb-2">
-                            <div className="w-10 h-10 bg-[rgba(91,156,246,0.1)] rounded-xl flex items-center justify-center">
-                                <FiFileText className="text-d-blue" size={20} />
-                            </div>
-                            <span className="text-slate-500 dark:text-d-muted text-sm">This Month</span>
-                        </div>
-                        <p className="text-2xl font-bold text-slate-800 dark:text-d-heading">{stats.totalSales || totalReceipts}</p>
-                        <p className="text-xs text-slate-400 dark:text-d-faint mt-1">Total receipts</p>
-                    </div>
-                </div>
-
-                {/* Sticky controls — search + filters. A compact stats strip appears
-                    here once the full cards have scrolled out of view. */}
-                <div ref={stickyBarRef} className="sticky top-0 z-20 -mx-6 px-6 pt-2 pb-4 bg-slate-50 dark:bg-d-bg">
-                    {collapsed && (
-                        <div className="flex items-center gap-2 flex-wrap mb-3">
-                            {[
-                                { label: "Today's Sales", value: formatCurrency(stats.todaySales), color: 'text-slate-800 dark:text-d-heading' },
-                                { label: 'Collected', value: formatCurrency(stats.todayCollected), color: 'text-d-green' },
-                                { label: 'Credit', value: formatCurrency(stats.todayCredit), color: 'text-d-red' },
-                                { label: 'Refunded', value: formatCurrency(stats.todayRefunded), color: 'text-d-red' },
-                                { label: 'Cash in Drawer', value: formatCurrency(stats.todayCashInDrawer), color: 'text-d-green' },
-                                { label: 'Orders', value: stats.todayOrders, color: 'text-slate-800 dark:text-d-heading' },
-                            ].map((s) => (
-                                <div key={s.label} className="flex items-center gap-2 px-3 py-1.5 bg-white dark:bg-d-card border border-slate-200 dark:border-d-border rounded-lg">
-                                    <span className="text-xs text-slate-500 dark:text-d-muted">{s.label}</span>
-                                    <span className={`text-sm font-semibold font-display ${s.color}`}>{s.value}</span>
+                <DataTable
+                    id="receipts"
+                    caption="Receipts"
+                    data={filteredReceipts}
+                    columns={receiptColumns}
+                    getRowId={(r) => r._id}
+                    loading={loading}
+                    error={loadError ? { message: loadError, onRetry: () => fetchReceipts(page) } : null}
+                    search={{ value: searchQuery, onChange: setSearchQuery, placeholder: 'Bill #, customer or phone', className: 'sm:w-[280px]' }}
+                    title="Bills"
+                    description={`${rangeText} · ${totalReceipts.toLocaleString()} bill${totalReceipts === 1 ? '' : 's'}, newest first. Click a bill to see it.`}
+                    filters={
+                        <Popover
+                            label="Filter bills"
+                            width={360}
+                            trigger={
+                                <Button variant="outline" aria-label={`Filter bills — now: ${filterSummary}`}>
+                                    <FiFilter aria-hidden="true" />
+                                    <span className="max-w-[220px] truncate">{filterSummary}</span>
+                                    {extraFilters > 0 ? (
+                                        <span className="ml-0.5 rounded-full bg-primary text-primary-foreground text-caption font-semibold px-1.5 leading-[18px]">{extraFilters}</span>
+                                    ) : null}
+                                </Button>
+                            }
+                        >
+                            {({ close }) => (
+                                <div className="flex flex-col gap-3.5">
+                                    <div>
+                                        <p className="font-mono text-overline-lg uppercase text-muted-foreground mb-1.5">Dates</p>
+                                        <SegmentedControl
+                                            label="Quick dates"
+                                            size="xs"
+                                            value={activePreset || ''}
+                                            onChange={(k) => setRange(presetRange(k))}
+                                            options={[
+                                                { value: 'today', label: 'Today' },
+                                                { value: 'week', label: '7 days' },
+                                                { value: 'month', label: 'Month' },
+                                                { value: 'all', label: 'All' },
+                                            ]}
+                                        />
+                                        <div className="mt-2 grid grid-cols-2 gap-2">
+                                            <Field label="From">
+                                                <Input type="date" value={range.from} max={range.to || undefined} onChange={(e) => setRange((r) => ({ ...r, from: e.target.value }))} />
+                                            </Field>
+                                            <Field label="To">
+                                                <Input type="date" value={range.to} min={range.from || undefined} onChange={(e) => setRange((r) => ({ ...r, to: e.target.value }))} />
+                                            </Field>
+                                        </div>
+                                    </div>
+                                    <div className="grid grid-cols-2 gap-2">
+                                        <Field label="Status">
+                                            <Select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
+                                                <option value="all">All</option>
+                                                <option value="paid">Paid</option>
+                                                <option value="partial">Part paid</option>
+                                                <option value="unpaid">Unpaid</option>
+                                                <option value="cancelled">Cancelled</option>
+                                            </Select>
+                                        </Field>
+                                        <Field label="Payment">
+                                            <Select value={methodFilter} onChange={(e) => setMethodFilter(e.target.value)}>
+                                                <option value="all">All</option>
+                                                <option value="cash">Cash</option>
+                                                <option value="card">Card</option>
+                                                <option value="online">Online</option>
+                                                <option value="store_credit">Store credit</option>
+                                            </Select>
+                                        </Field>
+                                    </div>
+                                    <div className="flex items-center justify-between pt-1">
+                                        <Button
+                                            variant="ghost"
+                                            size="xs"
+                                            onClick={() => {
+                                                setRange(presetRange('today'));
+                                                setStatusFilter('all');
+                                                setMethodFilter('all');
+                                            }}
+                                        >
+                                            Reset to today
+                                        </Button>
+                                        <Button size="xs" onClick={close}>
+                                            Done
+                                        </Button>
+                                    </div>
                                 </div>
-                            ))}
-                        </div>
-                    )}
-                    <div className="flex flex-wrap items-center gap-4">
-                    <div className="relative flex-1 max-w-md">
-                        <FiSearch className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 dark:text-d-faint" />
-                        <input
-                            type="text"
-                            value={searchQuery}
-                            onChange={(e) => setSearchQuery(e.target.value)}
-                            placeholder="Search by receipt # or customer..."
-                            className="w-full pl-12 pr-4 py-3 bg-white dark:bg-d-card border border-slate-200 dark:border-d-border rounded-xl text-slate-700 dark:text-d-text placeholder-d-faint focus:outline-none focus:border-d-border-hover transition-colors"
-                        />
-                    </div>
-
-                    <div className="flex items-center gap-1 bg-white dark:bg-d-card rounded-xl p-1 border border-slate-200 dark:border-d-border">
-                        {[
-                            { value: 'all', label: 'All' },
-                            { value: 'today', label: 'Today' },
-                            { value: 'week', label: 'Week' },
-                            { value: 'month', label: 'Month' },
-                        ].map((filter) => (
-                            <button
-                                key={filter.value}
-                                onClick={() => setDateFilter(filter.value)}
-                                className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
-                                    dateFilter === filter.value
-                                        ? 'bg-d-accent text-d-card'
-                                        : 'text-slate-500 dark:text-d-muted hover:text-slate-700 dark:text-d-text'
-                                }`}
-                            >
-                                {filter.label}
-                            </button>
-                        ))}
-                    </div>
-
-                    <button
-                        onClick={() => setStatusFilter(statusFilter === 'cancelled' ? 'all' : 'cancelled')}
-                        className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium border transition-all ${
-                            statusFilter === 'cancelled'
-                                ? 'bg-slate-700 text-white border-slate-700 dark:bg-white/15 dark:border-white/20'
-                                : 'bg-white dark:bg-d-card text-slate-500 dark:text-d-muted border-slate-200 dark:border-d-border hover:text-slate-700 dark:hover:text-d-text'
-                        }`}
-                        title="Show only cancelled bills"
-                    >
-                        <FiSlash size={14} />
-                        Cancelled
-                    </button>
-                    </div>
-                </div>
-
-                {/* Receipts Table — min-height keeps the page tall enough that the
-                    sticky bar can always reach the top (so the cards collapse) and
-                    the bills fill the viewport once it does. */}
-                <div className="bg-white dark:bg-d-card rounded-2xl border border-slate-200 dark:border-d-border overflow-hidden mt-2 min-h-[calc(100vh-120px)]">
-                    <table className="w-full">
-                        <thead className="bg-slate-50 dark:bg-d-elevated">
-                            <tr>
-                                <th className="text-left py-4 px-6 font-semibold text-slate-600 dark:text-d-muted text-sm bg-slate-50 dark:bg-d-elevated">Receipt #</th>
-                                <th className="text-left py-4 px-6 font-semibold text-slate-600 dark:text-d-muted text-sm bg-slate-50 dark:bg-d-elevated">Customer</th>
-                                <th className="text-left py-4 px-6 font-semibold text-slate-600 dark:text-d-muted text-sm bg-slate-50 dark:bg-d-elevated">Items</th>
-                                <th className="text-left py-4 px-6 font-semibold text-slate-600 dark:text-d-muted text-sm bg-slate-50 dark:bg-d-elevated">Total</th>
-                                <th className="text-left py-4 px-6 font-semibold text-slate-600 dark:text-d-muted text-sm bg-slate-50 dark:bg-d-elevated">Type</th>
-                                <th className="text-left py-4 px-6 font-semibold text-slate-600 dark:text-d-muted text-sm bg-slate-50 dark:bg-d-elevated">Date</th>
-                                <th className="text-right py-4 px-6 font-semibold text-slate-600 dark:text-d-muted text-sm bg-slate-50 dark:bg-d-elevated">Actions</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {filteredReceipts.map((receipt) => {
-                                const type = getReceiptType(receipt);
-                                return (
-                                    <tr
-                                        key={receipt._id}
-                                        className={`border-t border-slate-200 dark:border-d-border transition-colors ${
-                                            type.cancelled
-                                                ? 'bg-slate-50 dark:bg-white/[0.02] opacity-70 hover:opacity-100'
-                                                : type.label === 'Refund'
-                                                ? 'bg-red-100 dark:bg-[#3d2020] hover:bg-red-200 dark:hover:bg-[#4a2525]'
-                                                : type.hasReturns
-                                                    ? 'bg-amber-100 dark:bg-[#3d3520] hover:bg-amber-200 dark:hover:bg-[#4a4025]'
-                                                    : 'hover:bg-slate-50 dark:hover:bg-[rgba(255,255,255,0.02)]'
-                                        }`}
-                                    >
-                                        <td className="py-4 px-6 font-medium text-slate-800 dark:text-d-heading">
-                                            #{receipt.receiptNumber || receipt.billNumber || '-'}
-                                        </td>
-                                        <td className="py-4 px-6 text-slate-700 dark:text-d-text">
-                                            {receipt.customerName || 'Walk-in'}
-                                        </td>
-                                        <td className="py-4 px-6 text-slate-500 dark:text-d-muted">
-                                            {receipt.items?.length || 0} items
-                                        </td>
-                                        <td className="py-4 px-6 font-semibold font-display">
-                                            <span className={type.cancelled ? 'text-slate-400 dark:text-d-faint line-through' : receipt.totalBill < 0 ? 'text-d-red' : 'text-d-green'}>
-                                                {formatCurrency(Math.abs(receipt.totalBill))}
-                                            </span>
-                                        </td>
-                                        <td className="py-4 px-6">
-                                            <div className="flex items-center gap-2">
-                                                <span className={`px-3 py-1 rounded-lg text-xs font-semibold ${type.color}`}>
-                                                    {type.label}
-                                                </span>
-                                                {type.hasReturns && (
-                                                    <span className="px-3 py-1 rounded-lg text-xs font-semibold bg-[rgba(255,107,107,0.15)] text-d-red">
-                                                        HAS RETURNS
-                                                    </span>
-                                                )}
-                                            </div>
-                                        </td>
-                                        <td className="py-4 px-6 text-slate-500 dark:text-d-muted text-sm">
-                                            {formatDate(receipt.createdAt)}
-                                        </td>
-                                        <td className="py-4 px-6">
-                                            <div className="flex items-center justify-end gap-2">
-                                                <button
-                                                    onClick={() => setShowDetail(receipt)}
-                                                    className="p-2 text-slate-500 dark:text-d-muted hover:text-d-accent hover:bg-[rgba(255,210,100,0.1)] rounded-lg transition-colors"
-                                                    title="View Details"
-                                                >
-                                                    <FiEye size={16} />
-                                                </button>
-                                                <button
-                                                    onClick={() => handlePrint(receipt)}
-                                                    className="p-2 text-slate-500 dark:text-d-muted hover:text-d-blue hover:bg-[rgba(91,156,246,0.1)] rounded-lg transition-colors"
-                                                    title="Print"
-                                                >
-                                                    <FiPrinter size={16} />
-                                                </button>
-                                                {cancelStateFor(receipt).allowed && (
-                                                    <button
-                                                        onClick={() => openCancel(receipt)}
-                                                        className="p-2 text-slate-400 dark:text-d-faint hover:text-d-red hover:bg-[rgba(255,107,107,0.1)] rounded-lg transition-colors"
-                                                        title="Cancel bill (created by mistake)"
-                                                    >
-                                                        <FiSlash size={16} />
-                                                    </button>
-                                                )}
-                                            </div>
-                                        </td>
-                                    </tr>
-                                );
-                            })}
-                        </tbody>
-                    </table>
-                    {filteredReceipts.length === 0 && !loading && (
-                        <div className="flex flex-col items-center justify-center py-20 text-slate-400 dark:text-d-faint">
-                            <FiFileText size={48} />
-                            <p className="mt-4 text-slate-500 dark:text-d-muted">No receipts found</p>
-                        </div>
-                    )}
-
-                    {/* Loading More Indicator */}
-                    {loadingMore && (
-                        <div className="flex items-center justify-center py-6 gap-3">
-                            <FiLoader className="animate-spin text-d-accent" size={20} />
-                            <span className="text-slate-500 dark:text-d-muted">Loading more receipts...</span>
-                        </div>
-                    )}
-
-                    {/* Load More Button */}
-                    {hasMore && !loading && receipts.length > 0 && (
-                        <div className="flex justify-center py-6">
-                            <button
-                                onClick={() => fetchReceipts(page + 1, false)}
-                                disabled={loadingMore}
-                                className="px-6 py-3 bg-gradient-to-r from-d-accent to-d-accent-s text-d-card rounded-xl font-semibold hover:shadow-[0_4px_20px_rgba(255,210,100,0.4)] transition-all disabled:opacity-50 flex items-center gap-2"
-                            >
-                                {loadingMore ? (
-                                    <>
-                                        <FiLoader className="animate-spin" size={16} />
-                                        Loading...
-                                    </>
-                                ) : (
-                                    <>
-                                        Load More ({receipts.length} of {totalReceipts})
-                                    </>
-                                )}
-                            </button>
-                        </div>
-                    )}
-
-                    {/* End of List Indicator */}
-                    {!hasMore && receipts.length > 0 && !loading && (
-                        <div className="text-center py-6 text-slate-400 dark:text-d-faint text-sm">
-                            You've reached the end ({totalReceipts} receipts)
-                        </div>
-                    )}
-                </div>
+                            )}
+                        </Popover>
+                    }
+                    // only the dates narrowed → a plain "no bills on …" message, not "nothing matches"
+                    isFiltered={!!searchQuery || statusFilter !== 'all' || methodFilter !== 'all'}
+                    onClearFilters={() => {
+                        setSearchQuery('');
+                        setRange(presetRange('all'));
+                        setStatusFilter('all');
+                        setMethodFilter('all');
+                    }}
+                    empty={
+                        activePreset === 'all'
+                            ? { icon: FiFileText, title: 'No receipts yet', description: 'Bills appear here as soon as the first sale is made.' }
+                            : {
+                                  icon: FiFileText,
+                                  title: `No bills ${singleDay ? 'on' : 'in'} ${rangeText}`,
+                                  description: 'Pick other dates in the filter.',
+                                  action: (
+                                      <Button size="xs" variant="outline" onClick={() => setRange(presetRange('all'))}>
+                                          Show all dates
+                                      </Button>
+                                  ),
+                              }
+                    }
+                    onRowClick={(r) => setShowDetail(r)}
+                    rowLabel={(r) => `Bill ${r.receiptNumber || r.billNumber || ''}, ${r.customerName || 'Walk-in'}`}
+                    rowTone={(r) => (getReceiptType(r).hasReturns ? 'attention' : null)}
+                    rowClassName={(r) => (getReceiptType(r).cancelled ? 'opacity-60 hover:opacity-100' : '')}
+                    server={{
+                        page,
+                        pageSize,
+                        total: totalReceipts,
+                        onPageChange: setPage,
+                        onPageSizeChange: (n) => {
+                            setPageSize(n);
+                            try {
+                                localStorage.setItem('ds.table.receipts.pageSize', JSON.stringify(n));
+                            } catch {
+                                /* storage blocked */
+                            }
+                        },
+                    }}
+                />
             </div>
 
-            {/* Receipt Detail Modal */}
-            {showDetail && (() => {
-                const r = showDetail;
-                const type = getReceiptType(r);
-                const totalBill = r.total ?? r.totalBill ?? 0;
-                const hasDiscount = (r.totalDiscount || 0) > 0;
-                const hasReturns = r.returns && r.returns.length > 0;
-                const hasPayments = r.payments && r.payments.length > 0;
-                const paymentMethod = hasPayments ? getPrimaryPaymentMethod(r) : (r.paymentMethod || 'cash');
-
-                return (
-                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-                    <div className="bg-white dark:bg-d-card border border-slate-200 dark:border-d-border rounded-2xl w-full max-w-2xl animate-pop-in max-h-[90vh] overflow-auto">
-                        {/* Header */}
-                        <div className="flex items-center justify-between p-6 border-b border-slate-200 dark:border-d-border sticky top-0 bg-white dark:bg-d-card z-10">
-                            <div className="flex items-center gap-3">
-                                <h3 className="text-xl font-semibold text-slate-800 dark:text-d-heading">
-                                    Receipt #{r.receiptNumber || r.billNumber}
-                                </h3>
-                                <span className={`px-3 py-1 rounded-lg text-xs font-semibold ${type.color}`}>
-                                    {type.label}
-                                </span>
-                                {r.paymentStatus && r.paymentStatus !== 'paid' && (
-                                    <span className={`px-3 py-1 rounded-lg text-xs font-semibold ${r.paymentStatus === 'unpaid' ? 'bg-red-100 dark:bg-red-500/15 text-red-600 dark:text-d-red' : 'bg-amber-100 dark:bg-amber-500/15 text-amber-600 dark:text-amber-400'}`}>
-                                        {r.paymentStatus === 'unpaid' ? 'Unpaid' : 'Partial'}
-                                    </span>
-                                )}
-                                {r.returnStatus && r.returnStatus !== 'none' && (
-                                    <span className="px-3 py-1 rounded-lg text-xs font-semibold bg-orange-100 dark:bg-orange-500/15 text-orange-600 dark:text-orange-400">
-                                        {r.returnStatus === 'full' ? 'Fully Returned' : 'Partial Return'}
-                                    </span>
-                                )}
-                            </div>
-                            <button
-                                onClick={() => setShowDetail(null)}
-                                className="p-2 hover:bg-slate-100 dark:hover:bg-d-glass rounded-lg transition-colors text-slate-500 dark:text-d-muted"
-                            >
-                                <FiX size={20} />
-                            </button>
-                        </div>
-
-                        <div className="p-6 space-y-5">
-                            {type.cancelled && (
-                                <div className="flex items-start gap-3 p-4 rounded-xl bg-slate-100 dark:bg-white/5 border border-slate-200 dark:border-d-border">
-                                    <FiSlash className="text-slate-500 dark:text-d-muted mt-0.5 shrink-0" size={18} />
-                                    <div className="text-sm">
-                                        <p className="font-semibold text-slate-700 dark:text-d-text">
-                                            {type.label}{r.cancelledAt ? ` on ${formatDate(r.cancelledAt)}` : ''}
-                                            {(r.cancelledByName || r.cancelledBy?.name) ? ` by ${r.cancelledByName || r.cancelledBy?.name}` : ''}
-                                        </p>
-                                        {r.cancelReason && <p className="text-slate-600 dark:text-d-muted mt-0.5">Reason: {r.cancelReason}</p>}
-                                        <p className="text-xs text-slate-400 dark:text-d-faint mt-1">
-                                            Not counted in reports, the cash book or the customer's balance.
-                                        </p>
-                                    </div>
-                                </div>
-                            )}
-
-                            {/* Info Grid */}
-                            <div className="grid grid-cols-2 md:grid-cols-3 gap-4 bg-slate-50 dark:bg-d-elevated rounded-xl p-4">
-                                <div>
-                                    <p className="text-xs text-slate-400 dark:text-d-faint uppercase tracking-wider">Customer</p>
-                                    <p className="font-medium text-slate-800 dark:text-d-text mt-0.5">{r.customerName || 'Walk-in'}</p>
-                                    {r.customerPhone && <p className="text-xs text-slate-500 dark:text-d-muted">{r.customerPhone}</p>}
-                                    {r.customerAddress && <p className="text-xs text-slate-500 dark:text-d-muted">{r.customerAddress}</p>}
-                                </div>
-                                <div>
-                                    <p className="text-xs text-slate-400 dark:text-d-faint uppercase tracking-wider">Date & Time</p>
-                                    <p className="font-medium text-slate-800 dark:text-d-text mt-0.5">{formatDate(r.createdAt)}</p>
-                                </div>
-                                <div>
-                                    <p className="text-xs text-slate-400 dark:text-d-faint uppercase tracking-wider">Cashier</p>
-                                    <p className="font-medium text-slate-800 dark:text-d-text mt-0.5">{r.cashierName || '-'}</p>
-                                </div>
-                                <div>
-                                    <p className="text-xs text-slate-400 dark:text-d-faint uppercase tracking-wider">Payment</p>
-                                    <p className="font-medium text-slate-800 dark:text-d-text mt-0.5 capitalize">{paymentMethod}</p>
-                                </div>
-                                <div>
-                                    <p className="text-xs text-slate-400 dark:text-d-faint uppercase tracking-wider">Items</p>
-                                    <p className="font-medium text-slate-800 dark:text-d-text mt-0.5">{r.totalQty || r.items?.length || 0} qty ({r.items?.length || 0} products)</p>
-                                </div>
-                                <div>
-                                    <p className="text-xs text-slate-400 dark:text-d-faint uppercase tracking-wider">Status</p>
-                                    <p className="font-medium text-slate-800 dark:text-d-text mt-0.5 capitalize">{r.status || 'completed'}</p>
-                                </div>
-                            </div>
-
-                            {/* Items Table */}
-                            <div>
-                                <h4 className="font-semibold text-slate-800 dark:text-d-heading mb-3">Items</h4>
-                                <div className="bg-white dark:bg-d-bg rounded-xl border border-slate-200 dark:border-d-border overflow-hidden">
-                                    <table className="w-full text-sm">
-                                        <thead className="bg-slate-50 dark:bg-d-glass">
-                                            <tr>
-                                                <th className="text-left py-2.5 px-4 font-medium text-slate-500 dark:text-d-muted">Item</th>
-                                                <th className="text-center py-2.5 px-4 font-medium text-slate-500 dark:text-d-muted">Qty</th>
-                                                <th className="text-right py-2.5 px-4 font-medium text-slate-500 dark:text-d-muted">Price</th>
-                                                {hasDiscount && <th className="text-right py-2.5 px-4 font-medium text-slate-500 dark:text-d-muted">Discount</th>}
-                                                <th className="text-right py-2.5 px-4 font-medium text-slate-500 dark:text-d-muted">Total</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody>
-                                            {mergeReceiptItems(r.items).map((item, i) => {
-                                                const qty = item.qty || item.quantity || 0;
-                                                const lineTotal = item.itemTotal || (item.price * qty);
-                                                return (
-                                                    <tr key={i} className="border-t border-slate-100 dark:border-d-border">
-                                                        <td className="py-3 px-4">
-                                                            <p className="font-medium text-slate-800 dark:text-d-text">{item.name}</p>
-                                                            <div className="flex items-center gap-2 mt-0.5">
-                                                                {item.category && <span className="text-xs text-slate-400 dark:text-d-faint">{item.category}</span>}
-                                                                {item.barcode && <span className="text-xs text-slate-400 dark:text-d-faint font-mono">#{item.barcode}</span>}
-                                                            </div>
-                                                            {item.returnedQty > 0 && (
-                                                                <span className="text-xs text-orange-600 dark:text-orange-400 font-medium">{item.returnedQty} returned</span>
-                                                            )}
-                                                        </td>
-                                                        <td className="py-3 px-4 text-center text-slate-700 dark:text-d-text">{qty}</td>
-                                                        <td className="py-3 px-4 text-right text-slate-600 dark:text-d-muted">{formatCurrency(item.price)}</td>
-                                                        {hasDiscount && (
-                                                            <td className="py-3 px-4 text-right text-red-500 dark:text-d-red">
-                                                                {(item.discountAmount || 0) > 0 ? `-${formatCurrency(item.discountAmount)}` : '-'}
-                                                            </td>
-                                                        )}
-                                                        <td className="py-3 px-4 text-right font-semibold text-slate-800 dark:text-d-text">{formatCurrency(lineTotal)}</td>
-                                                    </tr>
-                                                );
-                                            })}
-                                        </tbody>
-                                    </table>
-                                </div>
-                            </div>
-
-                            {/* Totals Breakdown */}
-                            {(() => {
-                                // r.subtotal is AFTER item discounts (sum of itemTotal).
-                                // To show a meaningful breakdown, compute the gross (before any discounts).
-                                const grossSubtotal = r.items?.reduce((s, it) => s + (it.price * (it.qty || it.quantity || 0)), 0) || 0;
-                                return (
-                            <div className="bg-slate-50 dark:bg-d-elevated rounded-xl p-4 space-y-2">
-                                <div className="flex justify-between text-sm text-slate-600 dark:text-d-muted">
-                                    <span>Subtotal</span>
-                                    <span className="text-slate-800 dark:text-d-text">{formatCurrency(grossSubtotal)}</span>
-                                </div>
-                                {(r.totalTax || 0) > 0 && (
-                                    <div className="flex justify-between text-sm text-slate-600 dark:text-d-muted">
-                                        <span>Tax / GST</span>
-                                        <span className="text-slate-800 dark:text-d-text">+{formatCurrency(r.totalTax)}</span>
-                                    </div>
-                                )}
-                                {(r.totalItemDiscount || 0) > 0 && (
-                                    <div className="flex justify-between text-sm text-red-500 dark:text-d-red">
-                                        <span>Item Discounts</span>
-                                        <span>-{formatCurrency(r.totalItemDiscount)}</span>
-                                    </div>
-                                )}
-                                {(r.billDiscountAmount || 0) > 0 && (
-                                    <div className="flex justify-between text-sm text-red-500 dark:text-d-red">
-                                        <span>Bill Discount {r.billDiscountReason ? `(${r.billDiscountReason})` : ''}</span>
-                                        <span>-{formatCurrency(r.billDiscountAmount)}</span>
-                                    </div>
-                                )}
-                                {hasDiscount && (
-                                    <div className="flex justify-between text-sm font-medium text-slate-600 dark:text-d-muted">
-                                        <span>Total Discount</span>
-                                        <span className="text-red-500 dark:text-d-red">-{formatCurrency(r.totalDiscount)}</span>
-                                    </div>
-                                )}
-
-                                <div className="flex justify-between text-lg font-bold pt-2 border-t border-slate-200 dark:border-d-border">
-                                    <span className="text-slate-800 dark:text-d-heading">Total</span>
-                                    <span className={`font-display ${totalBill < 0 ? 'text-red-500 dark:text-d-red' : 'text-emerald-600 dark:text-d-green'}`}>
-                                        {formatCurrency(Math.abs(totalBill))}
-                                    </span>
-                                </div>
-
-                                {(r.totalRefunded || 0) > 0 && (
-                                    <>
-                                        <div className="flex justify-between text-sm text-orange-600 dark:text-orange-400">
-                                            <span>Total Refunded</span>
-                                            <span>-{formatCurrency(r.totalRefunded)}</span>
-                                        </div>
-                                        <div className="flex justify-between text-sm font-semibold text-slate-800 dark:text-d-heading">
-                                            <span>Net Amount</span>
-                                            <span>{formatCurrency(r.netAmount)}</span>
-                                        </div>
-                                    </>
-                                )}
-                            </div>
-                                );
-                            })()}
-
-                            {/* Payment Details */}
-                            <div>
-                                <h4 className="font-semibold text-slate-800 dark:text-d-heading mb-3">Payment Details</h4>
-                                <div className="bg-white dark:bg-d-bg rounded-xl border border-slate-200 dark:border-d-border p-4 space-y-2">
-                                    {hasPayments ? (
-                                        r.payments.map((p, i) => (
-                                            <div key={i} className="flex items-center justify-between text-sm">
-                                                <div className="flex items-center gap-2">
-                                                    <span className={`font-medium text-slate-700 dark:text-d-text ${p.creditFrom || p.method === 'store_credit' ? '' : 'capitalize'}`}>
-                                                        {p.creditFrom || p.method === 'store_credit' ? `Paid by credit (from Bill #${p.creditFromBillNumber ?? ''})` : formatPaymentMethod(p)}
-                                                    </span>
-                                                    {p.account && accountsById.get(String(p.account?._id || p.account)) && (
-                                                        <span className="text-xs px-1.5 py-0.5 rounded bg-slate-100 dark:bg-d-elevated text-slate-500 dark:text-d-muted">
-                                                            → {accountsById.get(String(p.account?._id || p.account)).name}
-                                                        </span>
-                                                    )}
-                                                    {p.reference && <span className="text-xs text-slate-400 dark:text-d-faint font-mono">Ref: {p.reference}</span>}
-                                                    {/* A store-credit payment's note just repeats "Credit from Bill #X". */}
-                                                    {p.note && !(p.creditFrom || p.method === 'store_credit') && <span className="text-xs text-slate-400 dark:text-d-faint">({p.note})</span>}
-                                                </div>
-                                                <span className="font-semibold text-slate-800 dark:text-d-text">{formatCurrency(p.amount)}</span>
-                                            </div>
-                                        ))
-                                    ) : (r.amountPaid || 0) > 0 ? (
-                                        <div className="flex items-center justify-between text-sm">
-                                            <span className="capitalize font-medium text-slate-700 dark:text-d-text">{paymentMethod}</span>
-                                            <span className="font-semibold text-slate-800 dark:text-d-text">{formatCurrency(r.amountPaid)}</span>
-                                        </div>
-                                    ) : (
-                                        <p className="text-sm text-slate-400 dark:text-d-faint italic">No payments recorded</p>
-                                    )}
-
-                                    {(r.cashGiven || 0) > 0 && (
-                                        <div className="border-t border-slate-100 dark:border-d-border pt-2 mt-2 space-y-1">
-                                            <div className="flex justify-between text-sm text-slate-500 dark:text-d-muted">
-                                                <span>Cash Given</span>
-                                                <span>{formatCurrency(r.cashGiven)}</span>
-                                            </div>
-                                            <div className="flex justify-between text-sm text-slate-500 dark:text-d-muted">
-                                                <span>Change</span>
-                                                <span>{formatCurrency(r.change)}</span>
-                                            </div>
-                                        </div>
-                                    )}
-
-                                    {(r.amountDue || 0) !== 0 && (
-                                        <div className="border-t border-slate-100 dark:border-d-border pt-2 mt-2">
-                                            <div className={`flex justify-between text-sm font-semibold ${r.amountDue > 0 ? 'text-red-600 dark:text-d-red' : 'text-emerald-600 dark:text-d-green'}`}>
-                                                <span>{r.amountDue > 0 ? 'Amount Due' : 'Credit (overpaid)'}</span>
-                                                <span>{formatCurrency(Math.abs(r.amountDue))}</span>
-                                            </div>
-                                        </div>
-                                    )}
-                                </div>
-                            </div>
-
-                            {/* Returns Section */}
-                            {hasReturns && (
-                                <div>
-                                    <h4 className="font-semibold text-slate-800 dark:text-d-heading mb-3">Returns</h4>
-                                    <div className="space-y-3">
-                                        {r.returns.map((ret, ri) => (
-                                            <div key={ri} className="bg-red-50 dark:bg-red-500/5 rounded-xl border border-red-200 dark:border-red-500/20 p-4">
-                                                <div className="flex items-center justify-between mb-2">
-                                                    <span className="font-medium text-red-700 dark:text-d-red text-sm">
-                                                        Return {ret.returnNumber || `#${ri + 1}`}
-                                                    </span>
-                                                    <span className="text-xs text-slate-500 dark:text-d-muted">
-                                                        {ret.returnedAt ? formatDate(ret.returnedAt) : '-'}
-                                                        {ret.processedByName && ` by ${ret.processedByName}`}
-                                                    </span>
-                                                </div>
-                                                {ret.items?.map((ri2, j) => (
-                                                    <div key={j} className="flex justify-between text-sm py-1">
-                                                        <span className="text-slate-700 dark:text-d-text">
-                                                            {ri2.name} x {ri2.quantity}
-                                                            {ri2.reason && <span className="ml-2 text-xs text-slate-400 dark:text-d-faint capitalize">({ri2.reason.replace('_', ' ')})</span>}
-                                                        </span>
-                                                        <span className="text-red-600 dark:text-d-red font-medium">-{formatCurrency(ri2.refundAmount)}</span>
-                                                    </div>
-                                                ))}
-                                                <div className="flex justify-between text-sm font-semibold mt-2 pt-2 border-t border-red-200 dark:border-red-500/20">
-                                                    <span className="text-red-700 dark:text-d-red">Refund ({ret.refundMethod?.replace('_', ' ') || 'cash'})</span>
-                                                    <span className="text-red-700 dark:text-d-red">-{formatCurrency(ret.cashRefundAmount ?? ret.refundAmount)}</span>
-                                                </div>
-                                                {(ret.debtCancelled > 0) && (
-                                                    <div className="flex justify-between text-xs mt-1 text-slate-500 dark:text-d-muted">
-                                                        <span>Outstanding balance cancelled</span>
-                                                        <span>{formatCurrency(ret.debtCancelled)}</span>
-                                                    </div>
-                                                )}
-                                            </div>
-                                        ))}
-                                    </div>
-                                </div>
-                            )}
-
-                            {/* Profit Breakdown — gated behind the pos.viewProfit permission */}
-                            {canViewProfit && (r.billProfit !== undefined || r.netProfit !== undefined) && (() => {
-                                const totalCost = r.totalCost || 0;
-                                const billProfit = r.billProfit || 0;
-                                const hasReturns = (r.totalRefunded || 0) > 0;
-                                const returnedCost = r.items?.reduce((s, it) => s + ((it.costPrice || 0) * (it.returnedQty || 0)), 0) || 0;
-                                const keptCost = totalCost - returnedCost;
-                                const netProfit = r.netProfit || 0;
-                                return (
-                                <div className="bg-slate-50 dark:bg-d-elevated rounded-xl p-4">
-                                    <h4 className="font-semibold text-slate-800 dark:text-d-heading mb-3 text-sm">Profit Breakdown</h4>
-                                    <div className="space-y-2 text-sm">
-                                        {/* Revenue */}
-                                        <div className="flex justify-between">
-                                            <span className="text-slate-500 dark:text-d-muted">Revenue (Sale Total)</span>
-                                            <span className="text-slate-800 dark:text-d-text font-medium">{formatCurrency(r.total)}</span>
-                                        </div>
-                                        <div className="flex justify-between">
-                                            <span className="text-slate-500 dark:text-d-muted">Total Cost of Goods</span>
-                                            <span className="text-red-500 dark:text-d-red">-{formatCurrency(totalCost)}</span>
-                                        </div>
-                                        <div className="flex justify-between border-t border-slate-200 dark:border-d-border pt-2">
-                                            <span className="text-slate-700 dark:text-d-text font-medium">Gross Profit</span>
-                                            <span className={`font-semibold ${billProfit >= 0 ? 'text-emerald-600 dark:text-d-green' : 'text-red-600 dark:text-d-red'}`}>
-                                                {formatCurrency(billProfit)}
-                                            </span>
-                                        </div>
-
-                                        {hasReturns && (
-                                            <>
-                                                <div className="border-t border-slate-200 dark:border-d-border pt-2 mt-1">
-                                                    <p className="text-xs text-slate-400 dark:text-d-faint uppercase tracking-wider mb-2">After Returns</p>
-                                                </div>
-                                                <div className="flex justify-between">
-                                                    <span className="text-slate-500 dark:text-d-muted">Refunded to Customer</span>
-                                                    <span className="text-orange-500">-{formatCurrency(r.totalRefunded)}</span>
-                                                </div>
-                                                <div className="flex justify-between">
-                                                    <span className="text-slate-500 dark:text-d-muted">Cost Recovered (Restocked)</span>
-                                                    <span className="text-emerald-500 dark:text-d-green">+{formatCurrency(returnedCost)}</span>
-                                                </div>
-                                                <div className="flex justify-between text-xs text-slate-400 dark:text-d-faint">
-                                                    <span>Kept Revenue</span>
-                                                    <span>{formatCurrency((r.total || 0) - (r.totalRefunded || 0))}</span>
-                                                </div>
-                                                <div className="flex justify-between text-xs text-slate-400 dark:text-d-faint">
-                                                    <span>Kept Cost</span>
-                                                    <span>{formatCurrency(keptCost)}</span>
-                                                </div>
-                                            </>
-                                        )}
-
-                                        <div className="flex justify-between border-t border-slate-200 dark:border-d-border pt-2">
-                                            <span className="text-slate-800 dark:text-d-heading font-semibold">Net Profit</span>
-                                            <span className={`font-bold ${netProfit >= 0 ? 'text-emerald-600 dark:text-d-green' : 'text-red-600 dark:text-d-red'}`}>
-                                                {formatCurrency(netProfit)}
-                                            </span>
-                                        </div>
-
-                                        {/* Per-item cost breakdown */}
-                                        {r.items && r.items.length > 0 && (
-                                            <div className="border-t border-slate-200 dark:border-d-border pt-2 mt-1">
-                                                <p className="text-xs text-slate-400 dark:text-d-faint uppercase tracking-wider mb-2">Item Cost Details</p>
-                                                {r.items.map((it, idx) => {
-                                                    const qty = it.qty || it.quantity || 0;
-                                                    const cost = (it.costPrice || 0) * qty;
-                                                    const profit = (it.itemProfit || 0);
-                                                    const retQty = it.returnedQty || 0;
-                                                    return (
-                                                        <div key={idx} className="flex justify-between items-start py-1">
-                                                            <div>
-                                                                <span className="text-slate-600 dark:text-d-muted">{it.name}</span>
-                                                                <span className="text-xs text-slate-400 dark:text-d-faint ml-1">
-                                                                    (cost {formatCurrency(it.costPrice || 0)} × {qty}{retQty > 0 ? `, ${retQty} returned` : ''})
-                                                                </span>
-                                                            </div>
-                                                            <span className={`text-xs font-medium ${(it.netProfit || profit) >= 0 ? 'text-emerald-500' : 'text-red-500'}`}>
-                                                                {formatCurrency(it.netProfit ?? profit)}
-                                                            </span>
-                                                        </div>
-                                                    );
-                                                })}
-                                            </div>
-                                        )}
-                                    </div>
-                                </div>
-                                );
-                            })()}
-
-                            {/* Notes */}
-                            {r.notes && (
-                                <div className="text-sm text-slate-500 dark:text-d-muted bg-slate-50 dark:bg-d-elevated rounded-xl p-3">
-                                    <span className="font-medium text-slate-700 dark:text-d-text">Note: </span>{r.notes}
-                                </div>
-                            )}
-
-                            {/* Actions */}
-                            <div className="flex gap-3 pt-2">
-                                <button onClick={() => handlePrint(r)} className="flex-1 py-3 border border-slate-200 dark:border-d-border rounded-xl font-medium text-slate-500 dark:text-d-muted hover:bg-slate-100 dark:hover:bg-d-glass transition-colors flex items-center justify-center gap-2">
-                                    <FiPrinter size={18} />
-                                    Print
-                                </button>
-                                <button onClick={() => handleDownload(r)} className="flex-1 py-3 bg-gradient-to-r from-amber-400 to-amber-500 dark:from-d-accent dark:to-d-accent-s text-white dark:text-d-card rounded-xl font-semibold hover:shadow-md dark:hover:shadow-[0_4px_20px_rgba(255,210,100,0.4)] transition-all flex items-center justify-center gap-2">
-                                    <FiDownload size={18} />
-                                    Download
-                                </button>
-                            </div>
-                            {cancelStateFor(r).allowed && (
-                                <div className="pt-3 border-t border-slate-200 dark:border-d-border">
-                                    <button
-                                        onClick={() => openCancel(r)}
-                                        className="w-full py-2.5 rounded-xl text-sm font-semibold border border-red-300 dark:border-d-red/40 text-red-600 dark:text-d-red hover:bg-red-50 dark:hover:bg-[rgba(255,107,107,0.08)] transition-colors flex items-center justify-center gap-2"
-                                    >
-                                        <FiSlash size={15} />
-                                        Cancel bill
-                                    </button>
-                                    <p className="text-xs text-slate-400 dark:text-d-faint mt-1.5 text-center">
-                                        Only for bills created by mistake. If the customer returned goods, use Returns.
-                                    </p>
-                                </div>
-                            )}
-                        </div>
-                    </div>
-                </div>
-                );
-            })()}
+            {/* Bill details — side window (design Stage 7) */}
+            {showDetail && (
+                <BillDetailDrawer
+                    receipt={showDetail}
+                    onClose={closeDetail}
+                    formatCurrency={formatCurrency}
+                    formatDate={formatDate}
+                    getReceiptType={getReceiptType}
+                    accountsById={accountsById}
+                    canViewProfit={canViewProfit}
+                    onPrint={handlePrint}
+                    onDownload={handleDownload}
+                    cancelAllowed={cancelStateFor(showDetail).allowed}
+                    onCancel={openCancel}
+                    onReturn={(r) => navigate(`/returns?bill=${r.billNumber}`)}
+                    onOpenCustomer={(r) => navigate(`/customers/${r.customer?._id || r.customer}/ledger`)}
+                />
+            )}
 
             {/* Cancel Bill Confirm */}
             {cancelTarget && (() => {
                 const b = cancelTarget;
                 const cash = estimateCashReversal(b);
                 return (
-                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[60] p-4">
-                    <div className="bg-white dark:bg-d-card border border-slate-200 dark:border-d-border rounded-2xl w-full max-w-md animate-pop-in">
+                <DialogShell size="md" zIndex={60}>
                         <div className="p-6">
                             <div className="flex items-start gap-3 mb-4">
-                                <div className="w-10 h-10 rounded-full bg-red-50 dark:bg-[rgba(255,107,107,0.12)] flex items-center justify-center shrink-0">
-                                    <FiAlertTriangle className="text-red-500 dark:text-d-red" size={20} />
+                                <div className="w-10 h-10 rounded-full bg-destructive-chip flex items-center justify-center shrink-0">
+                                    <FiAlertTriangle className="text-destructive" size={20} />
                                 </div>
                                 <div>
-                                    <h3 className="text-lg font-bold text-slate-800 dark:text-d-heading">Cancel bill #{b.billNumber}?</h3>
-                                    <p className="text-sm text-slate-500 dark:text-d-muted">
+                                    <h3 className="text-lg font-bold text-foreground">Cancel bill #{b.billNumber}?</h3>
+                                    <p className="text-sm text-muted-foreground">
                                         {b.customerName || 'Walk-in'} · {formatCurrency(b.total ?? b.totalBill)}
                                     </p>
                                 </div>
                             </div>
 
-                            <div className="p-3 rounded-xl bg-red-50 dark:bg-[rgba(255,107,107,0.08)] border border-red-200 dark:border-[rgba(255,107,107,0.25)] text-sm text-red-700 dark:text-d-red space-y-1 mb-3">
+                            <div className="p-3 rounded-xl bg-destructive-chip border border-destructive/30 text-sm text-destructive space-y-1 mb-3">
                                 <p>This bill will be removed from reports and the customer's balance, and its stock will come back.</p>
                                 {cash > 0 && <p className="font-semibold">Cash {formatCurrency(cash)} will be taken out of the cash book.</p>}
                             </div>
-                            <p className="text-xs text-slate-500 dark:text-d-muted mb-4">
+                            <p className="text-xs text-muted-foreground mb-4">
                                 Use this only for bills created by mistake. If the customer returned goods, use <span className="font-semibold">Returns</span> instead.
                             </p>
 
-                            <label className="block text-sm text-slate-600 dark:text-d-muted mb-1.5">
-                                Reason <span className="text-red-500">*</span>
+                            <label className="block text-sm text-muted-foreground mb-1.5">
+                                Reason <span className="text-destructive">*</span>
                             </label>
                             <textarea
                                 value={cancelReason}
@@ -1200,45 +729,39 @@ const Receipts = () => {
                                 rows={2}
                                 autoFocus
                                 placeholder="e.g. Created by mistake, duplicate bill"
-                                className="w-full px-3 py-2.5 bg-slate-50 dark:bg-d-bg border border-slate-200 dark:border-d-border rounded-xl text-sm text-slate-700 dark:text-d-text placeholder-slate-400 dark:placeholder-d-faint resize-none focus:outline-none focus:border-red-300"
+                                className="w-full px-3 py-2.5 bg-muted/40 border border-hairline rounded-xl text-sm text-foreground placeholder:text-placeholder resize-none focus:outline-none focus:border-destructive/30"
                             />
-                            <p className="text-[11px] text-slate-400 dark:text-d-faint text-right">{cancelReason.length}/300</p>
+                            <p className="text-caption text-muted-foreground text-right">{cancelReason.length}/300</p>
 
                             {cancelError && (
-                                <div className="mt-2 p-3 bg-[rgba(255,107,107,0.1)] border border-[rgba(255,107,107,0.3)] rounded-xl text-d-red text-sm flex items-center gap-2">
+                                <div className="mt-2 p-3 bg-destructive-chip border border-destructive rounded-xl text-destructive text-sm flex items-center gap-2">
                                     <FiAlertTriangle className="shrink-0" size={14} />
                                     {cancelError}
                                 </div>
                             )}
 
                             <div className="flex gap-3 mt-4">
-                                <button
+                                <button data-dialog-close
                                     onClick={() => setCancelTarget(null)}
                                     disabled={cancelling}
-                                    className="flex-1 py-3 border border-slate-200 dark:border-d-border rounded-xl font-medium text-slate-600 dark:text-d-muted hover:bg-slate-100 dark:hover:bg-d-glass transition-colors disabled:opacity-50"
+                                    className="flex-1 py-3 border border-hairline rounded-xl font-medium text-muted-foreground hover:bg-[var(--hover-overlay)] transition-colors disabled:opacity-50"
                                 >
                                     Keep bill
                                 </button>
                                 <button
                                     onClick={submitCancel}
                                     disabled={cancelling}
-                                    className="flex-1 py-3 bg-red-500 hover:bg-red-600 dark:bg-d-red text-white rounded-xl font-semibold transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
+                                    className="flex-1 py-3 bg-destructive hover:bg-destructive/90 text-white rounded-xl font-semibold transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
                                 >
                                     {cancelling ? <FiRefreshCw className="animate-spin" size={16} /> : <FiSlash size={16} />}
                                     {cancelling ? 'Cancelling...' : 'Cancel bill'}
                                 </button>
                             </div>
                         </div>
-                    </div>
-                </div>
+                    </DialogShell>
                 );
             })()}
 
-            {toast && (
-                <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[70] px-5 py-3 rounded-xl bg-slate-800 text-white text-sm shadow-lg animate-fade-slide-up">
-                    {toast}
-                </div>
-            )}
         </div>
     );
 };

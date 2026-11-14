@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { FiMail, FiLock, FiEye, FiEyeOff, FiUser, FiUsers, FiUserPlus } from 'react-icons/fi';
+import { FiEye, FiEyeOff, FiUserPlus } from 'react-icons/fi';
+import { AuthLayout, AuthCard, BrandMark } from '../components/shell/AuthLayout';
+import { Button, IconButton, Field, Input, Alert, SegmentedControl } from '../components/ui';
 import { useAuth } from '../context/AuthContext';
 import { useBusiness } from '../context/BusinessContext';
 import { adminLogin, employeeLogin } from '../services/api/auth';
@@ -143,182 +145,118 @@ const Login = () => {
         }
     };
 
+    const isAdminLogin = loginType === 'admin';
+    const switchType = (t) => {
+        setLoginType(t);
+        setError('');
+        setPassword('');
+    };
+
     return (
-        <div className="min-h-screen flex items-center justify-center p-4"
-            style={{
-                background: loginType === 'admin'
-                    ? 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)'
-                    : 'linear-gradient(135deg, #f093fb 0%, #f5576c 100%)'
-            }}
+        <AuthLayout
+            footer={
+                isDev ? (
+                    <>
+                        Developer build · <kbd className="font-mono">Ctrl+Shift+I</kbd> opens DevTools
+                    </>
+                ) : null
+            }
         >
-            <div className="w-full max-w-md">
-                {/* Logo */}
-                <div className="text-center mb-8">
-                    <div className="w-20 h-20 bg-white rounded-2xl shadow-lg mx-auto flex items-center justify-center mb-4">
-                        {loginType === 'admin' ? (
-                            <FiUsers size={40} className="text-indigo-500" />
-                        ) : (
-                            <FiUser size={40} className="text-pink-500" />
-                        )}
-                    </div>
-                    <h1 className="text-3xl font-bold text-white">
-                        {loginType === 'admin' ? 'Admin Login' : 'Employee Login'}
-                    </h1>
-                    <p className="text-white/80 mt-2">
-                        {loginType === 'admin'
-                            ? 'Sign in to manage your business'
-                            : 'Sign in with your employee ID'
-                        }
-                    </p>
-                </div>
-
-                {/* Login Card */}
-                <div className="bg-white rounded-2xl shadow-xl p-8">
-                    <form onSubmit={handleSubmit} className="space-y-6">
-                        {notice && !error && (
-                            <div className="bg-amber-50 border border-amber-200 text-amber-800 px-4 py-3 rounded-xl text-sm" role="status">
-                                {notice}
-                            </div>
-                        )}
-
-                        {/* Error message */}
-                        {error && (
-                            <div className="bg-red-50 border border-red-200 text-red-600 px-4 py-3 rounded-xl text-sm">
-                                {error}
-                            </div>
-                        )}
-
-                        {/* Admin: Email field */}
-                        {loginType === 'admin' && (
-                            <div>
-                                <label className="block text-sm font-medium text-slate-700 mb-2">
-                                    Email Address
-                                </label>
-                                <div className="relative">
-                                    <FiMail className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" />
-                                    <input
-                                        type="email"
-                                        value={email}
-                                        onChange={(e) => setEmail(e.target.value)}
-                                        placeholder="admin@example.com"
-                                        className="w-full pl-12 pr-4 py-3 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-all bg-white text-slate-800 placeholder-slate-400"
-                                        required
-                                    />
-                                </div>
-                            </div>
-                        )}
-
-                        {/* Employee: Employee ID field */}
-                        {loginType === 'employee' && (
-                            <div>
-                                <label className="block text-sm font-medium text-slate-700 mb-2">
-                                    Employee ID
-                                </label>
-                                <div className="relative">
-                                    <FiUser className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" />
-                                    <input
-                                        type="text"
-                                        value={employeeId}
-                                        onChange={(e) => setEmployeeId(e.target.value.toLowerCase())}
-                                        placeholder="e.g., store@john"
-                                        className="w-full pl-12 pr-4 py-3 border border-slate-200 rounded-xl focus:ring-2 focus:ring-pink-500 focus:border-pink-500 transition-all bg-white text-slate-800 placeholder-slate-400"
-                                        required
-                                    />
-                                </div>
-                            </div>
-                        )}
-
-                        {/* Password */}
-                        <div>
-                            <label className="block text-sm font-medium text-slate-700 mb-2">
-                                Password
-                            </label>
-                            <div className="relative">
-                                <FiLock className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" />
-                                <input
-                                    type={showPassword ? 'text' : 'password'}
-                                    value={password}
-                                    onChange={(e) => setPassword(e.target.value)}
-                                    placeholder="Enter your password"
-                                    className="w-full pl-12 pr-12 py-3 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-all bg-white text-slate-800 placeholder-slate-400"
-                                    required
-                                />
-                                <button
-                                    type="button"
-                                    onClick={() => setShowPassword(!showPassword)}
-                                    className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
-                                >
-                                    {showPassword ? <FiEyeOff /> : <FiEye />}
-                                </button>
-                            </div>
-                        </div>
-
-                        {/* Submit */}
-                        <button
-                            type="submit"
-                            disabled={loading}
-                            className={`w-full py-3 text-white font-semibold rounded-xl transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 ${
-                                loginType === 'admin'
-                                    ? 'bg-indigo-500 hover:bg-indigo-600'
-                                    : 'bg-pink-500 hover:bg-pink-600'
-                            }`}
-                        >
-                            {loading ? (
-                                <>
-                                    <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                                    Signing in...
-                                </>
-                            ) : (
-                                'Sign In'
-                            )}
-                        </button>
-                    </form>
-
-                    {/* Toggle login type */}
-                    <div className="mt-6 pt-6 border-t border-slate-200">
-                        <button
-                            onClick={() => {
-                                setLoginType(loginType === 'admin' ? 'employee' : 'admin');
-                                setError('');
-                            }}
-                            className="w-full flex items-center justify-center gap-2 text-slate-600 hover:text-slate-800 transition-colors"
-                        >
-                            {loginType === 'admin' ? (
-                                <>
-                                    <FiUser />
-                                    <span>Login as Employee instead</span>
-                                </>
-                            ) : (
-                                <>
-                                    <FiUsers />
-                                    <span>Login as Admin instead</span>
-                                </>
-                            )}
-                        </button>
-                    </div>
-
-                    {/* Create Account — only in development */}
-                    {isDev && (
-                        <div className="mt-4 pt-4 border-t border-slate-200 text-center">
-                            <Link
-                                to="/signup"
-                                className="inline-flex items-center gap-2 text-sm text-indigo-500 hover:text-indigo-700 font-medium transition-colors"
-                            >
-                                <FiUserPlus />
-                                Create Account
-                            </Link>
-                        </div>
-                    )}
-                </div>
-
-                {/* Keyboard shortcut hint — dev only */}
-                {isDev && (
-                    <p className="text-center text-white/60 text-sm mt-6">
-                        Press <kbd className="px-2 py-1 bg-white/20 rounded">Ctrl+Shift+I</kbd> to open DevTools
-                    </p>
-                )}
+            <div className="mb-5 flex items-center gap-3">
+                <BrandMark />
+                <span className="font-heading text-h3 text-foreground">POS Desktop</span>
             </div>
-        </div>
+
+            <AuthCard>
+                <h1 className="font-heading text-h2 text-foreground">Sign in</h1>
+                <p className="mt-1 text-body text-muted-foreground">
+                    {isAdminLogin ? 'Shop owner or admin — use your email.' : 'Counter staff — use the sign-in ID your admin gave you.'}
+                </p>
+
+                <SegmentedControl
+                    label="Who is signing in"
+                    className="mt-5 w-full [&>button]:flex-1"
+                    value={loginType}
+                    onChange={switchType}
+                    options={[
+                        { value: 'admin', label: 'Owner / admin' },
+                        { value: 'employee', label: 'Staff' },
+                    ]}
+                />
+
+                <form onSubmit={handleSubmit} className="mt-5 flex flex-col gap-4">
+                    {notice && !error ? <Alert tone="warning">{notice}</Alert> : null}
+                    {error ? <Alert tone="destructive">{error}</Alert> : null}
+
+                    {isAdminLogin ? (
+                        <Field label="Email">
+                            <Input
+                                key="email"
+                                type="email"
+                                autoComplete="username"
+                                autoFocus
+                                value={email}
+                                onChange={(e) => setEmail(e.target.value)}
+                                placeholder="you@yourshop.com"
+                                required
+                            />
+                        </Field>
+                    ) : (
+                        <Field label="Sign-in ID" hint="Looks like shopname@yourname">
+                            <Input
+                                key="employeeId"
+                                type="text"
+                                autoComplete="username"
+                                autoCapitalize="none"
+                                autoFocus
+                                value={employeeId}
+                                onChange={(e) => setEmployeeId(e.target.value.toLowerCase())}
+                                placeholder="e.g. store@john"
+                                required
+                            />
+                        </Field>
+                    )}
+
+                    <div className="flex flex-col gap-1.5">
+                        <label htmlFor="login-password" className="text-body-sm font-medium text-foreground">
+                            Password
+                        </label>
+                        <div className="relative">
+                            <Input
+                                id="login-password"
+                                type={showPassword ? 'text' : 'password'}
+                                autoComplete="current-password"
+                                value={password}
+                                onChange={(e) => setPassword(e.target.value)}
+                                className="w-full pr-11"
+                                required
+                            />
+                            <IconButton
+                                size="2xs"
+                                label={showPassword ? 'Hide password' : 'Show password'}
+                                onClick={() => setShowPassword(!showPassword)}
+                                className="absolute right-1.5 top-1/2 -translate-y-1/2"
+                            >
+                                {showPassword ? <FiEyeOff /> : <FiEye />}
+                            </IconButton>
+                        </div>
+                    </div>
+
+                    <Button type="submit" size="action" className="w-full mt-1" loading={loading}>
+                        {loading ? 'Signing in…' : 'Sign in'}
+                    </Button>
+                </form>
+
+                {isDev ? (
+                    <div className="mt-5 pt-4 border-t border-hairline text-center">
+                        <Link to="/signup" className="inline-flex items-center gap-2 text-body font-medium text-primary hover:underline">
+                            <FiUserPlus aria-hidden="true" />
+                            Create a new shop
+                        </Link>
+                    </div>
+                ) : null}
+            </AuthCard>
+        </AuthLayout>
     );
 };
 

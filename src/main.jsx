@@ -11,7 +11,19 @@ import { MoneyBookProvider } from './context/MoneyBookContext';
 import { ThemeProvider } from './context/ThemeContext';
 import NetworkStatus from './components/NetworkStatus';
 import AppDialogHost from './components/AppDialog';
+import { Toaster } from './components/ui/Toast';
 import AccountStatusHost from './components/AccountStatus';
+// Fonts are bundled with the app (Latin only) so they work offline — no Google Fonts.
+// Inter = UI text, Inter Tight = headings and big numbers, JetBrains Mono = labels and codes.
+import '@fontsource/inter/latin-400.css';
+import '@fontsource/inter/latin-500.css';
+import '@fontsource/inter/latin-600.css';
+import '@fontsource/inter/latin-700.css';
+import '@fontsource/inter-tight/latin-500.css';
+import '@fontsource/inter-tight/latin-600.css';
+import '@fontsource/inter-tight/latin-700.css';
+import '@fontsource/jetbrains-mono/latin-400.css';
+import '@fontsource/jetbrains-mono/latin-500.css';
 import './index.css';
 
 // Sentry — production builds only. DSN is safe to embed in a client bundle
@@ -43,6 +55,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(
                     </AuthProvider>
                 </Router>
                 <AppDialogHost />
+                <Toaster />
             </NetworkStatus>
         </ThemeProvider>
     </React.StrictMode>

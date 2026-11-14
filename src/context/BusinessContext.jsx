@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { getBusinessById } from '../services/api/business';
+import { useTheme } from './ThemeContext';
 
 const BusinessContext = createContext(null);
 
@@ -16,21 +17,18 @@ const businessConfigs = {
     restaurant: {
         type: 'restaurant',
         label: 'Restaurant',
-        color: '#f97316',
         itemsLabel: 'Menu',
         staffLabel: 'Staff',
     },
     retail: {
         type: 'retail',
         label: 'Retail',
-        color: '#06b6d4',
         itemsLabel: 'Products',
         staffLabel: 'Counter Users',
     },
     service: {
         type: 'service',
         label: 'Service',
-        color: '#8b5cf6',
         itemsLabel: 'Services',
         staffLabel: 'Staff',
     },
@@ -41,10 +39,17 @@ export const BusinessProvider = ({ children }) => {
     const [businessType, setBusinessType] = useState('retail');
     const [config, setConfig] = useState(businessConfigs.retail);
     const [loading, setLoading] = useState(true);
+    const { setShopAppearance } = useTheme();
 
     useEffect(() => {
         loadBusiness();
     }, []);
+
+    // The shop's accent colour / sidebar style (set by the admin in Settings → Appearance).
+    // No business (logged out) or an older server without the field → the theme falls back.
+    useEffect(() => {
+        setShopAppearance(business?.settings?.appearance || null);
+    }, [business, setShopAppearance]);
 
     // Helper to extract business type from various possible data structures
     const extractBusinessType = (businessData) => {

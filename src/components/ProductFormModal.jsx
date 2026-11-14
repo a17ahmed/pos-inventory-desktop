@@ -1,15 +1,12 @@
 import React, { useState, useEffect } from 'react';
+import { Dialog, Button, Field, Input, Select, InsetCard, cn } from './ui';
+import { formatAmount } from '../utils/money';
 import { useBusiness } from '../context/BusinessContext';
 import { createProduct, updateProduct, generateSku, generateBarcode } from '../services/api/products';
 import { appAlert, appConfirm } from './AppDialog';
-import {
-    FiX,
-    FiSave,
-    FiZap,
-    FiChevronDown,
-    FiCheck,
-    FiPlus,
-} from 'react-icons/fi';
+import { FiZap } from 'react-icons/fi';
+
+const NEW_CATEGORY = '__new__';
 
 const defaultFormData = () => ({
     name: '',
@@ -54,8 +51,8 @@ const ProductFormModal = ({ show, onClose, editingProduct = null, categories = [
         }
     }, [show, editingProduct]);
 
-    const formatCurrency = (amount) =>
-        `${business?.currency || 'Rs.'} ${(amount || 0).toLocaleString()}`;
+    const formatCurrency = (amount) => formatAmount(amount || 0, { currency: business?.currency || 'PKR' });
+    const set = (patch) => setFormData((f) => ({ ...f, ...patch }));
 
     const handleSubmit = async (e) => {
         e.preventDefault();
@@ -140,302 +137,186 @@ const ProductFormModal = ({ show, onClose, editingProduct = null, categories = [
 
     if (!show) return null;
 
+    // Profit preview under Max discount (maxDiscountPercent is a share of PROFIT, not of the price:
+    // Rs 10 profit + 40% cap = Rs 4 max discount)
+    const sp = Number(formData.price) || 0;
+    const cp = Number(formData.costPrice) || 0;
+    const baseProfit = sp - cp;
+    const baseMargin = sp > 0 ? (baseProfit / sp) * 100 : 0;
+    const pct = formData.maxDiscountPercent !== '' ? Number(formData.maxDiscountPercent) : null;
+    const discountAtCap = pct !== null ? baseProfit * (pct / 100) : null;
+    const profitAtCap = discountAtCap !== null ? baseProfit - discountAtCap : null;
+    const costTooHigh = cp > 0 && sp > 0 && cp > sp;
+    const knownCategory = !formData.category || categories.includes(formData.category);
+
+    const Figure = ({ label, value, note, tone }) => (
+        <div className="min-w-0">
+            <p className="font-mono text-overline-lg uppercase text-muted-foreground">{label}</p>
+            <p className={cn('mt-0.5 text-body-lg font-semibold tabular-nums', tone === 'warning' ? 'text-warning-chip-foreground' : tone === 'success' ? 'text-success' : tone === 'destructive' ? 'text-destructive' : 'text-foreground')}>
+                {value}
+            </p>
+            <p className="text-caption text-muted-foreground">{note}</p>
+        </div>
+    );
+
     return (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-            <div className="bg-white dark:bg-d-card border border-slate-200 dark:border-d-border rounded-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto animate-pop-in">
-                <div className="flex items-center justify-between p-6 border-b border-slate-200 dark:border-d-border sticky top-0 bg-white dark:bg-d-card z-10">
-                    <h3 className="text-xl font-semibold text-slate-800 dark:text-d-heading">
-                        {editingProduct ? 'Edit Product' : 'Add Product'}
-                    </h3>
-                    <button
-                        onClick={onClose}
-                        className="p-2 hover:bg-d-glass rounded-lg transition-colors text-d-muted"
-                    >
-                        <FiX size={20} />
-                    </button>
-                </div>
+        <Dialog
+            open={show}
+            onClose={submitting ? undefined : onClose}
+            title={editingProduct ? 'Edit product' : 'Add product'}
+            description={editingProduct ? undefined : 'Stock starts at 0 and goes up when you record a supply.'}
+            size="lg"
+            footerBar
+            footer={
+                <>
+                    <Button variant="ghost" onClick={onClose} disabled={submitting}>
+                        Cancel
+                    </Button>
+                    <Button type="submit" form="product-form" loading={submitting}>
+                        {editingProduct ? 'Save changes' : 'Add product'}
+                    </Button>
+                </>
+            }
+        >
+            <form id="product-form" onSubmit={handleSubmit} className="flex flex-col gap-4">
+                <Field label="Name" required>
+                    <Input data-autofocus value={formData.name} onChange={(e) => set({ name: e.target.value })} />
+                </Field>
 
-                <form onSubmit={handleSubmit} className="p-6 space-y-4">
-                    <div>
-                        <label className="block text-sm font-medium text-slate-600 dark:text-d-muted mb-2">
-                            Product Name *
-                        </label>
-                        <input
-                            type="text"
-                            value={formData.name}
-                            onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                            className="w-full px-4 py-3 bg-slate-50 dark:bg-d-bg border border-slate-200 dark:border-d-border rounded-xl text-slate-800 dark:text-d-text placeholder-slate-400 dark:placeholder-d-faint focus:outline-none focus:border-amber-300 dark:focus:border-d-border-hover"
-                            required
-                            autoFocus
-                        />
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-4">
-                        <div>
-                            <label className="block text-sm font-medium text-slate-600 dark:text-d-muted mb-2">
-                                Cost Price
-                            </label>
-                            <input
-                                type="number"
-                                value={formData.costPrice}
-                                onChange={(e) => setFormData({ ...formData, costPrice: e.target.value })}
-                                className="w-full px-4 py-3 bg-slate-50 dark:bg-d-bg border border-slate-200 dark:border-d-border rounded-xl text-slate-800 dark:text-d-text placeholder-slate-400 dark:placeholder-d-faint focus:outline-none focus:border-amber-300 dark:focus:border-d-border-hover"
-                                min="0"
-                                step="0.01"
-                            />
-                        </div>
-                        <div>
-                            <label className="block text-sm font-medium text-slate-600 dark:text-d-muted mb-2">
-                                Selling Price *
-                            </label>
-                            <input
-                                type="number"
-                                value={formData.price}
-                                onChange={(e) => setFormData({ ...formData, price: e.target.value })}
-                                className="w-full px-4 py-3 bg-slate-50 dark:bg-d-bg border border-slate-200 dark:border-d-border rounded-xl text-slate-800 dark:text-d-text placeholder-slate-400 dark:placeholder-d-faint focus:outline-none focus:border-amber-300 dark:focus:border-d-border-hover"
-                                required
-                                min="0"
-                                step="0.01"
-                            />
-                        </div>
-                    </div>
-
-                    <div>
-                        <label className="block text-sm font-medium text-slate-600 dark:text-d-muted mb-2">
-                            Max Discount %
-                        </label>
-                        <input
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                    <Field label="Cost price" error={costTooHigh ? 'More than the selling price' : undefined}>
+                        <Input type="number" inputMode="decimal" min="0" step="0.01" value={formData.costPrice} onChange={(e) => set({ costPrice: e.target.value })} />
+                    </Field>
+                    <Field label="Selling price" required>
+                        <Input type="number" inputMode="decimal" min="0" step="0.01" value={formData.price} onChange={(e) => set({ price: e.target.value })} />
+                    </Field>
+                    <Field label="Max discount" optional hint="% of the profit">
+                        <Input
                             type="number"
-                            value={formData.maxDiscountPercent}
-                            onChange={(e) => setFormData({ ...formData, maxDiscountPercent: e.target.value })}
-                            placeholder="No limit — only cost price applies"
-                            className="w-full px-4 py-3 bg-slate-50 dark:bg-d-bg border border-slate-200 dark:border-d-border rounded-xl text-slate-800 dark:text-d-text placeholder-slate-400 dark:placeholder-d-faint focus:outline-none focus:border-amber-300 dark:focus:border-d-border-hover"
+                            inputMode="decimal"
                             min="0"
                             max="100"
                             step="0.1"
+                            value={formData.maxDiscountPercent}
+                            onChange={(e) => set({ maxDiscountPercent: e.target.value })}
+                            placeholder="No limit"
                         />
-                        <p className="text-xs text-slate-400 dark:text-d-muted mt-1">Optional. Share of this item's profit a cashier is allowed to discount away at checkout — e.g. 40% on a Rs 10 profit caps the discount at Rs 4.</p>
-                        {(() => {
-                            const sp = Number(formData.price) || 0;
-                            const cp = Number(formData.costPrice) || 0;
-                            const baseProfit = sp - cp;
-                            const baseMargin = sp > 0 ? (baseProfit / sp) * 100 : 0;
-                            if (sp <= 0) return null;
-                            const pct = formData.maxDiscountPercent !== '' ? Number(formData.maxDiscountPercent) : null;
-                            // maxDiscountPercent is a share of PROFIT, not of the selling price
-                            // (e.g. Rs 10 profit + 40% cap = Rs 4 max discount, not Rs 40).
-                            const discountAtCap = pct !== null ? baseProfit * (pct / 100) : null;
-                            const profitAtCap = discountAtCap !== null ? baseProfit - discountAtCap : null;
-                            const profitAtCapPositive = profitAtCap === null || profitAtCap >= 0;
-                            return (
-                                <div className="mt-2 p-4 bg-slate-50 dark:bg-d-bg border border-slate-200 dark:border-d-border rounded-xl">
-                                    <div className={`grid ${pct !== null ? 'grid-cols-3' : 'grid-cols-2'} gap-3 divide-x divide-slate-200 dark:divide-d-border`}>
-                                        <div className="pl-3 first:pl-0">
-                                            <div className="text-[10px] uppercase tracking-wide text-slate-400 dark:text-d-faint">Profit</div>
-                                            <div className="text-[15px] font-display font-semibold text-slate-800 dark:text-d-text mt-0.5">{formatCurrency(baseProfit)}</div>
-                                            <div className="text-[11px] text-slate-400 dark:text-d-faint">{baseMargin.toFixed(1)}% margin</div>
-                                        </div>
-                                        {pct !== null && (
-                                            <>
-                                                <div className="pl-3">
-                                                    <div className="text-[10px] uppercase tracking-wide text-slate-400 dark:text-d-faint">Max Discount</div>
-                                                    <div className="text-[15px] font-display font-semibold text-amber-600 dark:text-d-accent mt-0.5">{formatCurrency(discountAtCap)}</div>
-                                                    <div className="text-[11px] text-slate-400 dark:text-d-faint">{pct}% of profit</div>
-                                                </div>
-                                                <div className="pl-3">
-                                                    <div className="text-[10px] uppercase tracking-wide text-slate-400 dark:text-d-faint">Profit Left</div>
-                                                    <div className={`text-[15px] font-display font-semibold mt-0.5 ${profitAtCapPositive ? 'text-emerald-600 dark:text-d-green' : 'text-red-500 dark:text-d-red'}`}>
-                                                        {formatCurrency(profitAtCap)}
-                                                    </div>
-                                                    <div className="text-[11px] text-slate-400 dark:text-d-faint">at max discount</div>
-                                                </div>
-                                            </>
-                                        )}
-                                    </div>
-                                </div>
-                            );
-                        })()}
-                    </div>
+                    </Field>
+                </div>
 
-                    <div>
-                        <label className="block text-sm font-medium text-slate-600 dark:text-d-muted mb-2">
-                            Category
-                        </label>
-                        {addingNewCategory ? (
-                            <div className="flex gap-2">
-                                <input
-                                    type="text"
-                                    value={formData.category}
-                                    onChange={(e) => setFormData({ ...formData, category: e.target.value })}
-                                    placeholder="New category name"
-                                    autoFocus
-                                    className="flex-1 px-4 py-3 bg-slate-50 dark:bg-d-bg border border-slate-200 dark:border-d-border rounded-xl text-slate-800 dark:text-d-text placeholder-slate-400 dark:placeholder-d-faint focus:outline-none focus:border-amber-300 dark:focus:border-d-border-hover"
+                {sp > 0 ? (
+                    <InsetCard className="grid grid-cols-3 gap-4 py-3">
+                        <Figure label="Profit" value={formatCurrency(baseProfit)} note={`${baseMargin.toFixed(1)}% margin`} tone={baseProfit < 0 ? 'destructive' : undefined} />
+                        {pct !== null ? (
+                            <>
+                                <Figure label="Max discount" value={formatCurrency(discountAtCap)} note={`${pct}% of the profit`} tone="warning" />
+                                <Figure
+                                    label="Profit left"
+                                    value={formatCurrency(profitAtCap)}
+                                    note="at the max discount"
+                                    tone={profitAtCap < 0 ? 'destructive' : 'success'}
                                 />
-                                <button
-                                    type="button"
-                                    onClick={() => {
-                                        setAddingNewCategory(false);
-                                        setFormData({ ...formData, category: '' });
-                                    }}
-                                    className="px-4 py-3 bg-slate-100 dark:bg-d-bg border border-slate-200 dark:border-d-border rounded-xl text-slate-600 dark:text-d-muted hover:bg-slate-200 dark:hover:bg-d-border"
-                                >
-                                    Cancel
-                                </button>
-                            </div>
+                            </>
                         ) : (
-                            <div className="relative">
-                                <button
-                                    type="button"
-                                    onClick={() => setCategoryDropdownOpen((o) => !o)}
-                                    className="w-full px-4 py-3 bg-slate-50 dark:bg-d-bg border border-slate-200 dark:border-d-border rounded-xl text-left text-slate-800 dark:text-d-text focus:outline-none focus:border-amber-300 dark:focus:border-d-border-hover flex items-center justify-between"
-                                >
-                                    <span className={formData.category ? '' : 'text-slate-400 dark:text-d-faint'}>
-                                        {formData.category ||
-                                            (categories.length === 0 ? 'No categories yet' : 'Select a category')}
-                                    </span>
-                                    <FiChevronDown
-                                        className={`text-slate-400 dark:text-d-muted transition-transform ${categoryDropdownOpen ? 'rotate-180' : ''}`}
-                                    />
-                                </button>
-                                {categoryDropdownOpen && (
-                                    <>
-                                        <div
-                                            className="fixed inset-0 z-10"
-                                            onClick={() => setCategoryDropdownOpen(false)}
-                                        />
-                                        <div className="absolute z-20 mt-2 w-full max-h-60 overflow-y-auto bg-white dark:bg-d-card border border-slate-200 dark:border-d-border rounded-xl shadow-lg py-1">
-                                            {categories.length === 0 && (
-                                                <div className="px-4 py-2 text-sm text-slate-400 dark:text-d-faint">
-                                                    No categories yet
-                                                </div>
-                                            )}
-                                            {categories.map((cat) => (
-                                                <button
-                                                    key={cat}
-                                                    type="button"
-                                                    onClick={() => {
-                                                        setFormData({ ...formData, category: cat });
-                                                        setCategoryDropdownOpen(false);
-                                                    }}
-                                                    className="w-full px-4 py-2 text-left text-sm text-slate-700 dark:text-d-text hover:bg-slate-100 dark:hover:bg-d-bg flex items-center justify-between"
-                                                >
-                                                    <span>{cat}</span>
-                                                    {formData.category === cat && (
-                                                        <FiCheck className="text-amber-500" />
-                                                    )}
-                                                </button>
-                                            ))}
-                                            <div className="border-t border-slate-200 dark:border-d-border my-1" />
-                                            <button
-                                                type="button"
-                                                onClick={() => {
-                                                    setAddingNewCategory(true);
-                                                    setCategoryDropdownOpen(false);
-                                                    setFormData({ ...formData, category: '' });
-                                                }}
-                                                className="w-full px-4 py-2 text-left text-sm text-amber-600 dark:text-amber-400 hover:bg-slate-100 dark:hover:bg-d-bg flex items-center gap-2"
-                                            >
-                                                <FiPlus /> Add new category
-                                            </button>
-                                        </div>
-                                    </>
-                                )}
-                            </div>
-                        )}
-                        {!editingProduct && (
-                            <p className="mt-2 text-xs text-slate-500 dark:text-d-muted">
-                                Stock starts at 0 and is managed automatically when you record supplies.
+                            <p className="col-span-2 self-center text-body-sm text-muted-foreground">
+                                A cashier can discount this down to its cost price. Set a max discount to keep some of the profit.
                             </p>
                         )}
-                    </div>
+                    </InsetCard>
+                ) : null}
 
-                    <div>
-                        <label className="block text-sm font-medium text-slate-600 dark:text-d-muted mb-2">
-                            SKU
-                        </label>
-                        <div className="flex gap-2">
-                            <input
-                                type="text"
-                                value={formData.sku}
-                                onChange={(e) => setFormData({ ...formData, sku: e.target.value })}
-                                placeholder="Leave blank to auto-generate"
-                                readOnly={!!editingProduct}
-                                className={`flex-1 px-4 py-3 bg-slate-50 dark:bg-d-bg border border-slate-200 dark:border-d-border rounded-xl text-slate-800 dark:text-d-text placeholder-slate-400 dark:placeholder-d-faint font-mono focus:outline-none focus:border-amber-300 dark:focus:border-d-border-hover ${editingProduct ? 'opacity-60 cursor-not-allowed' : ''}`}
-                            />
-                            {!editingProduct && (
-                                <button
-                                    type="button"
-                                    onClick={handleGenerateSku}
-                                    disabled={generatingSku}
-                                    className="flex items-center gap-2 px-4 py-3 bg-slate-100 dark:bg-d-glass border border-slate-200 dark:border-d-border rounded-xl text-sm font-medium text-slate-700 dark:text-d-text hover:bg-slate-200 dark:hover:bg-d-glass-hover transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
-                                    title="Generate unique SKU"
-                                >
-                                    <FiZap size={14} />
-                                    {generatingSku ? '...' : 'Generate'}
-                                </button>
-                            )}
-                        </div>
-                        {editingProduct && (
-                            <p className="mt-2 text-xs text-slate-500 dark:text-d-muted">
-                                SKU is locked after creation to preserve historical references.
-                            </p>
-                        )}
-                    </div>
-
-                    <div>
-                        <label className="block text-sm font-medium text-slate-600 dark:text-d-muted mb-2">
-                            Barcode
-                        </label>
-                        <div className="flex gap-2">
-                            <input
-                                type="text"
-                                value={formData.barcode}
-                                onChange={(e) => setFormData({ ...formData, barcode: e.target.value })}
-                                placeholder="Scan or leave blank"
-                                readOnly={!!editingProduct}
-                                className={`flex-1 px-4 py-3 bg-slate-50 dark:bg-d-bg border border-slate-200 dark:border-d-border rounded-xl text-slate-800 dark:text-d-text placeholder-slate-400 dark:placeholder-d-faint font-mono focus:outline-none focus:border-amber-300 dark:focus:border-d-border-hover ${editingProduct ? 'opacity-60 cursor-not-allowed' : ''}`}
-                            />
-                            {!editingProduct && (
-                                <button
-                                    type="button"
-                                    onClick={handleGenerateBarcode}
-                                    disabled={generatingBarcode}
-                                    className="flex items-center gap-2 px-4 py-3 bg-slate-100 dark:bg-d-glass border border-slate-200 dark:border-d-border rounded-xl text-sm font-medium text-slate-700 dark:text-d-text hover:bg-slate-200 dark:hover:bg-d-glass-hover transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
-                                    title="Generate unique barcode"
-                                >
-                                    <FiZap size={14} />
-                                    {generatingBarcode ? '...' : 'Generate'}
-                                </button>
-                            )}
-                        </div>
-                        {editingProduct && (
-                            <p className="mt-2 text-xs text-slate-500 dark:text-d-muted">
-                                Barcode is locked after creation to preserve historical references.
-                            </p>
-                        )}
-                    </div>
-
-                    <div className="flex gap-3 pt-4">
-                        <button
-                            type="button"
-                            onClick={onClose}
-                            className="flex-1 py-3 border border-slate-200 dark:border-d-border rounded-xl font-medium text-slate-600 dark:text-d-muted hover:bg-slate-100 dark:hover:bg-d-glass transition-colors"
+                <Field label="Category" optional>
+                    {addingNewCategory ? (
+                        <Input
+                            autoFocus
+                            value={formData.category}
+                            onChange={(e) => set({ category: e.target.value })}
+                            placeholder="New category name"
+                        />
+                    ) : (
+                        <Select
+                            value={formData.category}
+                            onChange={(e) => {
+                                if (e.target.value === NEW_CATEGORY) {
+                                    setAddingNewCategory(true);
+                                    set({ category: '' });
+                                } else set({ category: e.target.value });
+                            }}
                         >
-                            Cancel
-                        </button>
-                        <button
-                            type="submit"
-                            disabled={submitting}
-                            className="flex-1 py-3 bg-gradient-to-r from-amber-400 to-amber-500 dark:from-d-accent dark:to-d-accent-s text-white dark:text-d-card rounded-xl font-semibold hover:shadow-md dark:hover:shadow-[0_4px_20px_rgba(255,210,100,0.4)] transition-all flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
-                        >
-                            <FiSave size={18} />
-                            {submitting ? 'Saving...' : 'Save'}
-                        </button>
-                    </div>
-                </form>
+                            <option value="">{categories.length === 0 ? 'No categories yet' : 'No category'}</option>
+                            {!knownCategory ? <option value={formData.category}>{formData.category}</option> : null}
+                            {categories.map((cat) => (
+                                <option key={cat} value={cat}>
+                                    {cat}
+                                </option>
+                            ))}
+                            <option value={NEW_CATEGORY}>+ New category…</option>
+                        </Select>
+                    )}
+                </Field>
+                {addingNewCategory ? (
+                    <Button
+                        variant="link"
+                        className="self-start -mt-2"
+                        onClick={() => {
+                            setAddingNewCategory(false);
+                            set({ category: '' });
+                        }}
+                    >
+                        Pick an existing category instead
+                    </Button>
+                ) : null}
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <CodeField
+                        label="SKU"
+                        value={formData.sku}
+                        onChange={(v) => set({ sku: v })}
+                        placeholder="Auto if blank"
+                        locked={!!editingProduct}
+                        onGenerate={handleGenerateSku}
+                        generating={generatingSku}
+                    />
+                    <CodeField
+                        label="Barcode"
+                        value={formData.barcode}
+                        onChange={(v) => set({ barcode: v })}
+                        placeholder="Scan or type"
+                        locked={!!editingProduct}
+                        onGenerate={handleGenerateBarcode}
+                        generating={generatingBarcode}
+                    />
+                </div>
+                {editingProduct ? (
+                    <p className="-mt-2 text-caption text-muted-foreground">SKU and barcode can't change after the product is made, so old bills still match.</p>
+                ) : null}
+
+                <button type="submit" hidden aria-hidden="true" tabIndex={-1} />
+            </form>
+        </Dialog>
+    );
+};
+
+/** SKU / barcode: mono input + "Generate" (locked when editing). */
+function CodeField({ label, value, onChange, placeholder, locked, onGenerate, generating }) {
+    const id = `pf-${label.toLowerCase()}`;
+    return (
+        <div className="flex flex-col gap-1.5">
+            <label htmlFor={id} className="text-body-sm font-medium text-foreground">
+                {label}
+                {!locked ? <span className="font-normal text-muted-foreground"> (optional)</span> : null}
+            </label>
+            <div className="flex gap-2">
+                <Input id={id} mono className="flex-1 min-w-0" value={value} onChange={(e) => onChange(e.target.value)} placeholder={locked ? '—' : placeholder} readOnly={locked} />
+                {!locked ? (
+                    <Button variant="outline" onClick={onGenerate} loading={generating} aria-label={`Make a ${label}`}>
+                        {!generating && <FiZap aria-hidden="true" />}
+                        Generate
+                    </Button>
+                ) : null}
             </div>
         </div>
     );
-};
+}
 
 export default ProductFormModal;
